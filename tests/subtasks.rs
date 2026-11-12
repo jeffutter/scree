@@ -234,6 +234,9 @@ fn abandoning_a_parent_abandons_open_subtasks_with_comments() {
     let open = e.sub(&repo, &p, "open");
     let active = e.sub(&repo, &p, "active");
     e.ok(&repo, &["done", &done, "--force"]);
+    e.ok(&repo, &["--role", "agent", "start", &open]);
+    e.ok(&repo, &["release", &open]);
+    e.ok(&repo, &["reorder", &active, "--first"]);
     e.ok(&repo, &["--role", "agent", "start", &active]);
 
     let t = e.ok(&repo, &["abandon", &p, "dropped"]);
@@ -400,4 +403,24 @@ fn move_refusals() {
         e.code(&local, &["move", &l, "--worktree", wt.to_str().unwrap()]),
         4
     );
+}
+
+#[test]
+fn start_refuses_a_later_sibling_until_earlier_ones_settle() {
+    let e = env();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let c1 = e.sub(&repo, &p, "c1");
+    let c2 = e.sub(&repo, &p, "c2");
+    let c3 = e.sub(&repo, &p, "c3");
+
+    let refused = e.code(&repo, &["--role", "agent", "start", &c2]);
+    assert_ne!(refused, 0);
+    assert_eq!(e.ok(&repo, &["show", &c2])["status"], "ready");
+
+    e.ok(&repo, &["--role", "agent", "start", &c1]);
+    e.ok(&repo, &["done", &c1, "--force"]);
+    e.ok(&repo, &["--role", "agent", "start", &c2]);
+    e.ok(&repo, &["abandon", &c2, "skip"]);
+    e.ok(&repo, &["--role", "agent", "start", &c3]);
 }

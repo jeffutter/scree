@@ -338,6 +338,16 @@ pub fn transition(
                 if blocked {
                     return Err(Error::Refused(format!("{id} is blocked and not Available")));
                 }
+                let first: bool = tx.query_row(
+                    &format!("SELECT {READY_FIRST} FROM tickets t WHERE t.id = ?1"),
+                    [row],
+                    |r| r.get(0),
+                )?;
+                if !first {
+                    return Err(Error::Refused(format!(
+                        "{id} is not the first unsettled subtask of its parent"
+                    )));
+                }
                 if who.role == crate::identity::Role::Agent && for_who == "human" {
                     return Err(Error::Refused(format!("{id} is for a human")));
                 }
