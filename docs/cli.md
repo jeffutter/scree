@@ -66,7 +66,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - `release ID`: active back to `ready`; clears the claim.
 - `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A cycle or a cross-Project edge is refused (exit 4).
 - `criteria add ID TEXT` / `criteria rm ID#N`.
-- `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence.
+- `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence; checking again overwrites them, and `uncheck` clears them. Criteria and comments may be changed on done or abandoned tickets too.
 - `comment add ID BODY|-` / `comment rm ID COMMENT_ID`. Any caller may delete any comment, including the ones Scree writes.
 - `move ID (--worktree PATH | --root)`: moves the whole tree within its Project and places it last. Cross-Project moves are refused.
 - `reorder ID (--before ID | --after ID | --first | --last)`: relative only. Done and abandoned tickets are refused.

@@ -173,6 +173,22 @@ pub enum ProjectCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum CriteriaCommand {
+    /// Add an acceptance criterion; numbers are per ticket and never reused
+    Add { id: String, criterion: String },
+    /// Remove a criterion by reference, e.g. SCR-12#2
+    Rm { target: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CommentCommand {
+    /// Add a comment (text, or `-` for stdin)
+    Add { id: String, body: String },
+    /// Delete any comment by its id, including ones scree wrote
+    Rm { id: String, comment_id: i64 },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a ticket
     Add(AddArgs),
@@ -198,6 +214,21 @@ pub enum Command {
     Abandon { id: String, reason: String },
     /// Done or abandoned back to ready
     Reopen { id: String },
+    /// Add or remove acceptance criteria
+    #[command(subcommand)]
+    Criteria(CriteriaCommand),
+    /// Mark a criterion checked, e.g. SCR-12#2, with optional evidence
+    Check {
+        target: String,
+        /// Evidence text, or `-` for stdin
+        #[arg(long)]
+        evidence: Option<String>,
+    },
+    /// Clear a criterion's check and its evidence
+    Uncheck { target: String },
+    /// Add or delete comments
+    #[command(subcommand)]
+    Comment(CommentCommand),
     /// Manage Projects
     #[command(subcommand)]
     Project(ProjectCommand),

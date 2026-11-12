@@ -301,6 +301,146 @@ pub fn transition(
     })
 }
 
+/// Split `SCR-12#2` at the last `#` into the ticket id and criterion number.
+pub fn parse_criterion_ref(s: &str) -> Result<(&str, i64)> {
+    let bad = || {
+        Error::Usage(format!(
+            "{s:?} is not a criterion reference; refs look like SCR-12#2"
+        ))
+    };
+    let (id, n) = s.trim().rsplit_once('#').ok_or_else(bad)?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    parse_id(id)?;
+    Ok((id, n.parse().map_err(|_| bad())?))
+}
+
+fn touch(tx: &Connection, row: i64) -> Result<()> {
+    tx.execute(
+        &format!("UPDATE tickets SET updated_at = {NOW} WHERE id = ?1"),
+        [row],
+    )?;
+    Ok(())
+}
+
+/// Append a criterion. The ticket's counter only grows, so a removed
+/// number is never handed out again. Allowed on closed tickets: criteria
+/// and comments are notes.
+pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<Value> {
+    if text.trim().is_empty() {
+        return Err(Error::Usage("criterion text must not be empty".into()));
+    }
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let n: i64 = tx.query_row(
+            "UPDATE tickets SET next_criterion_number = next_criterion_number + 1
+             WHERE id = ?1 RETURNING next_criterion_number - 1",
+            [row],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO acceptance_criteria (ticket_id, number, position, text)
+             VALUES (?1, ?2, (SELECT coalesce(max(position), 0) + 1000
+                              FROM acceptance_criteria WHERE ticket_id = ?1), ?3)",
+            params![row, n, text.trim()],
+        )?;
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
+}
+
+/// Resolve a criterion ref to the ticket row, then run `f` on (ticket, number)
+/// and require that it changed exactly one criterion.
+fn on_criterion(
+    conn: &mut Connection,
+    target: &str,
+    f: impl FnOnce(&Connection, i64, i64) -> Result<usize>,
+) -> Result<Value> {
+    let (id, n) = parse_criterion_ref(target)?;
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        if f(tx, row, n)? == 0 {
+            return Err(Error::NotFound(format!("no criterion {target}")));
+        }
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
+}
+
+pub fn criteria_rm(conn: &mut Connection, target: &str) -> Result<Value> {
+    on_criterion(conn, target, |tx, row, n| {
+        Ok(tx.execute(
+            "DELETE FROM acceptance_criteria WHERE ticket_id = ?1 AND number = ?2",
+            params![row, n],
+        )?)
+    })
+}
+
+/// Mark checked. Checking again overwrites the checker, time and evidence.
+pub fn check(
+    conn: &mut Connection,
+    target: &str,
+    evidence: Option<&str>,
+    who: &Identity,
+) -> Result<Value> {
+    on_criterion(conn, target, |tx, row, n| {
+        Ok(tx.execute(
+            &format!(
+                "UPDATE acceptance_criteria SET checked = 1, evidence = ?3,
+                    checked_by_author = ?4, checked_by_session = ?5, checked_at = {NOW}
+                 WHERE ticket_id = ?1 AND number = ?2"
+            ),
+            params![row, n, evidence, who.author, who.session],
+        )?)
+    })
+}
+
+pub fn uncheck(conn: &mut Connection, target: &str) -> Result<Value> {
+    on_criterion(conn, target, |tx, row, n| {
+        Ok(tx.execute(
+            "UPDATE acceptance_criteria SET checked = 0, evidence = NULL,
+                checked_by_author = NULL, checked_by_session = NULL, checked_at = NULL
+             WHERE ticket_id = ?1 AND number = ?2",
+            params![row, n],
+        )?)
+    })
+}
+
+pub fn comment_add(conn: &mut Connection, id: &str, body: &str, who: &Identity) -> Result<Value> {
+    if body.trim().is_empty() {
+        return Err(Error::Usage("comment body must not be empty".into()));
+    }
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        tx.execute(
+            &format!(
+                "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
+            ),
+            params![row, who.author, who.session, who.role.as_str(), body],
+        )?;
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
+}
+
+/// Any caller may delete any comment, including ones scree wrote.
+pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<Value> {
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let n = tx.execute(
+            "DELETE FROM comments WHERE id = ?1 AND ticket_id = ?2",
+            params![comment_id, row],
+        )?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("no comment {comment_id} on {id}")));
+        }
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
+}
+
 /// What `edit` may change; `None` leaves a field alone.
 pub struct EditFields<'a> {
     pub title: Option<&'a str>,
@@ -597,8 +737,9 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
             .query_map([id], |r| {
                 let by = r.get::<_, Option<String>>(4)?;
                 let session = r.get::<_, Option<String>>(5)?;
+                let number = r.get::<_, i64>(0)?;
                 Ok(json!({
-                    "number": r.get::<_, i64>(0)?, "text": r.get::<_, String>(1)?,
+                    "number": number, "ref": format!("{}#{number}", row.id), "text": r.get::<_, String>(1)?,
                     "checked": r.get::<_, i64>(2)? != 0,
                     "evidence": r.get::<_, Option<String>>(3)?,
                     "checked_by": by.map(|a| json!({"author": a, "session": session})),
@@ -637,6 +778,17 @@ mod tests {
     fn append_joins_with_newline() {
         assert_eq!(appended("", "b"), "b");
         assert_eq!(appended("a", "b"), "a\nb");
+    }
+
+    #[test]
+    fn parse_criterion_refs() {
+        assert_eq!(parse_criterion_ref("SCR-12#2").unwrap(), ("SCR-12", 2));
+        for bad in ["SCR-12", "SCR-12#", "SCR-12#x", "#2", "12#2", "SCR-1#-1"] {
+            assert!(
+                matches!(parse_criterion_ref(bad), Err(Error::Usage(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

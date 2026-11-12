@@ -11,7 +11,7 @@ use clap::CommandFactory;
 
 use std::path::Path;
 
-use cli::{Cli, Command, ListArgs, ProjectCommand};
+use cli::{Cli, Command, CommentCommand, CriteriaCommand, ListArgs, ProjectCommand};
 use error::{Error, Result};
 use identity::{Env, Role};
 use output::Format;
@@ -191,6 +191,32 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Reopen { id } => {
             transition(&mut conn, format, &id, ticket::Action::Reopen, &identity)
+        }
+        Command::Criteria(CriteriaCommand::Add { id, criterion }) => {
+            let t = ticket::criteria_add(&mut conn, &id, &criterion)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Criteria(CriteriaCommand::Rm { target }) => {
+            let t = ticket::criteria_rm(&mut conn, &target)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Check { target, evidence } => {
+            let evidence = evidence.as_deref().map(|e| text_arg(Some(e))).transpose()?;
+            let t = ticket::check(&mut conn, &target, evidence.as_deref(), &identity)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Uncheck { target } => {
+            let t = ticket::uncheck(&mut conn, &target)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Comment(CommentCommand::Add { id, body }) => {
+            let body = text_arg(Some(&body))?;
+            let t = ticket::comment_add(&mut conn, &id, &body, &identity)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Comment(CommentCommand::Rm { id, comment_id }) => {
+            let t = ticket::comment_rm(&mut conn, &id, comment_id)?;
+            emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
             let v = db::write(&mut conn, |tx| {
