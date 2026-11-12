@@ -1,6 +1,6 @@
 //! Projects: one per repository root, identified by its root path.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
@@ -98,6 +98,37 @@ pub fn find_by_root(conn: &Connection, root: &str) -> Result<Option<Project>> {
         .optional()?)
 }
 
+/// Resolve `.` and `..` textually, without touching the filesystem, so a
+/// path to a directory that no longer exists still normalizes.
+pub fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The Project whose root is `path`: tried lexically normalized first (the
+/// root may be gone), then canonicalized (symlinks).
+pub fn find_by_path(conn: &Connection, path: &Path) -> Result<Option<Project>> {
+    let norm = normalize(path);
+    if let Some(p) = find_by_root(conn, &path_str(&norm)?)? {
+        return Ok(Some(p));
+    }
+    match std::fs::canonicalize(&norm) {
+        Ok(c) => find_by_root(conn, &path_str(&c)?),
+        Err(_) => Ok(None),
+    }
+}
+
 /// The Project for `root`, created on first sight. `--key` is honoured only
 /// then; the key is otherwise derived from the directory name.
 pub fn find_or_create(conn: &Connection, root: &str, key_flag: Option<&str>) -> Result<Project> {
@@ -155,15 +186,8 @@ pub fn relink(conn: &Connection, old: &Path, new: &Path) -> Result<Value> {
         }
     }
     let new_s = path_str(&new_canon)?;
-    // The old root usually no longer exists, so try it as given first.
-    let old_raw = path_str(old)?;
-    let found = match find_by_root(conn, &old_raw)? {
-        Some(p) => Some(p),
-        None => match std::fs::canonicalize(old) {
-            Ok(c) => find_by_root(conn, &path_str(&c)?)?,
-            Err(_) => None,
-        },
-    };
+    // The old root usually no longer exists, so it is looked up as text.
+    let found = find_by_path(conn, old)?;
     let project =
         found.ok_or_else(|| Error::NotFound(format!("no Project at {}", old.display())))?;
     if find_by_root(conn, &new_s)?.is_some() {

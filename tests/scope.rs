@@ -575,3 +575,40 @@ fn submodule_is_unscoped() {
     assert_eq!(e.ok(&sup.join("sub"), &["add", "x"])["id"], "LOCAL-1");
     assert_eq!(e.ok(&sup, &["add", "y"])["id"], "SUP-1");
 }
+
+#[test]
+fn list_honors_global_project_outside_a_repo() {
+    let e = env();
+    let repo = e.repo("a", "my-app");
+    let plain = e.base.join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let r = repo.to_str().unwrap();
+    e.ok(&plain, &["--project", r, "add", "remote"]);
+    assert_eq!(e.ids(&plain, &["--project", r]), ["MA-1"]);
+    // Without the flag the plain directory is still LOCAL.
+    assert!(e.ids(&plain, &[]).is_empty());
+}
+
+#[test]
+fn relink_and_project_root_normalize_paths_to_a_gone_root() {
+    let e = env();
+    let repo = e.repo("a", "my-app");
+    e.ok(&repo, &["add", "x"]);
+    let moved = e.base.join("a").join("moved");
+    std::fs::rename(&repo, &moved).unwrap();
+    // --project-root with `..` through a directory that never existed.
+    assert_eq!(
+        e.ids(&e.base, &["--project-root", "a/ghost/../my-app"]),
+        ["MA-1"]
+    );
+    let out = e.ok(
+        &e.base,
+        &[
+            "project",
+            "relink",
+            "a/ghost/../my-app",
+            moved.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out["project"]["key"], "MA");
+}

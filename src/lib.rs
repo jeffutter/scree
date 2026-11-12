@@ -62,7 +62,14 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     let path = db::resolve_path_from_env(cli.db)?;
     let mut conn = db::open(&path)?;
     match cli.command.unwrap_or(Command::List(ListArgs::default())) {
-        Command::List(args) => {
+        Command::List(mut args) => {
+            // Like `add`, outside any repo the global --project picks the Project.
+            if args.project_root.is_none()
+                && !args.all_projects
+                && scope::detect(cwd) == scope::Scope::Unscoped
+            {
+                args.project_root = cli.project.clone();
+            }
             let list = ticket::list(&conn, cwd, &args, &identity)?;
             match format {
                 Format::Json => output::to_json(&list).map(Outcome::Print),
@@ -113,7 +120,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
             let v = db::write(&mut conn, |tx| {
-                project::relink(tx, &cwd.join(&old), &cwd.join(&new))
+                project::relink(tx, &project::normalize(&cwd.join(&old)), &cwd.join(&new))
             })?;
             emit(format, &v, || {
                 let p = &v["project"];

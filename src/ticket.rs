@@ -162,11 +162,11 @@ fn resolve_where(conn: &Connection, cwd: &Path, a: &ListArgs) -> Result<Option<W
     }
     if let Some(p) = &a.project_root {
         let full = cwd.join(p);
-        let root = match scope::detect(&full) {
-            Scope::Checkout { root } | Scope::Worktree { root, .. } => root,
-            Scope::Unscoped => std::fs::canonicalize(&full).unwrap_or(full),
+        let found = match scope::detect(&full) {
+            Scope::Checkout { root } | Scope::Worktree { root, .. } => root_project(conn, &root)?,
+            Scope::Unscoped => project::find_by_path(conn, &full)?,
         };
-        return match root_project(conn, &root)? {
+        return match found {
             Some(pr) => Ok(Some(Where::Project(pr.id))),
             None => Err(Error::NotFound(format!("no Project at {}", p.display()))),
         };
