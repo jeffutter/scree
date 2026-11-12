@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::identity::Role;
 
@@ -23,6 +23,10 @@ pub struct Cli {
     #[arg(long, global = true, env = "SCREE_SESSION")]
     pub session: Option<String>,
 
+    /// Project for writes made outside a repo
+    #[arg(long, global = true, env = "SCREE_PROJECT")]
+    pub project: Option<PathBuf>,
+
     /// Print JSON (`SCREE_FORMAT=json`)
     #[arg(long, global = true, conflicts_with = "text")]
     pub json: bool,
@@ -35,8 +39,128 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ForWho {
+    Agent,
+    Human,
+}
+
+impl ForWho {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ForWho::Agent => "agent",
+            ForWho::Human => "human",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Status {
+    Draft,
+    Ready,
+    Active,
+    Done,
+    Abandoned,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Draft => "draft",
+            Status::Ready => "ready",
+            Status::Active => "active",
+            Status::Done => "done",
+            Status::Abandoned => "abandoned",
+        }
+    }
+}
+
+/// The statuses a new ticket may start in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum NewStatus {
+    Draft,
+    Ready,
+}
+
+impl NewStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NewStatus::Draft => "draft",
+            NewStatus::Ready => "ready",
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct AddArgs {
+    /// Ticket title
+    pub title: String,
+    /// Not yet supported
+    #[arg(long)]
+    pub parent: Option<String>,
+    /// Description text, or `-` for stdin
+    #[arg(long)]
+    pub description: Option<String>,
+    /// Plan text, or `-` for stdin
+    #[arg(long)]
+    pub plan: Option<String>,
+    /// An acceptance criterion; repeatable
+    #[arg(long = "criterion")]
+    pub criteria: Vec<String>,
+    #[arg(long = "for", value_enum, default_value_t = ForWho::Agent)]
+    pub for_who: ForWho,
+    #[arg(long, value_enum, default_value_t = NewStatus::Draft)]
+    pub status: NewStatus,
+    /// Not yet supported
+    #[arg(long = "blocked-by")]
+    pub blocked_by: Vec<String>,
+    /// Key for a Project seen for the first time
+    #[arg(long)]
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Args, Default)]
+pub struct ListArgs {
+    /// Repeatable; default draft, ready and active
+    #[arg(long, value_enum)]
+    pub status: Vec<Status>,
+    #[arg(long = "for", value_enum)]
+    pub for_who: Option<ForWho>,
+    /// Only tickets claimed by this caller
+    #[arg(long)]
+    pub mine: bool,
+    /// Default 50
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// Every Worktree of the Project
+    #[arg(long, conflicts_with_all = ["all_projects", "project_root"])]
+    pub all_worktrees: bool,
+    /// Every Project
+    #[arg(long, conflicts_with_all = ["all_worktrees", "project_root"])]
+    pub all_projects: bool,
+    /// Narrow to the Project at this root
+    #[arg(long, conflicts_with_all = ["all_worktrees", "all_projects"])]
+    pub project_root: Option<PathBuf>,
+    /// Include archived tickets
+    #[arg(long)]
+    pub archived: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    /// Point a Project at a moved root path
+    Relink { old: PathBuf, new: PathBuf },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Create a ticket
+    Add(AddArgs),
+    /// Print one ticket in full
+    Show { id: String },
     /// List tickets
-    List,
+    List(ListArgs),
+    /// Manage Projects
+    #[command(subcommand)]
+    Project(ProjectCommand),
 }

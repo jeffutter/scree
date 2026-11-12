@@ -113,6 +113,99 @@ pub fn render_text_list(list: &ListResult, color: bool) -> String {
     out.trim_end_matches('\n').to_string()
 }
 
+/// The `show` view: header, description, plan, checklist, blockers,
+/// subtasks and comments. Reads fields from the JSON and tolerates gaps.
+pub fn render_text_ticket(t: &serde_json::Value) -> String {
+    let s = |v: &serde_json::Value, k: &str| {
+        v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+    let mut out = String::new();
+    let mut head = format!("{}  {}  {}", s(t, "id"), s(t, "status"), s(t, "title"));
+    if t.get("blocked").and_then(|b| b.as_bool()).unwrap_or(false) {
+        head.push_str(" [blocked]");
+    }
+    if s(t, "for") == "human" {
+        head.push_str(" [human]");
+    }
+    let _ = writeln!(out, "{head}");
+    let _ = writeln!(out, "for: {}", s(t, "for"));
+    let wt = s(t, "worktree");
+    let _ = writeln!(
+        out,
+        "worktree: {}",
+        if wt.is_empty() {
+            "(root checkout)"
+        } else {
+            &wt
+        }
+    );
+    if let Some(c) = t.get("claimed_by").filter(|c| !c.is_null()) {
+        let _ = writeln!(out, "claimed by: {} ({})", s(c, "author"), s(c, "session"));
+    }
+    let _ = writeln!(
+        out,
+        "created: {}  updated: {}",
+        s(t, "created_at"),
+        s(t, "updated_at")
+    );
+    for (label, key) in [("Description", "description"), ("Plan", "plan")] {
+        let body = s(t, key);
+        if !body.is_empty() {
+            let _ = write!(out, "\n{label}:\n{body}\n");
+        }
+    }
+    if let Some(cs) = t
+        .get("criteria")
+        .and_then(|c| c.as_array())
+        .filter(|c| !c.is_empty())
+    {
+        let _ = writeln!(out, "\nAcceptance criteria:");
+        for c in cs {
+            let mark = if c.get("checked").and_then(|b| b.as_bool()).unwrap_or(false) {
+                "x"
+            } else {
+                " "
+            };
+            let n = c.get("number").and_then(|n| n.as_i64()).unwrap_or(0);
+            let _ = write!(out, "[{mark}] #{n} {}", s(c, "text"));
+            let ev = s(c, "evidence");
+            if !ev.is_empty() {
+                let _ = write!(out, " ({ev})");
+            }
+            let _ = writeln!(out);
+        }
+    }
+    for (label, key) in [("Blocked by", "blocked_by"), ("Subtasks", "subtasks")] {
+        if let Some(xs) = t
+            .get(key)
+            .and_then(|c| c.as_array())
+            .filter(|c| !c.is_empty())
+        {
+            let _ = writeln!(out, "\n{label}:");
+            for x in xs {
+                let _ = writeln!(out, "{}  {}  {}", s(x, "id"), s(x, "status"), s(x, "title"));
+            }
+        }
+    }
+    if let Some(cs) = t
+        .get("comments")
+        .and_then(|c| c.as_array())
+        .filter(|c| !c.is_empty())
+    {
+        let _ = writeln!(out, "\nComments:");
+        for c in cs {
+            let _ = writeln!(
+                out,
+                "{} {}: {}",
+                s(c, "created_at"),
+                s(c, "author"),
+                s(c, "body")
+            );
+        }
+    }
+    out.trim_end_matches('\n').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

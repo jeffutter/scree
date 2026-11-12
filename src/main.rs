@@ -20,7 +20,15 @@ fn drop_empty_scree_vars() {
 fn main() {
     drop_empty_scree_vars();
     let cli = Cli::parse();
-    match scree::run(cli, &Env::from_process()) {
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            let e = scree::error::Error::Other(format!("cannot read the current directory: {e}"));
+            eprintln!("{}", e.to_json());
+            std::process::exit(e.exit_code());
+        }
+    };
+    match scree::run(cli, &Env::from_process(), &cwd) {
         Ok(Outcome::Print(out)) => println!("{out}"),
         Ok(Outcome::Help) => {
             print!("{}", scree::help_text());

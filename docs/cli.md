@@ -27,6 +27,16 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - Ids are unique across Projects, so commands that take an id work from any directory.
 - An acceptance criterion is `SCR-12#2`: its per-ticket number. Criteria are numbered in creation order and a number is never reused. (`acceptance_criteria` needs a `number` column with `UNIQUE(ticket_id, number)` and a per-ticket counter, allocated like subtask numbers.)
 
+## Projects and keys
+
+- A Project is a repository's root checkout path. It is created the first time a write happens in that repo. Reads never create one.
+- Detection uses `git rev-parse`. Bare repos and submodules count as outside any repo.
+- Key: the initials of the directory name when it has two or more words (split on anything not `A-Z0-9`), else its first three characters; upper-cased, padded with `X` to 2 and clamped to 5. A taken key gets the smallest numeric suffix from 2 (`MA`, `MA2`), trimming the base to stay within 5.
+- `--key` is accepted only when the Project is first seen and must be `A-Z0-9`, 2 to 5 characters, and free (`LOCAL` is taken). Afterwards it is refused (exit 4).
+- Writes: inside a repo, the ticket goes to that Project and Worktree. Outside, `--project PATH` names a repo or linked worktree to write to (ignored inside a repo); with neither, the ticket is an unscoped `LOCAL` ticket.
+- `add --parent` and `--blocked-by` are refused (exit 4) until subtasks and dependencies exist.
+- `project relink OLD NEW` requires NEW to be the root checkout of a git repository that is not already a Project.
+
 ## Scope flags (read commands)
 
 `list` and `next` default to the current Worktree.
