@@ -323,4 +323,14 @@ pub enum Command {
     /// Manage Projects
     #[command(subcommand)]
     Project(ProjectCommand),
+    /// Archive or abandon tickets of closed Worktrees; honours the global --project
+    Sweep {
+        /// Report what would change and write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Hide a ticket (and its subtasks) from list without --archived
+    Archive { id: String },
+    /// Undo archive; a subtask of an archived parent is refused
+    Unarchive { id: String },
 }

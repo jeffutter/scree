@@ -30,6 +30,10 @@ fn main() {
     };
     match scree::run(cli, &Env::from_process(), &cwd) {
         Ok(Outcome::Print(out)) => println!("{out}"),
+        Ok(Outcome::PrintFail(out)) => {
+            println!("{out}");
+            std::process::exit(1);
+        }
         Ok(Outcome::Help) => {
             print!("{}", scree::help_text());
             std::process::exit(2);

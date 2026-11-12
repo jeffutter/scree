@@ -341,6 +341,42 @@ pub fn show(conn: &Connection, id: &str) -> Result<Value> {
     build(conn, resolve(conn, id)?, true)
 }
 
+/// Archive or unarchive a ticket, whatever its status (archived is separate
+/// from status). Archiving a parent archives its subtasks; unarchiving a
+/// parent restores them. A subtask of an archived parent cannot be
+/// unarchived alone (Refused). Repeating the request is a no-op.
+pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<Value> {
+    let row = resolve(conn, id)?;
+    db::write(conn, |tx| {
+        if !archived {
+            let parent_archived: bool = tx.query_row(
+                "SELECT COALESCE(pt.archived_at IS NOT NULL, 0) FROM tickets t
+                 LEFT JOIN tickets pt ON pt.id = t.parent_id WHERE t.id = ?1",
+                [row],
+                |r| r.get(0),
+            )?;
+            if parent_archived {
+                return Err(Error::Refused(format!(
+                    "{id} is a subtask of an archived ticket; unarchive the parent"
+                )));
+            }
+        }
+        let set = if archived {
+            format!("COALESCE(archived_at, {NOW})")
+        } else {
+            "NULL".to_string()
+        };
+        tx.execute(
+            &format!(
+                "UPDATE tickets SET archived_at = {set}, updated_at = {NOW}
+                 WHERE (id = ?1 OR parent_id = ?1) AND (archived_at IS NOT NULL) <> ?2"
+            ),
+            params![row, i64::from(archived)],
+        )?;
+        build(tx, row, true)
+    })
+}
+
 /// A status change `scree` offers as its own command.
 pub enum Action {
     Ready,

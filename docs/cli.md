@@ -70,8 +70,8 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - `comment add ID BODY|-` / `comment rm ID COMMENT_ID`. Any caller may delete any comment, including the ones Scree writes.
 - `move ID (--worktree PATH | --root)`: moves the whole tree within its Project and places it last. Cross-Project moves are refused.
 - `reorder ID (--before ID | --after ID | --first | --last)`: relative only. Done and abandoned tickets are refused.
-- `archive ID` / `unarchive ID`: for tickets the automatic sweep never touches.
-- `sweep [--dry-run] [--project PATH]`: reports on stdout; exits non-zero when a Project is skipped.
+- `archive ID` / `unarchive ID`: for tickets the automatic sweep never touches. Allowed in any status. Archiving a parent archives its subtasks and unarchiving it restores them; a subtask of an archived parent cannot be unarchived alone (exit 4). Repeating the call is a no-op.
+- `sweep [--dry-run]`: reports on stdout; exits 1 when a Project is skipped. The Project is the one named by the global `--project PATH`, else the one the caller is in, else every Project with a root. Each report entry is a closed Worktree: `archived` counts done tickets archived as they were, `abandoned` counts open tickets abandoned (with a `scree` comment) and archived.
 - `project relink OLD NEW`: points a Project at a moved root path.
 - `skill [--check PATH]`: prints SKILL.md; `--check` exits 1 when the installed copy is stale.
 
@@ -93,7 +93,7 @@ Every command prints one JSON object on stdout and nothing else; keys are `snake
 
 - **Ticket**: `id`, `title`, `parent` (id or null), `status`, `for`, `blocked`, `available` (computed), `blocked_by` (a list of `{id, title, status, worktree}`, one per blocker that is not done, whatever its Worktree), `subtasks` (summaries), `claimed_by` (`{author, session}` or null), `worktree`, `created_at`, `updated_at`, `done_at`, `archived_at`. `show` and the mutating commands add `description`, `plan`, `criteria` and `comments`.
 - **List result** (`list`, `next`): `{"tickets": [...]}`. `next` adds `"human_pending": N` and `"blocked_pending": N`; the latter counts Blocked tickets in scope that would otherwise be Available, and is shown only when `tickets` is empty.
-- **Sweep result**: archived and abandoned counts per Worktree, plus any skipped Projects.
+- **Sweep result**: `{dry_run, worktrees: [{project, path, archived, abandoned}], skipped: [{project, reason}]}`.
 - **Error**: written to stderr as `{"error": {"code": "refused", "message": "..."}}`; stdout stays empty.
 
 ### Text

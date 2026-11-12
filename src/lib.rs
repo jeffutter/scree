@@ -5,6 +5,7 @@ pub mod identity;
 pub mod output;
 pub mod project;
 pub mod scope;
+pub mod sweep;
 pub mod ticket;
 
 use clap::CommandFactory;
@@ -21,6 +22,8 @@ use output::Format;
 pub enum Outcome {
     /// Print to stdout, exit 0.
     Print(String),
+    /// Print to stdout, exit 1.
+    PrintFail(String),
     /// Print the clap help to stdout, exit 2.
     Help,
 }
@@ -100,6 +103,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     match cli.command.unwrap_or(Command::List(ListArgs::default())) {
         Command::List(mut args) => {
             apply_project_override(&mut args.scope, cli.project.as_deref(), cwd);
+            sweep::sweep_auto(&mut conn, env, cwd, Some(&args.scope), None)?;
             let list = ticket::list(&conn, cwd, &args, &identity)?;
             match format {
                 Format::Json => output::to_json(&list).map(Outcome::Print),
@@ -117,6 +121,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Next(mut a) => {
             apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
+            sweep::sweep_auto(&mut conn, env, cwd, Some(&a.scope), None)?;
             let r = ticket::next(&conn, cwd, &a, &identity)?;
             match format {
                 Format::Json => output::to_json(&r).map(Outcome::Print),
@@ -148,6 +153,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Add(a) => {
+            sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
             let description = text_arg(a.description.as_deref())?;
@@ -194,18 +200,21 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Ready { id } => {
             transition(&mut conn, format, &id, ticket::Action::Ready, &identity)
         }
-        Command::Start(a) => match a.id {
-            Some(_) if a.for_who.is_some() => {
-                Err(Error::Usage("--for applies only to start --next".into()))
+        Command::Start(a) => {
+            sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
+            match a.id {
+                Some(_) if a.for_who.is_some() => {
+                    Err(Error::Usage("--for applies only to start --next".into()))
+                }
+                Some(id) => transition(&mut conn, format, &id, ticket::Action::Start, &identity),
+                None => {
+                    let mut scope = cli::ScopeArgs::default();
+                    apply_project_override(&mut scope, cli.project.as_deref(), cwd);
+                    let t = ticket::start_next(&mut conn, cwd, &scope, a.for_who, &identity)?;
+                    emit(format, &t, || output::render_text_ticket(&t))
+                }
             }
-            Some(id) => transition(&mut conn, format, &id, ticket::Action::Start, &identity),
-            None => {
-                let mut scope = cli::ScopeArgs::default();
-                apply_project_override(&mut scope, cli.project.as_deref(), cwd);
-                let t = ticket::start_next(&mut conn, cwd, &scope, a.for_who, &identity)?;
-                emit(format, &t, || output::render_text_ticket(&t))
-            }
-        },
+        }
         Command::Reorder(a) => {
             let place = match (&a.before, &a.after, a.first) {
                 (Some(o), _, _) => ticket::Place::Before(o),
@@ -228,13 +237,36 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Release { id } => {
             transition(&mut conn, format, &id, ticket::Action::Release, &identity)
         }
-        Command::Done { id, force } => transition(
-            &mut conn,
-            format,
-            &id,
-            ticket::Action::Done { force },
-            &identity,
-        ),
+        Command::Done { id, force } => {
+            sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
+            transition(
+                &mut conn,
+                format,
+                &id,
+                ticket::Action::Done { force },
+                &identity,
+            )
+        }
+        Command::Sweep { dry_run } => {
+            let r = sweep::sweep_command(&mut conn, cwd, cli.project.as_deref(), dry_run)?;
+            let out = match format {
+                Format::Json => output::to_json(&r.to_json())?,
+                Format::Text => r.render_text(),
+            };
+            Ok(if r.is_clean() {
+                Outcome::Print(out)
+            } else {
+                Outcome::PrintFail(out)
+            })
+        }
+        Command::Archive { id } => {
+            let t = ticket::archive(&mut conn, &id, true)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Unarchive { id } => {
+            let t = ticket::archive(&mut conn, &id, false)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
         Command::Abandon { id, reason } => {
             let reason = text_arg(Some(&reason))?;
             transition(
