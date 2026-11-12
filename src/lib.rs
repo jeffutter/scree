@@ -89,6 +89,11 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 ));
             }
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
+            if a.description.as_deref() == Some("-") && a.plan.as_deref() == Some("-") {
+                return Err(Error::Usage(
+                    "--description - and --plan - both read stdin; use - for only one".into(),
+                ));
+            }
             let description = text_arg(a.description.as_deref())?;
             let plan = text_arg(a.plan.as_deref())?;
             let t = ticket::add(

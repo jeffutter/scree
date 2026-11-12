@@ -207,6 +207,15 @@ fn stdin_text_argument() {
 }
 
 #[test]
+fn stdin_for_both_description_and_plan_is_usage_error() {
+    let e = env();
+    let repo = e.repo("a", "scree");
+    let args = ["add", "T", "--description", "-", "--plan", "-"];
+    assert_eq!(e.code(&repo, &args), 2);
+    assert!(e.ids(&repo, &[]).is_empty(), "nothing stored");
+}
+
+#[test]
 fn linked_worktree_shares_project_and_counter() {
     let e = env();
     let repo = e.repo("a", "my-app");
