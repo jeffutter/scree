@@ -107,6 +107,8 @@ pub struct NewTicket<'a> {
     pub key: Option<&'a str>,
     /// Display id of the parent: makes this a subtask.
     pub parent: Option<&'a str>,
+    /// Display ids of tickets that must be done first.
+    pub blocked_by: &'a [String],
 }
 
 /// Create a ticket in the Project and Worktree `scope` names (`Unscoped`
@@ -211,6 +213,10 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
             ],
         )?;
         let id = tx.last_insert_rowid();
+        for blocker in t.blocked_by {
+            // A new ticket has no dependents, so no edge can close a cycle.
+            insert_edge(tx, id, resolve(tx, blocker)?, blocker)?;
+        }
         for (i, text) in t.criteria.iter().enumerate() {
             let n = i as i64 + 1;
             tx.execute(
@@ -246,6 +252,81 @@ fn resolve(conn: &Connection, id: &str) -> Result<i64> {
             None => format!("no ticket {}-{}", parsed.key, parsed.number),
             Some(sub) => format!("no ticket {}-{}.{sub}", parsed.key, parsed.number),
         })
+    })
+}
+
+/// Insert `row` blocked-by `blocker` after the Project check. `label` names
+/// the blocker in errors. Idempotent. Does not check for cycles.
+fn insert_edge(tx: &Connection, row: i64, blocker: i64, label: &str) -> Result<()> {
+    let project_of = |r: i64| {
+        tx.query_row("SELECT project_id FROM tickets WHERE id = ?1", [r], |x| {
+            x.get::<_, i64>(0)
+        })
+    };
+    if project_of(row)? != project_of(blocker)? {
+        return Err(Error::Refused(format!(
+            "{label} belongs to another Project; dependencies stay within one Project"
+        )));
+    }
+    tx.execute(
+        "INSERT OR IGNORE INTO dependencies (ticket_id, blocked_by_id) VALUES (?1, ?2)",
+        [row, blocker],
+    )?;
+    Ok(())
+}
+
+/// Whether `target` can be reached from `from` by following "waits for"
+/// edges: explicit dependencies, a parent waiting on each subtask, and a
+/// subtask waiting on its earlier siblings (`start` enforces that order).
+/// A new edge `target` -> `from` closes a cycle exactly when this holds.
+fn waits_for(tx: &Connection, from: i64, target: i64) -> Result<bool> {
+    Ok(tx.query_row(
+        "WITH RECURSIVE edges(a, b) AS (
+             SELECT ticket_id, blocked_by_id FROM dependencies
+             UNION SELECT parent_id, id FROM tickets WHERE parent_id IS NOT NULL
+             UNION SELECT c.id, e.id FROM tickets c
+                 JOIN tickets e ON e.parent_id = c.parent_id
+                 WHERE (e.position, e.number) < (c.position, c.number)
+         ), reach(id) AS (
+             SELECT ?1 UNION SELECT edges.b FROM reach JOIN edges ON edges.a = reach.id
+         ) SELECT EXISTS (SELECT 1 FROM reach WHERE id = ?2)",
+        [from, target],
+        |r| r.get(0),
+    )?)
+}
+
+/// `id` becomes blocked by `blocker`. Refused (exit 4) for a self edge, a
+/// different Project, or a cycle. Worktrees of one Project may be mixed.
+/// Adding an existing edge changes nothing.
+pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> {
+    db::write(conn, |tx| {
+        let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
+        if row == b {
+            return Err(Error::Refused(format!("{id} cannot be blocked by itself")));
+        }
+        insert_edge(tx, row, b, blocker)?;
+        if waits_for(tx, b, row)? {
+            return Err(Error::Refused(format!(
+                "{id} blocked by {blocker} would make a dependency cycle"
+            )));
+        }
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
+}
+
+/// Remove the edge; removing one that does not exist is a no-op.
+pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> {
+    db::write(conn, |tx| {
+        let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
+        if tx.execute(
+            "DELETE FROM dependencies WHERE ticket_id = ?1 AND blocked_by_id = ?2",
+            [row, b],
+        )? > 0
+        {
+            touch(tx, row)?;
+        }
+        build(tx, row, true)
     })
 }
 
@@ -837,6 +918,12 @@ pub fn list(
     }
     if !a.archived {
         conds.push("t.archived_at IS NULL".into());
+    }
+    if a.blocked {
+        conds.push(BLOCKED.into());
+    }
+    if a.available {
+        conds.push(format!("{READY_FIRST} AND NOT {BLOCKED}"));
     }
     if let Some(parent) = &a.parent {
         conds.push("t.parent_id = ?".into());

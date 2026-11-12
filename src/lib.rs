@@ -11,7 +11,7 @@ use clap::CommandFactory;
 
 use std::path::Path;
 
-use cli::{Cli, Command, CommentCommand, CriteriaCommand, ListArgs, ProjectCommand};
+use cli::{Cli, Command, CommentCommand, CriteriaCommand, DepCommand, ListArgs, ProjectCommand};
 use error::{Error, Result};
 use identity::{Env, Role};
 use output::Format;
@@ -148,9 +148,6 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Add(a) => {
-            if !a.blocked_by.is_empty() {
-                return Err(Error::Refused("--blocked-by is not supported yet".into()));
-            }
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
             let description = text_arg(a.description.as_deref())?;
@@ -167,6 +164,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                     status: a.status,
                     key: a.key.as_deref(),
                     parent: a.parent.as_deref(),
+                    blocked_by: &a.blocked_by,
                 },
             )?;
             emit(format, &t, || output::render_text_ticket(&t))
@@ -249,6 +247,14 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Reopen { id } => {
             transition(&mut conn, format, &id, ticket::Action::Reopen, &identity)
+        }
+        Command::Dep(DepCommand::Add { id, blocker }) => {
+            let t = ticket::dep_add(&mut conn, &id, &blocker)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Dep(DepCommand::Rm { id, blocker }) => {
+            let t = ticket::dep_rm(&mut conn, &id, &blocker)?;
+            emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Criteria(CriteriaCommand::Add { id, criterion }) => {
             let t = ticket::criteria_add(&mut conn, &id, &criterion)?;

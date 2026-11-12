@@ -106,7 +106,11 @@ pub fn render_text_list(list: &ListResult, color: bool) -> String {
                 .iter()
                 .map(|b| {
                     let mut s = field(b, "id");
-                    let wt = field(b, "worktree");
+                    // The JSON carries the full path; text names the directory.
+                    let full = field(b, "worktree");
+                    let wt = std::path::Path::new(&full)
+                        .file_name()
+                        .map_or(full.clone(), |n| n.to_string_lossy().into_owned());
                     if !wt.is_empty() {
                         let _ = write!(s, " in {wt}");
                     }

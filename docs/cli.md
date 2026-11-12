@@ -34,7 +34,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - Key: the initials of the directory name when it has two or more words (split on anything not `A-Z0-9`), else its first three characters; upper-cased, padded with `X` to 2 and clamped to 5. A taken key gets the smallest numeric suffix from 2 (`MA`, `MA2`), trimming the base to stay within 5.
 - `--key` is accepted only when the Project is first seen and must be `A-Z0-9`, 2 to 5 characters, and free (`LOCAL` is taken). Afterwards it is refused (exit 4).
 - Writes: inside a repo, the ticket goes to that Project and Worktree. Outside, `--project PATH` names a repo or linked worktree to write to (ignored inside a repo); with neither, the ticket is an unscoped `LOCAL` ticket.
-- `add --blocked-by` is refused (exit 4) until dependencies exist.
+- `add --blocked-by ID` (repeatable) sets dependencies at creation; a blocker in another Project is refused (exit 4) and no ticket is created.
 - `project relink OLD NEW` requires NEW to be the root checkout of a git repository that is not already a Project.
 
 ## Scope flags (read commands)
@@ -64,7 +64,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. Abandoning a parent abandons its open subtasks.
 - `reopen ID`: done or abandoned back to `ready`.
 - `release ID`: active back to `ready`; clears the claim.
-- `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A cycle or a cross-Project edge is refused (exit 4).
+- `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A self edge, a cycle (counting a parent waiting on its subtasks and a subtask waiting on its earlier siblings) or a cross-Project edge is refused (exit 4); Worktrees of one Project may be mixed. Adding an existing edge, or removing a missing one, is a no-op.
 - `criteria add ID TEXT` / `criteria rm ID#N`.
 - `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence; checking again overwrites them, and `uncheck` clears them. Criteria and comments may be changed on done or abandoned tickets too.
 - `comment add ID BODY|-` / `comment rm ID COMMENT_ID`. Any caller may delete any comment, including the ones Scree writes.

@@ -111,7 +111,7 @@ pub struct AddArgs {
     pub for_who: ForWho,
     #[arg(long, value_enum, default_value_t = NewStatus::Draft)]
     pub status: NewStatus,
-    /// Not yet supported
+    /// A ticket that must be done first; repeatable
     #[arg(long = "blocked-by")]
     pub blocked_by: Vec<String>,
     /// Key for a Project seen for the first time
@@ -212,6 +212,12 @@ pub struct ListArgs {
     /// Only the subtasks of this ticket
     #[arg(long)]
     pub parent: Option<String>,
+    /// Only blocked tickets
+    #[arg(long, conflicts_with = "available")]
+    pub blocked: bool,
+    /// Only Available tickets: ready, unblocked and first among siblings
+    #[arg(long)]
+    pub available: bool,
 }
 
 #[derive(Debug, Args)]
@@ -246,6 +252,14 @@ pub enum CriteriaCommand {
     Add { id: String, criterion: String },
     /// Remove a criterion by reference, e.g. SCR-12#2
     Rm { target: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DepCommand {
+    /// ID becomes blocked by BLOCKER; a cycle or cross-Project edge is refused
+    Add { id: String, blocker: String },
+    /// Remove the edge; a missing edge is not an error
+    Rm { id: String, blocker: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -300,6 +314,9 @@ pub enum Command {
     },
     /// Clear a criterion's check and its evidence
     Uncheck { target: String },
+    /// Add or remove dependencies between tickets
+    #[command(subcommand)]
+    Dep(DepCommand),
     /// Add or delete comments
     #[command(subcommand)]
     Comment(CommentCommand),
