@@ -1,4 +1,4 @@
-//! Tickets: create, read and list. Ids are `KEY-n`, composed at read time.
+//! Tickets: create, read and list. Ids are `KEY-n` or `KEY-n.m`, composed at read time.
 
 use std::path::Path;
 
@@ -19,46 +19,82 @@ use crate::scope::{self, Scope, path_str};
 const ID_EXPR: &str =
     "p.key || '-' || CASE WHEN pt.id IS NULL THEN t.number ELSE pt.number || '.' || t.number END";
 
-/// True for a ticket (alias `t`) with a blocker that is not done. An
-/// abandoned blocker still blocks. `start` and `next` both use this, so
-/// they cannot disagree about what is Available.
-const OPEN_BLOCKER: &str = "EXISTS (SELECT 1 FROM dependencies d
+/// SQL for a ticket (alias `t`) with a blocker that is not done. An
+/// abandoned blocker still blocks. A macro so `concat!` can build BLOCKED
+/// from it.
+macro_rules! open_blocker {
+    () => {
+        "EXISTS (SELECT 1 FROM dependencies d
     JOIN tickets b ON b.id = d.blocked_by_id
-    WHERE d.ticket_id = t.id AND b.status <> 'done')";
+    WHERE d.ticket_id = t.id AND b.status <> 'done')"
+    };
+}
 
-/// Available, for a ticket aliased `t`, apart from blockers: ready and not
-/// archived. Only top-level tickets exist until subtasks land; they will add
-/// "first unsettled sibling by position" here.
-const READY_ROOT: &str = "t.status = 'ready' AND t.archived_at IS NULL AND t.parent_id IS NULL";
+/// SQL for a parent (alias `t`) with a subtask that is not settled.
+macro_rules! open_subtask {
+    () => {
+        "EXISTS (SELECT 1 FROM tickets c
+    WHERE c.parent_id = t.id AND c.status IN ('draft', 'ready', 'active'))"
+    };
+}
+
+/// Blocked, for a ticket aliased `t`: an unfinished blocker or an unsettled
+/// subtask. `start`, `next`, `list` and `show` all use this, so they cannot
+/// disagree about what is Available.
+const BLOCKED: &str = concat!("(", open_blocker!(), " OR ", open_subtask!(), ")");
+
+/// Available, for a ticket aliased `t`, apart from being blocked: ready,
+/// not archived, and either top-level or the first unsettled sibling by
+/// position among its parent's subtasks.
+const READY_FIRST: &str = "t.status = 'ready' AND t.archived_at IS NULL
+    AND (t.parent_id IS NULL OR t.id = (
+        SELECT c.id FROM tickets c
+        WHERE c.parent_id = t.parent_id AND c.archived_at IS NULL
+          AND c.status IN ('draft', 'ready', 'active')
+        ORDER BY c.position, c.number LIMIT 1))";
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
-/// Split a display id into its upper-cased key and ticket number. A bare
-/// number or anything malformed is a usage error.
-pub fn parse_id(s: &str) -> Result<(String, i64)> {
+/// A parsed display id: `SCR-12` has `sub: None`, `SCR-12.3` has `Some(3)`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TicketId {
+    pub key: String,
+    pub number: i64,
+    pub sub: Option<i64>,
+}
+
+/// Split a display id into its upper-cased key, ticket number and optional
+/// subtask number. A bare number, a third level or anything malformed is a
+/// usage error.
+pub fn parse_id(s: &str) -> Result<TicketId> {
     let bad = || {
         Error::Usage(format!(
-            "{s:?} is not a ticket id; ids look like SCR-12 and a bare number is refused"
+            "{s:?} is not a ticket id; ids look like SCR-12 or SCR-12.3 and a bare number is refused"
         ))
     };
     let up = s.trim().to_ascii_uppercase();
     let (key, num) = up.split_once('-').ok_or_else(bad)?;
-    if !project::valid_key(key) || num.is_empty() {
+    if !project::valid_key(key) {
         return Err(bad());
     }
-    if num.contains('.') {
-        if num.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
-            return Err(Error::Refused(
-                "subtask ids are not supported yet".to_string(),
-            ));
+    let mut parts = num.split('.').map(|p| {
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(bad());
         }
-        return Err(bad());
+        p.parse::<i64>().map_err(|_| bad())
+    });
+    let number = parts.next().ok_or_else(bad)??;
+    let sub = parts.next().transpose()?;
+    if parts.next().is_some() {
+        return Err(Error::Usage(format!(
+            "{s:?} has three levels; tickets nest two deep (SCR-12.3)"
+        )));
     }
-    if !num.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(bad());
-    }
-    let n = num.parse().map_err(|_| bad())?;
-    Ok((key.to_string(), n))
+    Ok(TicketId {
+        key: key.to_string(),
+        number,
+        sub,
+    })
 }
 
 pub struct NewTicket<'a> {
@@ -69,53 +105,100 @@ pub struct NewTicket<'a> {
     pub for_who: ForWho,
     pub status: NewStatus,
     pub key: Option<&'a str>,
+    /// Display id of the parent: makes this a subtask.
+    pub parent: Option<&'a str>,
 }
 
 /// Create a ticket in the Project and Worktree `scope` names (`Unscoped`
-/// means the `LOCAL` Project). The id number is taken from the Project's
-/// counter inside the same write transaction and never handed out twice.
+/// means the `LOCAL` Project). With a parent, the ticket is a subtask: it
+/// takes the parent's Project and Worktree, and `scope` may only confirm
+/// that Project. Numbers come from a counter (the Project's, or the
+/// parent's for subtasks) inside the same write transaction and are never
+/// handed out twice.
 pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value> {
     if t.title.trim().is_empty() {
         return Err(Error::Usage("title must not be empty".into()));
     }
     db::write(conn, |tx| {
-        let (project, worktree) = match scope {
-            Scope::Unscoped => {
-                if t.key.is_some() {
-                    return Err(Error::Usage(
-                        "--key applies to a repository Project, not LOCAL tickets".into(),
-                    ));
+        let (project_id, parent, number, worktree) = if let Some(pid) = t.parent {
+            if t.key.is_some() {
+                return Err(Error::Usage(
+                    "--key applies to a new Project, not to a subtask".into(),
+                ));
+            }
+            let prow = resolve(tx, pid)?;
+            let (project_id, grand, status, worktree): (i64, Option<i64>, String, Option<String>) =
+                tx.query_row(
+                    "SELECT project_id, parent_id, status, worktree_path FROM tickets WHERE id = ?1",
+                    [prow],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?;
+            if grand.is_some() {
+                return Err(Error::Refused(format!(
+                    "{pid} is a subtask; tickets nest two levels deep"
+                )));
+            }
+            if matches!(status.as_str(), "done" | "abandoned") {
+                return Err(Error::Refused(format!(
+                    "cannot add a subtask to {pid}, which is {status}"
+                )));
+            }
+            if let Some(root) = scope::root_of(scope) {
+                let named = project::find_by_root(tx, &path_str(root)?)?;
+                if named.is_none_or(|p| p.id != project_id) {
+                    return Err(Error::Refused(format!(
+                        "{pid} belongs to another Project than the one named here"
+                    )));
                 }
-                (project::local(tx)?, None)
             }
-            Scope::Checkout { root } => {
-                (project::find_or_create(tx, &path_str(root)?, t.key)?, None)
-            }
-            Scope::Worktree { root, worktree } => (
-                project::find_or_create(tx, &path_str(root)?, t.key)?,
-                Some(path_str(worktree)?),
-            ),
+            let number: i64 = tx.query_row(
+                "UPDATE tickets SET next_subtask_number = next_subtask_number + 1
+                 WHERE id = ?1 RETURNING next_subtask_number - 1",
+                [prow],
+                |r| r.get(0),
+            )?;
+            (project_id, Some(prow), number, worktree)
+        } else {
+            let (project, worktree) = match scope {
+                Scope::Unscoped => {
+                    if t.key.is_some() {
+                        return Err(Error::Usage(
+                            "--key applies to a repository Project, not LOCAL tickets".into(),
+                        ));
+                    }
+                    (project::local(tx)?, None)
+                }
+                Scope::Checkout { root } => {
+                    (project::find_or_create(tx, &path_str(root)?, t.key)?, None)
+                }
+                Scope::Worktree { root, worktree } => (
+                    project::find_or_create(tx, &path_str(root)?, t.key)?,
+                    Some(path_str(worktree)?),
+                ),
+            };
+            let number: i64 = tx.query_row(
+                "UPDATE projects SET next_ticket_number = next_ticket_number + 1
+                 WHERE id = ?1 RETURNING next_ticket_number - 1",
+                [project.id],
+                |r| r.get(0),
+            )?;
+            (project.id, None, number, worktree)
         };
-        let number: i64 = tx.query_row(
-            "UPDATE projects SET next_ticket_number = next_ticket_number + 1
-             WHERE id = ?1 RETURNING next_ticket_number - 1",
-            [project.id],
-            |r| r.get(0),
-        )?;
         let position: i64 = tx.query_row(
             "SELECT coalesce(max(position), 0) + 1000 FROM tickets
-             WHERE project_id = ?1 AND parent_id IS NULL AND worktree_path IS ?2",
-            params![project.id, worktree],
+             WHERE project_id = ?1 AND parent_id IS ?2 AND worktree_path IS ?3",
+            params![project_id, parent, worktree],
             |r| r.get(0),
         )?;
         tx.execute(
             &format!(
-                "INSERT INTO tickets (project_id, number, title, description, plan, status,
+                "INSERT INTO tickets (project_id, parent_id, number, title, description, plan, status,
                     \"for\", position, worktree_path, next_criterion_number, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, {NOW}, {NOW})"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, {NOW}, {NOW})"
             ),
             params![
-                project.id,
+                project_id,
+                parent,
                 number,
                 t.title.trim(),
                 t.description,
@@ -142,15 +225,28 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
 
 /// The row id of the ticket a display id names; NotFound (exit 3) if none.
 fn resolve(conn: &Connection, id: &str) -> Result<i64> {
-    let (key, number) = parse_id(id)?;
-    conn.query_row(
-        "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-         WHERE p.key = ?1 AND t.number = ?2 AND t.parent_id IS NULL",
-        params![key, number],
-        |r| r.get(0),
-    )
-    .optional()?
-    .ok_or_else(|| Error::NotFound(format!("no ticket {key}-{number}")))
+    let parsed = parse_id(id)?;
+    let found = match parsed.sub {
+        None => conn.query_row(
+            "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
+             WHERE p.key = ?1 AND t.number = ?2 AND t.parent_id IS NULL",
+            params![parsed.key, parsed.number],
+            |r| r.get(0),
+        ),
+        Some(sub) => conn.query_row(
+            "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
+             JOIN tickets pt ON pt.id = t.parent_id
+             WHERE p.key = ?1 AND pt.number = ?2 AND pt.parent_id IS NULL AND t.number = ?3",
+            params![parsed.key, parsed.number, sub],
+            |r| r.get(0),
+        ),
+    };
+    found.optional()?.ok_or_else(|| {
+        Error::NotFound(match parsed.sub {
+            None => format!("no ticket {}-{}", parsed.key, parsed.number),
+            Some(sub) => format!("no ticket {}-{}.{sub}", parsed.key, parsed.number),
+        })
+    })
 }
 
 pub fn show(conn: &Connection, id: &str) -> Result<Value> {
@@ -235,7 +331,7 @@ pub fn transition(
                     return refuse("start");
                 }
                 let blocked: bool = tx.query_row(
-                    &format!("SELECT {OPEN_BLOCKER} FROM tickets t WHERE t.id = ?1"),
+                    &format!("SELECT {BLOCKED} FROM tickets t WHERE t.id = ?1"),
                     [row],
                     |r| r.get(0),
                 )?;
@@ -262,6 +358,17 @@ pub fn transition(
             Action::Done { force } => {
                 if !open {
                     return refuse("finish");
+                }
+                let open_children: i64 = tx.query_row(
+                    "SELECT count(*) FROM tickets
+                     WHERE parent_id = ?1 AND status IN ('draft', 'ready', 'active')",
+                    [row],
+                    |r| r.get(0),
+                )?;
+                if open_children > 0 {
+                    return Err(Error::Refused(format!(
+                        "{id} has {open_children} open subtasks; settle them first (--force does not skip this)"
+                    )));
                 }
                 let unchecked: i64 = tx.query_row(
                     "SELECT count(*) FROM acceptance_criteria WHERE ticket_id = ?1 AND checked = 0",
@@ -293,17 +400,56 @@ pub fn transition(
                     ),
                     params![row, who.author, who.session, who.role.as_str(), reason],
                 )?;
-                tx.execute(
-                    &format!(
-                        "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
-                            claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
-                    ),
-                    [row],
-                )?;
+                let children: Vec<i64> = tx
+                    .prepare(
+                        "SELECT id FROM tickets
+                         WHERE parent_id = ?1 AND status IN ('draft', 'ready', 'active')",
+                    )?
+                    .query_map([row], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?;
+                let parent_id = display_id(tx, row)?;
+                // The parent and each open subtask: a comment, then abandoned.
+                for (target, body) in std::iter::once((row, None)).chain(
+                    children
+                        .into_iter()
+                        .map(|c| (c, Some(format!("Parent {parent_id} abandoned")))),
+                ) {
+                    if let Some(body) = body {
+                        tx.execute(
+                            &format!(
+                                "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
+                            ),
+                            params![target, who.author, who.session, who.role.as_str(), body],
+                        )?;
+                    }
+                    tx.execute(
+                        &format!(
+                            "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
+                                claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                        ),
+                        [target],
+                    )?;
+                }
             }
             Action::Reopen => {
                 if open {
                     return refuse("reopen");
+                }
+                let parent_status: Option<String> = tx
+                    .query_row(
+                        "SELECT pt.status FROM tickets t JOIN tickets pt ON pt.id = t.parent_id
+                         WHERE t.id = ?1",
+                        [row],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(ps) = parent_status
+                    && matches!(ps.as_str(), "done" | "abandoned")
+                {
+                    return Err(Error::Refused(format!(
+                        "cannot reopen {id}: its parent is {ps}; reopen the parent first"
+                    )));
                 }
                 tx.execute(
                     &format!(
@@ -331,6 +477,18 @@ pub fn parse_criterion_ref(s: &str) -> Result<(&str, i64)> {
     }
     parse_id(id)?;
     Ok((id, n.parse().map_err(|_| bad())?))
+}
+
+/// The display id (`SCR-12` or `SCR-12.3`) of a ticket row.
+fn display_id(conn: &Connection, row: i64) -> Result<String> {
+    Ok(conn.query_row(
+        &format!(
+            "SELECT {ID_EXPR} FROM tickets t JOIN projects p ON p.id = t.project_id
+             LEFT JOIN tickets pt ON pt.id = t.parent_id WHERE t.id = ?1"
+        ),
+        [row],
+        |r| r.get(0),
+    )?)
 }
 
 fn touch(tx: &Connection, row: i64) -> Result<()> {
@@ -670,6 +828,10 @@ pub fn list(
     if !a.archived {
         conds.push("t.archived_at IS NULL".into());
     }
+    if let Some(parent) = &a.parent {
+        conds.push("t.parent_id = ?".into());
+        args.push(Sql::Integer(resolve(conn, parent)?));
+    }
     let ids = select_ids(conn, &conds, args, a.limit.unwrap_or(50))?;
     let tickets = ids
         .into_iter()
@@ -697,11 +859,11 @@ fn pool_conds(
     let Some((mut conds, mut args)) = scope_conds(conn, cwd, scope)? else {
         return Ok(None);
     };
-    conds.push(READY_ROOT.into());
+    conds.push(READY_FIRST.into());
     conds.push(if blocked {
-        OPEN_BLOCKER.into()
+        BLOCKED.into()
     } else {
-        format!("NOT {OPEN_BLOCKER}")
+        format!("NOT {BLOCKED}")
     });
     conds.push("t.\"for\" = ?".into());
     args.push(Sql::Text(for_who.as_str().into()));
@@ -878,6 +1040,86 @@ pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
     })
 }
 
+/// Where `move` puts a ticket tree.
+pub enum MoveTarget<'a> {
+    /// A linked worktree, or the root checkout, named by a path.
+    Worktree(&'a Path),
+    /// The root checkout.
+    Root,
+}
+
+/// Move a top-level ticket and its subtasks to another Worktree of its own
+/// Project, placing the tree last there. Done and abandoned trees may move:
+/// it rewrites a label on history and changes nothing else.
+pub fn move_tree(conn: &mut Connection, id: &str, target: MoveTarget) -> Result<Value> {
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let (project_id, parent): (i64, Option<i64>) = tx.query_row(
+            "SELECT project_id, parent_id FROM tickets WHERE id = ?1",
+            [row],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if parent.is_some() {
+            return Err(Error::Refused(format!(
+                "{id} is a subtask; move its parent, which takes its subtasks along"
+            )));
+        }
+        let has_root: bool = tx.query_row(
+            "SELECT root_path IS NOT NULL FROM projects WHERE id = ?1",
+            [project_id],
+            |r| r.get(0),
+        )?;
+        let worktree: Option<String> = match target {
+            MoveTarget::Root if !has_root => {
+                return Err(Error::Usage(
+                    "LOCAL tickets have no worktrees to move between".into(),
+                ));
+            }
+            MoveTarget::Root => None,
+            MoveTarget::Worktree(path) => {
+                let (root, worktree) = match scope::detect(path) {
+                    Scope::Unscoped => {
+                        return Err(Error::Refused(format!(
+                            "{} is not inside a git repository",
+                            path.display()
+                        )));
+                    }
+                    Scope::Checkout { root } => (root, None),
+                    Scope::Worktree { root, worktree } => (root, Some(path_str(&worktree)?)),
+                };
+                let named = project::find_by_root(tx, &path_str(&root)?)?;
+                if named.is_none_or(|p| p.id != project_id) {
+                    return Err(Error::Refused(format!(
+                        "{} is in a different Project than {id}; tickets never change Project",
+                        path.display()
+                    )));
+                }
+                worktree
+            }
+        };
+        let position: i64 = tx.query_row(
+            "SELECT coalesce(max(position), 0) + 1000 FROM tickets
+             WHERE project_id = ?1 AND parent_id IS NULL AND worktree_path IS ?2 AND id <> ?3",
+            params![project_id, worktree, row],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE tickets SET worktree_path = ?2, position = ?3, updated_at = {NOW}
+                 WHERE id = ?1"
+            ),
+            params![row, worktree, position],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE tickets SET worktree_path = ?2, updated_at = {NOW} WHERE parent_id = ?1"
+            ),
+            params![row, worktree],
+        )?;
+        build(tx, row, true)
+    })
+}
+
 /// The Ticket JSON shape from `docs/cli.md`; `detail` adds description,
 /// plan, criteria and comments (the `show` shape).
 fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
@@ -927,13 +1169,21 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
         },
     )?;
 
+    // Blockers: unfinished dependencies, then unsettled subtasks.
     let blocked_by: Vec<Value> = conn
         .prepare(&format!(
-            "SELECT {ID_EXPR}, t.title, t.status, t.worktree_path
-             FROM dependencies d JOIN tickets t ON t.id = d.blocked_by_id
-             JOIN projects p ON p.id = t.project_id
-             LEFT JOIN tickets pt ON pt.id = t.parent_id
-             WHERE d.ticket_id = ?1 AND t.status <> 'done' ORDER BY t.id"
+            "SELECT * FROM (
+               SELECT {ID_EXPR}, t.title, t.status, t.worktree_path, 0 AS k, t.id AS o1, 0 AS o2
+               FROM dependencies d JOIN tickets t ON t.id = d.blocked_by_id
+               JOIN projects p ON p.id = t.project_id
+               LEFT JOIN tickets pt ON pt.id = t.parent_id
+               WHERE d.ticket_id = ?1 AND t.status <> 'done'
+               UNION ALL
+               SELECT {ID_EXPR}, t.title, t.status, t.worktree_path, 1, t.position, t.number
+               FROM tickets t JOIN projects p ON p.id = t.project_id
+               JOIN tickets pt ON pt.id = t.parent_id
+               WHERE t.parent_id = ?1 AND t.status IN ('draft', 'ready', 'active')
+             ) ORDER BY k, o1, o2"
         ))?
         .query_map([id], |r| {
             Ok(json!({
@@ -958,7 +1208,11 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
         .collect::<std::result::Result<_, _>>()?;
 
     let blocked = !blocked_by.is_empty();
-    let available = row.status == "ready" && !blocked && row.parent.is_none();
+    let available: bool = conn.query_row(
+        &format!("SELECT {READY_FIRST} AND NOT {BLOCKED} FROM tickets t WHERE t.id = ?1"),
+        [id],
+        |r| r.get(0),
+    )?;
     let mut out = json!({
         "id": row.id, "title": row.title, "parent": row.parent, "status": row.status,
         "for": row.for_who, "blocked": blocked, "available": available,
@@ -1046,14 +1300,33 @@ mod tests {
 
     #[test]
     fn parse_ids() {
-        assert_eq!(parse_id("scr-12").unwrap(), ("SCR".to_string(), 12));
-        assert_eq!(parse_id("SCR-1").unwrap(), ("SCR".to_string(), 1));
+        let id = |k: &str, n, sub| TicketId {
+            key: k.to_string(),
+            number: n,
+            sub,
+        };
+        assert_eq!(parse_id("scr-12").unwrap(), id("SCR", 12, None));
+        assert_eq!(parse_id("SCR-1").unwrap(), id("SCR", 1, None));
+        assert_eq!(parse_id("scr-12.3").unwrap(), id("SCR", 12, Some(3)));
         for bad in [
-            "12", "SCR", "SCR-", "S-1", "SCR-x", "SCR-1x", "-1", "SCR--1", "",
+            "12",
+            "SCR",
+            "SCR-",
+            "S-1",
+            "SCR-x",
+            "SCR-1x",
+            "-1",
+            "SCR--1",
+            "",
+            "SCR-1.",
+            "SCR-.1",
+            "SCR-1..2",
+            "SCR-1.x",
+            "SCR-1.2.3",
+            "SCR-1.2.",
         ] {
             assert!(matches!(parse_id(bad), Err(Error::Usage(_))), "{bad}");
         }
-        assert!(matches!(parse_id("SCR-1.2"), Err(Error::Refused(_))));
         assert!(matches!(
             parse_id("SCR-99999999999999999999"),
             Err(Error::Usage(_))

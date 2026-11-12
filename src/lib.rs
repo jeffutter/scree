@@ -148,10 +148,8 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Add(a) => {
-            if a.parent.is_some() || !a.blocked_by.is_empty() {
-                return Err(Error::Refused(
-                    "--parent and --blocked-by are not supported yet".into(),
-                ));
+            if !a.blocked_by.is_empty() {
+                return Err(Error::Refused("--blocked-by is not supported yet".into()));
             }
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
@@ -168,6 +166,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                     for_who: a.for_who,
                     status: a.status,
                     key: a.key.as_deref(),
+                    parent: a.parent.as_deref(),
                 },
             )?;
             emit(format, &t, || output::render_text_ticket(&t))
@@ -217,6 +216,15 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 _ => ticket::Place::Last,
             };
             let t = ticket::reorder(&mut conn, &a.id, place)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Move(a) => {
+            let worktree = a.worktree.as_ref().map(|p| cwd.join(p));
+            let target = match &worktree {
+                Some(p) => ticket::MoveTarget::Worktree(p),
+                None => ticket::MoveTarget::Root,
+            };
+            let t = ticket::move_tree(&mut conn, &a.id, target)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Release { id } => {

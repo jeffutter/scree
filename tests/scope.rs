@@ -507,10 +507,9 @@ fn never_seen_repo_lists_nothing_and_creates_nothing() {
 }
 
 #[test]
-fn deferred_flags_are_refused() {
+fn blocked_by_is_refused_until_dependencies_land() {
     let e = env();
     let repo = e.repo("a", "scree");
-    assert_eq!(e.code(&repo, &["add", "x", "--parent", "SCR-1"]), 4);
     assert_eq!(e.code(&repo, &["add", "x", "--blocked-by", "SCR-1"]), 4);
 }
 

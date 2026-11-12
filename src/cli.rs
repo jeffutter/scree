@@ -95,7 +95,7 @@ impl NewStatus {
 pub struct AddArgs {
     /// Ticket title
     pub title: String,
-    /// Not yet supported
+    /// Make this a subtask of the given top-level ticket
     #[arg(long)]
     pub parent: Option<String>,
     /// Description text, or `-` for stdin
@@ -165,6 +165,20 @@ pub struct ReorderArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("target").required(true).multiple(false)
+    .args(["worktree", "root"])))]
+pub struct MoveArgs {
+    /// A top-level ticket; its subtasks move with it
+    pub id: String,
+    /// Move to the Worktree at this path
+    #[arg(long)]
+    pub worktree: Option<PathBuf>,
+    /// Move to the root checkout
+    #[arg(long)]
+    pub root: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct StartArgs {
     /// The ticket to claim
     #[arg(required_unless_present = "next", conflicts_with = "next")]
@@ -195,6 +209,9 @@ pub struct ListArgs {
     /// Include archived tickets
     #[arg(long)]
     pub archived: bool,
+    /// Only the subtasks of this ticket
+    #[arg(long)]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -257,6 +274,8 @@ pub enum Command {
     Next(NextArgs),
     /// Move a ticket relative to a sibling, or first or last
     Reorder(ReorderArgs),
+    /// Move a ticket and its subtasks to another Worktree of its Project
+    Move(MoveArgs),
     /// Active back to ready; clears the claim
     Release { id: String },
     /// Mark done; refused while a criterion is unchecked unless --force
