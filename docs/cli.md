@@ -57,11 +57,11 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 
 ### Change
 
-- `edit ID [--title T] [--description TEXT|-] [--plan TEXT|-] [--append] [--for agent|human]`. Description and plan are replaced; with `--append` the text is added to the end. Changing `for` follows the identity rules: a human either way, an agent only to `human`. Reassigning an `active` ticket releases the claim to `ready`.
+- `edit ID [--title T] [--description TEXT|-] [--plan TEXT|-] [--append] [--for agent|human]`. At least one field is required. Description and plan are replaced; with `--append` (valid only with `--description` or `--plan`) the text is added to the end after a newline, or stands alone when the old text is empty. Changing `for` follows the identity rules: a human either way, an agent only to `human`. Reassigning an `active` ticket releases the claim to `ready`.
 - `ready ID`: draft to ready.
-- `start ID | --next [--for ...]`: atomic claim; moves to `active` and records author and session. `--next` picks and claims in one transaction. Exit 5 if already active; exit 4 for an agent starting a `human` ticket, or a ticket that is not Available.
-- `done ID [--force]`: refused while a criterion is unchecked unless `--force`, and while subtasks are open.
-- `abandon ID REASON|-`: the reason is required and stored as a comment. Abandoning a parent abandons its open subtasks.
+- `start ID | --next [--for ...]`: atomic claim; moves to `active` and records author and session. `--next` picks and claims in one transaction. Checks in order: exit 5 if already active; exit 4 for a ticket that is not `ready`, one with an open blocker, or an agent starting a `human` ticket.
+- `done ID [--force]`: allowed from draft, ready or active; refused while a criterion is unchecked unless `--force`, and while subtasks are open.
+- `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. Abandoning a parent abandons its open subtasks.
 - `reopen ID`: done or abandoned back to `ready`.
 - `release ID`: active back to `ready`; clears the claim.
 - `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A cycle or a cross-Project edge is refused (exit 4).

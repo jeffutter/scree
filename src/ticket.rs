@@ -128,20 +128,258 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
     })
 }
 
-pub fn show(conn: &Connection, id: &str) -> Result<Value> {
+/// The row id of the ticket a display id names; NotFound (exit 3) if none.
+fn resolve(conn: &Connection, id: &str) -> Result<i64> {
     let (key, number) = parse_id(id)?;
-    let row: Option<i64> = conn
-        .query_row(
-            "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-             WHERE p.key = ?1 AND t.number = ?2 AND t.parent_id IS NULL",
-            params![key, number],
-            |r| r.get(0),
-        )
-        .optional()?;
-    match row {
-        Some(row) => build(conn, row, true),
-        None => Err(Error::NotFound(format!("no ticket {key}-{number}"))),
+    conn.query_row(
+        "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
+         WHERE p.key = ?1 AND t.number = ?2 AND t.parent_id IS NULL",
+        params![key, number],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| Error::NotFound(format!("no ticket {key}-{number}")))
+}
+
+pub fn show(conn: &Connection, id: &str) -> Result<Value> {
+    build(conn, resolve(conn, id)?, true)
+}
+
+/// A status change `scree` offers as its own command.
+pub enum Action {
+    Ready,
+    Start,
+    Release,
+    Done { force: bool },
+    Abandon { reason: String },
+    Reopen,
+}
+
+/// Apply one status transition atomically and return the updated ticket.
+/// `db::write` is `BEGIN IMMEDIATE`, so the status check and the update
+/// cannot interleave with another writer: two `start`s have one winner.
+pub fn transition(
+    conn: &mut Connection,
+    id: &str,
+    action: Action,
+    who: &Identity,
+) -> Result<Value> {
+    if let Action::Abandon { reason } = &action
+        && reason.trim().is_empty()
+    {
+        return Err(Error::Usage("an abandon reason is required".into()));
     }
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let (status, for_who): (String, String) = tx.query_row(
+            "SELECT status, \"for\" FROM tickets WHERE id = ?1",
+            [row],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let refuse = |what: &str| {
+            Err(Error::Refused(format!(
+                "cannot {what} a ticket that is {status}"
+            )))
+        };
+        let open = matches!(status.as_str(), "draft" | "ready" | "active");
+        match action {
+            Action::Ready => {
+                if status != "draft" {
+                    return refuse("ready");
+                }
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'ready', updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+            Action::Start => {
+                if status == "active" {
+                    return Err(Error::Conflict(format!("{id} is already active")));
+                }
+                if status != "ready" {
+                    return refuse("start");
+                }
+                let blocked: bool = tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM dependencies d
+                     JOIN tickets b ON b.id = d.blocked_by_id
+                     WHERE d.ticket_id = ?1 AND b.status <> 'done')",
+                    [row],
+                    |r| r.get(0),
+                )?;
+                if blocked {
+                    return Err(Error::Refused(format!("{id} is blocked and not Available")));
+                }
+                if who.role == crate::identity::Role::Agent && for_who == "human" {
+                    return Err(Error::Refused(format!("{id} is for a human")));
+                }
+                // The CHECK needs a non-null session whenever the ticket is
+                // active; '' stands for "no session" and reads back as null.
+                let n = tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'active', claimed_by_author = ?2,
+                            claimed_by_session = ?3, updated_at = {NOW}
+                         WHERE id = ?1 AND status = 'ready'"
+                    ),
+                    params![row, who.author, who.session.as_deref().unwrap_or("")],
+                )?;
+                if n == 0 {
+                    return Err(Error::Conflict(format!(
+                        "{id} was claimed by another caller"
+                    )));
+                }
+            }
+            Action::Release => {
+                if status != "active" {
+                    return refuse("release");
+                }
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'ready', claimed_by_author = NULL,
+                            claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+            Action::Done { force } => {
+                if !open {
+                    return refuse("finish");
+                }
+                let unchecked: i64 = tx.query_row(
+                    "SELECT count(*) FROM acceptance_criteria WHERE ticket_id = ?1 AND checked = 0",
+                    [row],
+                    |r| r.get(0),
+                )?;
+                if unchecked > 0 && !force {
+                    return Err(Error::Refused(format!(
+                        "{id} has {unchecked} unchecked criteria; check them or pass --force"
+                    )));
+                }
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'done', done_at = {NOW},
+                            claimed_by_author = NULL, claimed_by_session = NULL,
+                            updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+            Action::Abandon { reason } => {
+                if !open {
+                    return refuse("abandon");
+                }
+                tx.execute(
+                    &format!(
+                        "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
+                    ),
+                    params![row, who.author, who.session, who.role.as_str(), reason],
+                )?;
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
+                            claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+            Action::Reopen => {
+                if open {
+                    return refuse("reopen");
+                }
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'ready', done_at = NULL,
+                            updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+        }
+        build(tx, row, true)
+    })
+}
+
+/// What `edit` may change; `None` leaves a field alone.
+pub struct EditFields<'a> {
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub plan: Option<&'a str>,
+    /// Add to description and plan instead of replacing them.
+    pub append: bool,
+    pub for_who: Option<ForWho>,
+}
+
+/// `old` followed by `new`, one newline apart unless `old` is empty.
+fn appended(old: &str, new: &str) -> String {
+    if old.is_empty() {
+        new.to_string()
+    } else {
+        format!("{old}\n{new}")
+    }
+}
+
+pub fn edit(conn: &mut Connection, id: &str, f: &EditFields, who: &Identity) -> Result<Value> {
+    if f.title.is_none() && f.description.is_none() && f.plan.is_none() && f.for_who.is_none() {
+        return Err(Error::Usage(
+            "nothing to edit; pass --title, --description, --plan or --for".into(),
+        ));
+    }
+    if f.append && f.description.is_none() && f.plan.is_none() {
+        return Err(Error::Usage(
+            "--append needs --description or --plan".into(),
+        ));
+    }
+    if f.title.is_some_and(|t| t.trim().is_empty()) {
+        return Err(Error::Usage("title must not be empty".into()));
+    }
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let (status, for_who, description, plan): (String, String, String, String) = tx.query_row(
+            "SELECT status, \"for\", description, plan FROM tickets WHERE id = ?1",
+            [row],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        let pick = |old: &str, new: Option<&str>| match new {
+            None => old.to_string(),
+            Some(n) if f.append => appended(old, n),
+            Some(n) => n.to_string(),
+        };
+        let mut new_for = for_who.clone();
+        let mut release = false;
+        if let Some(w) = f.for_who
+            && w.as_str() != for_who
+        {
+            if who.role == crate::identity::Role::Agent && w != ForWho::Human {
+                return Err(Error::Refused(
+                    "an agent may only reassign a ticket to human".into(),
+                ));
+            }
+            new_for = w.as_str().to_string();
+            release = status == "active";
+        }
+        tx.execute(
+            &format!(
+                "UPDATE tickets SET title = coalesce(?2, title), description = ?3, plan = ?4,
+                    \"for\" = ?5,
+                    status = CASE WHEN ?6 THEN 'ready' ELSE status END,
+                    claimed_by_author = CASE WHEN ?6 THEN NULL ELSE claimed_by_author END,
+                    claimed_by_session = CASE WHEN ?6 THEN NULL ELSE claimed_by_session END,
+                    updated_at = {NOW}
+                 WHERE id = ?1"
+            ),
+            params![
+                row,
+                f.title.map(str::trim),
+                pick(&description, f.description),
+                pick(&plan, f.plan),
+                new_for,
+                release,
+            ],
+        )?;
+        build(tx, row, true)
+    })
 }
 
 /// Which tickets a `list` looks at.
@@ -343,7 +581,9 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
         "id": row.id, "title": row.title, "parent": row.parent, "status": row.status,
         "for": row.for_who, "blocked": blocked, "available": available,
         "blocked_by": blocked_by, "subtasks": subtasks,
-        "claimed_by": row.author.map(|a| json!({"author": a, "session": row.session})),
+        "claimed_by": row.author.map(|a| {
+            json!({"author": a, "session": row.session.filter(|s| !s.is_empty())})
+        }),
         "worktree": row.worktree, "created_at": row.created, "updated_at": row.updated,
         "done_at": row.done, "archived_at": row.archived,
     });
@@ -392,6 +632,12 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_joins_with_newline() {
+        assert_eq!(appended("", "b"), "b");
+        assert_eq!(appended("a", "b"), "a\nb");
+    }
 
     #[test]
     fn parse_ids() {

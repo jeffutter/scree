@@ -38,6 +38,16 @@ fn text_arg(v: Option<&str>) -> Result<String> {
     }
 }
 
+/// Both `--description -` and `--plan -` would read stdin twice.
+fn check_single_stdin(description: Option<&str>, plan: Option<&str>) -> Result<()> {
+    if description == Some("-") && plan == Some("-") {
+        return Err(Error::Usage(
+            "--description - and --plan - both read stdin; use - for only one".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn emit(
     format: Format,
     json: &serde_json::Value,
@@ -47,6 +57,17 @@ fn emit(
         Format::Json => output::to_json(json).map(Outcome::Print),
         Format::Text => Ok(Outcome::Print(text())),
     }
+}
+
+fn transition(
+    conn: &mut rusqlite::Connection,
+    format: Format,
+    id: &str,
+    action: ticket::Action,
+    identity: &identity::Identity,
+) -> Result<Outcome> {
+    let t = ticket::transition(conn, id, action, identity)?;
+    emit(format, &t, || output::render_text_ticket(&t))
 }
 
 /// `cwd` is the caller's directory, injected so tests need not chdir.
@@ -102,11 +123,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 ));
             }
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
-            if a.description.as_deref() == Some("-") && a.plan.as_deref() == Some("-") {
-                return Err(Error::Usage(
-                    "--description - and --plan - both read stdin; use - for only one".into(),
-                ));
-            }
+            check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
             let description = text_arg(a.description.as_deref())?;
             let plan = text_arg(a.plan.as_deref())?;
             let t = ticket::add(
@@ -123,6 +140,57 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 },
             )?;
             emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Edit(a) => {
+            check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
+            let description = a
+                .description
+                .as_deref()
+                .map(|d| text_arg(Some(d)))
+                .transpose()?;
+            let plan = a.plan.as_deref().map(|d| text_arg(Some(d))).transpose()?;
+            let t = ticket::edit(
+                &mut conn,
+                &a.id,
+                &ticket::EditFields {
+                    title: a.title.as_deref(),
+                    description: description.as_deref(),
+                    plan: plan.as_deref(),
+                    append: a.append,
+                    for_who: a.for_who,
+                },
+                &identity,
+            )?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Ready { id } => {
+            transition(&mut conn, format, &id, ticket::Action::Ready, &identity)
+        }
+        Command::Start { id } => {
+            transition(&mut conn, format, &id, ticket::Action::Start, &identity)
+        }
+        Command::Release { id } => {
+            transition(&mut conn, format, &id, ticket::Action::Release, &identity)
+        }
+        Command::Done { id, force } => transition(
+            &mut conn,
+            format,
+            &id,
+            ticket::Action::Done { force },
+            &identity,
+        ),
+        Command::Abandon { id, reason } => {
+            let reason = text_arg(Some(&reason))?;
+            transition(
+                &mut conn,
+                format,
+                &id,
+                ticket::Action::Abandon { reason },
+                &identity,
+            )
+        }
+        Command::Reopen { id } => {
+            transition(&mut conn, format, &id, ticket::Action::Reopen, &identity)
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
             let v = db::write(&mut conn, |tx| {

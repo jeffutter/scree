@@ -47,7 +47,7 @@ Logical schema for v1. Vocabulary is in `../GLOSSARY.md`.
 | `for` | CHECK in `agent`, `human`; default `agent` |
 | `position` | integer, not null; orders the sibling set (root tickets of one Scope, or subtasks of one parent), lower first; gapped in steps of 1000 |
 | `worktree_path` | text; canonical absolute path of the linked worktree, NULL for the root checkout and for unscoped tickets; copied onto every subtask from its parent |
-| `claimed_by_author`, `claimed_by_session` | nullable; set by `start`, cleared whenever the ticket leaves `active` |
+| `claimed_by_author`, `claimed_by_session` | nullable; set by `start`, cleared whenever the ticket leaves `active`. The CHECK needs both non-null while active, so a claim with no session stores `''`, which `show` prints as a null session |
 | `created_at`, `updated_at` | RFC 3339 UTC text |
 | `done_at` | nullable; set on the transition to `done` |
 | `archived_at` | nullable; archived is separate from status |

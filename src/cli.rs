@@ -146,6 +146,26 @@ pub struct ListArgs {
     pub archived: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct EditArgs {
+    pub id: String,
+    /// New title
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Description text, or `-` for stdin
+    #[arg(long)]
+    pub description: Option<String>,
+    /// Plan text, or `-` for stdin
+    #[arg(long)]
+    pub plan: Option<String>,
+    /// Add to the end of --description / --plan instead of replacing it
+    #[arg(long)]
+    pub append: bool,
+    /// Reassign; an agent may only reassign to human. Releases an active claim.
+    #[arg(long = "for", value_enum)]
+    pub for_who: Option<ForWho>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ProjectCommand {
     /// Point a Project at a moved root path
@@ -160,6 +180,24 @@ pub enum Command {
     Show { id: String },
     /// List tickets
     List(ListArgs),
+    /// Change a ticket's title, description, plan or assignee
+    Edit(EditArgs),
+    /// Draft to ready
+    Ready { id: String },
+    /// Claim a ready ticket atomically
+    Start { id: String },
+    /// Active back to ready; clears the claim
+    Release { id: String },
+    /// Mark done; refused while a criterion is unchecked unless --force
+    Done {
+        id: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Abandon with a reason (text, or `-` for stdin), stored as a comment
+    Abandon { id: String, reason: String },
+    /// Done or abandoned back to ready
+    Reopen { id: String },
     /// Manage Projects
     #[command(subcommand)]
     Project(ProjectCommand),
