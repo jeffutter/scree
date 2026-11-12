@@ -129,16 +129,19 @@ pub fn render_text_ticket(t: &serde_json::Value) -> String {
     }
     let _ = writeln!(out, "{head}");
     let _ = writeln!(out, "for: {}", s(t, "for"));
-    let wt = s(t, "worktree");
-    let _ = writeln!(
-        out,
-        "worktree: {}",
-        if wt.is_empty() {
-            "(root checkout)"
-        } else {
-            &wt
-        }
-    );
+    // LOCAL tickets belong to no repository, so they have no worktree to name.
+    if !s(t, "id").starts_with("LOCAL-") {
+        let wt = s(t, "worktree");
+        let _ = writeln!(
+            out,
+            "worktree: {}",
+            if wt.is_empty() {
+                "(root checkout)"
+            } else {
+                &wt
+            }
+        );
+    }
     if let Some(c) = t.get("claimed_by").filter(|c| !c.is_null()) {
         let _ = writeln!(out, "claimed by: {} ({})", s(c, "author"), s(c, "session"));
     }

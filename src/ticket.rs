@@ -105,7 +105,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
             params![
                 project.id,
                 number,
-                t.title,
+                t.title.trim(),
                 t.description,
                 t.plan,
                 t.status.as_str(),
@@ -240,7 +240,7 @@ pub fn list(
     args.push(Sql::Integer(i64::from(a.limit.unwrap_or(50))));
     let sql = format!(
         "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-         WHERE {} ORDER BY p.key, t.position, t.number LIMIT ?",
+         WHERE {} ORDER BY t.position, t.number, p.key LIMIT ?",
         if conds.is_empty() {
             "1".to_string()
         } else {

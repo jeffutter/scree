@@ -3,9 +3,11 @@ id: TASK-17
 title: >-
   Fix: list ordering, add title trimming and LOCAL worktree text disagree with
   docs
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@ralph'
 created_date: '2026-11-12T19:01:00Z'
+updated_date: '2026-11-12T19:09:00Z'
 labels:
   - review-fix
 dependencies:
@@ -22,13 +24,25 @@ ticket::list sorts by p.key, position, number but docs/cli.md says (position, nu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 list order matches docs/cli.md (or docs updated) and --all-projects limit does not drop whole projects alphabetically
-- [ ] #2 add stores trimmed title; text show of a LOCAL ticket omits the worktree line
-- [ ] #3 Regression tests cover each
+- [x] #1 list order matches docs/cli.md (or docs updated) and --all-projects limit does not drop whole projects alphabetically
+- [x] #2 add stores trimmed title; text show of a LOCAL ticket omits the worktree line
+- [x] #3 Regression tests cover each
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. src/ticket.rs list: order by position, number, then project key; adjust docs/cli.md if grouping intended. 2. src/ticket.rs add: trim title before insert. 3. src/output.rs render_text_ticket: print worktree line only for repo-backed projects. 4. Add tests in tests/scope.rs.
+SHIPPED by 73401e6. This plan is superseded; the ticket's final summary describes what actually landed.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+list orders by position, number, project key (matches docs); add trims title; text show omits worktree line for LOCAL-* ids. Tests added in tests/scope.rs.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed list ordering/limit, title trimming, LOCAL worktree text; regression tests added.
+<!-- SECTION:FINAL_SUMMARY:END -->

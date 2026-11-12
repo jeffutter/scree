@@ -612,3 +612,35 @@ fn relink_and_project_root_normalize_paths_to_a_gone_root() {
     );
     assert_eq!(out["project"]["key"], "MA");
 }
+
+#[test]
+fn add_trims_title_and_local_text_show_omits_worktree() {
+    let e = env();
+    let plain = e.base.join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let t = e.ok(&plain, &["add", "  padded  "]);
+    assert_eq!(t["title"], "padded");
+    let text = String::from_utf8(e.run(&plain, &["--text", "show", "LOCAL-1"]).stdout).unwrap();
+    assert!(!text.contains("worktree:"), "{text}");
+    let repo = e.repo("a", "scree");
+    e.ok(&repo, &["add", "x"]);
+    let text = String::from_utf8(e.run(&repo, &["--text", "show", "SCR-1"]).stdout).unwrap();
+    assert!(text.contains("worktree: (root checkout)"), "{text}");
+}
+
+#[test]
+fn list_all_projects_orders_by_position_then_number() {
+    let e = env();
+    let a = e.repo("a", "alpha");
+    let z = e.repo("a", "zeta");
+    e.ok(&a, &["add", "a1"]);
+    e.ok(&a, &["add", "a2"]);
+    e.ok(&z, &["add", "z1"]);
+    e.ok(&z, &["add", "z2"]);
+    let ids = e.ids(&a, &["--all-projects"]);
+    assert_eq!(ids, ["ALP-1", "ZET-1", "ALP-2", "ZET-2"]);
+    assert_eq!(
+        e.ids(&a, &["--all-projects", "--limit", "2"]),
+        ["ALP-1", "ZET-1"]
+    );
+}
