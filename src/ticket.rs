@@ -214,8 +214,15 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
         )?;
         let id = tx.last_insert_rowid();
         for blocker in t.blocked_by {
-            // A new ticket has no dependents, so no edge can close a cycle.
-            insert_edge(tx, id, resolve(tx, blocker)?, blocker)?;
+            // A top-level ticket has no dependents, but a subtask's parent
+            // waits on it, so a blocker that waits on the parent is a cycle.
+            let b = resolve(tx, blocker)?;
+            insert_edge(tx, id, b, blocker)?;
+            if waits_for(tx, b, id)? {
+                return Err(Error::Refused(format!(
+                    "blocked by {blocker} would make a dependency cycle"
+                )));
+            }
         }
         for (i, text) in t.criteria.iter().enumerate() {
             let n = i as i64 + 1;

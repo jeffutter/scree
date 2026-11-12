@@ -293,3 +293,30 @@ fn add_blocked_by_sets_edges_and_refuses_cross_project() {
     let after: i64 = e.sql("SELECT count(*) FROM tickets", |r| r.get(0));
     assert_eq!(before, after, "a refused add creates no ticket");
 }
+
+#[test]
+fn add_subtask_blocked_by_parent_chain_is_a_cycle() {
+    let e = env();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let count = || e.sql("SELECT count(*) FROM tickets", |r| r.get::<_, i64>(0));
+    let before = count();
+    // The parent waits on every subtask, so a new subtask cannot wait on it.
+    assert_eq!(
+        e.code(&repo, &["add", "s", "--parent", &p, "--blocked-by", &p]),
+        4
+    );
+    // Nor on a ticket that already waits on the parent.
+    let x = e.add(&repo, "x", &["--blocked-by", &p]);
+    let before = before + 1;
+    assert_eq!(count(), before);
+    assert_eq!(
+        e.code(&repo, &["add", "s", "--parent", &p, "--blocked-by", &x]),
+        4
+    );
+    assert_eq!(count(), before, "a refused add creates no ticket");
+    // Top-level and unrelated blockers still work.
+    let y = e.add(&repo, "y", &[]);
+    e.add(&repo, "z", &["--blocked-by", &y]);
+    e.add(&repo, "s", &["--parent", &p, "--blocked-by", &y]);
+}
