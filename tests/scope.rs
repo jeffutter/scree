@@ -629,7 +629,7 @@ fn add_trims_title_and_local_text_show_omits_worktree() {
 }
 
 #[test]
-fn list_all_projects_orders_by_position_then_number() {
+fn list_all_projects_orders_by_project_key_then_position() {
     let e = env();
     let a = e.repo("a", "alpha");
     let z = e.repo("a", "zeta");
@@ -638,10 +638,10 @@ fn list_all_projects_orders_by_position_then_number() {
     e.ok(&z, &["add", "z1"]);
     e.ok(&z, &["add", "z2"]);
     let ids = e.ids(&a, &["--all-projects"]);
-    assert_eq!(ids, ["ALP-1", "ZET-1", "ALP-2", "ZET-2"]);
+    assert_eq!(ids, ["ALP-1", "ALP-2", "ZET-1", "ZET-2"]);
     assert_eq!(
-        e.ids(&a, &["--all-projects", "--limit", "2"]),
-        ["ALP-1", "ZET-1"]
+        e.ids(&a, &["--all-projects", "--limit", "3"]),
+        ["ALP-1", "ALP-2", "ZET-1"]
     );
 }
 
@@ -686,4 +686,24 @@ fn symlinked_path_with_dotdot_resolves_through_the_link() {
     assert_eq!(out["project"]["key"], "MA");
     // The stored root was updated: list from the new location.
     assert_eq!(e.ids(&moved, &[]), ["MA-1"]);
+}
+
+#[test]
+fn positions_step_by_1000_per_worktree() {
+    let e = env();
+    let repo = e.repo("a", "alpha");
+    let wt = e.worktree(&repo, "feat");
+    e.ok(&repo, &["add", "r1"]);
+    e.ok(&repo, &["add", "r2"]);
+    e.ok(&wt, &["add", "w1"]);
+    let conn = rusqlite::Connection::open(&e.db).unwrap();
+    let pos = |title: &str| -> i64 {
+        conn.query_row(
+            "SELECT position FROM tickets WHERE title = ?1",
+            [title],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!((pos("r1"), pos("r2"), pos("w1")), (1000, 2000, 1000));
 }

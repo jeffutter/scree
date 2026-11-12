@@ -148,7 +148,10 @@ fn check_and_uncheck() {
     let t = e.stdin(&["check", &format!("{id3}#1"), "--evidence", "-"], "ok\n");
     assert_eq!(t["criteria"][0]["evidence"], "ok");
     assert_eq!(e.code(&["check", &format!("{id3}#2"), "--evidence", ""]), 2);
-    assert_eq!(e.code(&["check", &format!("{id3}#2"), "--evidence", "  "]), 2);
+    assert_eq!(
+        e.code(&["check", &format!("{id3}#2"), "--evidence", "  "]),
+        2
+    );
 
     let t = e.ok(&["uncheck", &r1]);
     let c = &t["criteria"][0];

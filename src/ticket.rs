@@ -6,11 +6,11 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde_json::{Value, json};
 
-use crate::cli::{ForWho, ListArgs, NewStatus};
+use crate::cli::{ForWho, ListArgs, NewStatus, NextArgs, ScopeArgs};
 use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
-use crate::output::ListResult;
+use crate::output::{ListResult, NextResult};
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
 
@@ -18,6 +18,18 @@ use crate::scope::{self, Scope, path_str};
 /// project) and `pt` (its parent, LEFT JOINed).
 const ID_EXPR: &str =
     "p.key || '-' || CASE WHEN pt.id IS NULL THEN t.number ELSE pt.number || '.' || t.number END";
+
+/// True for a ticket (alias `t`) with a blocker that is not done. An
+/// abandoned blocker still blocks. `start` and `next` both use this, so
+/// they cannot disagree about what is Available.
+const OPEN_BLOCKER: &str = "EXISTS (SELECT 1 FROM dependencies d
+    JOIN tickets b ON b.id = d.blocked_by_id
+    WHERE d.ticket_id = t.id AND b.status <> 'done')";
+
+/// Available, for a ticket aliased `t`, apart from blockers: ready and not
+/// archived. Only top-level tickets exist until subtasks land; they will add
+/// "first unsettled sibling by position" here.
+const READY_ROOT: &str = "t.status = 'ready' AND t.archived_at IS NULL AND t.parent_id IS NULL";
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
@@ -155,6 +167,27 @@ pub enum Action {
     Reopen,
 }
 
+/// Move a ready ticket to active for `who`. The `status = 'ready'` guard
+/// makes a lost race a Conflict instead of a double claim.
+fn claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<()> {
+    // The CHECK needs a non-null session whenever the ticket is
+    // active; '' stands for "no session" and reads back as null.
+    let n = tx.execute(
+        &format!(
+            "UPDATE tickets SET status = 'active', claimed_by_author = ?2,
+                claimed_by_session = ?3, updated_at = {NOW}
+             WHERE id = ?1 AND status = 'ready'"
+        ),
+        params![row, who.author, who.session.as_deref().unwrap_or("")],
+    )?;
+    if n == 0 {
+        return Err(Error::Conflict(format!(
+            "{id} was claimed by another caller"
+        )));
+    }
+    Ok(())
+}
+
 /// Apply one status transition atomically and return the updated ticket.
 /// `db::write` is `BEGIN IMMEDIATE`, so the status check and the update
 /// cannot interleave with another writer: two `start`s have one winner.
@@ -202,9 +235,7 @@ pub fn transition(
                     return refuse("start");
                 }
                 let blocked: bool = tx.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM dependencies d
-                     JOIN tickets b ON b.id = d.blocked_by_id
-                     WHERE d.ticket_id = ?1 AND b.status <> 'done')",
+                    &format!("SELECT {OPEN_BLOCKER} FROM tickets t WHERE t.id = ?1"),
                     [row],
                     |r| r.get(0),
                 )?;
@@ -214,21 +245,7 @@ pub fn transition(
                 if who.role == crate::identity::Role::Agent && for_who == "human" {
                     return Err(Error::Refused(format!("{id} is for a human")));
                 }
-                // The CHECK needs a non-null session whenever the ticket is
-                // active; '' stands for "no session" and reads back as null.
-                let n = tx.execute(
-                    &format!(
-                        "UPDATE tickets SET status = 'active', claimed_by_author = ?2,
-                            claimed_by_session = ?3, updated_at = {NOW}
-                         WHERE id = ?1 AND status = 'ready'"
-                    ),
-                    params![row, who.author, who.session.as_deref().unwrap_or("")],
-                )?;
-                if n == 0 {
-                    return Err(Error::Conflict(format!(
-                        "{id} was claimed by another caller"
-                    )));
-                }
+                claim(tx, row, id, who)?;
             }
             Action::Release => {
                 if status != "active" {
@@ -534,7 +551,7 @@ fn root_project(conn: &Connection, root: &Path) -> Result<Option<Project>> {
     project::find_by_root(conn, &path_str(root)?)
 }
 
-fn resolve_where(conn: &Connection, cwd: &Path, a: &ListArgs) -> Result<Option<Where>> {
+fn resolve_where(conn: &Connection, cwd: &Path, a: &ScopeArgs) -> Result<Option<Where>> {
     if a.all_projects {
         return Ok(Some(Where::All));
     }
@@ -566,14 +583,16 @@ fn resolve_where(conn: &Connection, cwd: &Path, a: &ListArgs) -> Result<Option<W
     }))
 }
 
-pub fn list(
+/// The WHERE conditions and arguments that restrict a query on `tickets t`
+/// to `a`'s scope; `None` when the scope holds no tickets at all (a
+/// repository never seen before, and a read creates nothing).
+fn scope_conds(
     conn: &Connection,
     cwd: &Path,
-    a: &ListArgs,
-    identity: &Identity,
-) -> Result<ListResult> {
+    a: &ScopeArgs,
+) -> Result<Option<(Vec<String>, Vec<Sql>)>> {
     let Some(scope) = resolve_where(conn, cwd, a)? else {
-        return Ok(ListResult { tickets: vec![] });
+        return Ok(None);
     };
     let mut conds: Vec<String> = vec![];
     let mut args: Vec<Sql> = vec![];
@@ -590,6 +609,42 @@ pub fn list(
             args.push(wt.map_or(Sql::Null, Sql::Text));
         }
     }
+    Ok(Some((conds, args)))
+}
+
+/// Ticket row ids matching `conds` in `(project key, position, number)`
+/// order, so a read across Projects groups by Project key first.
+fn select_ids(
+    conn: &Connection,
+    conds: &[String],
+    mut args: Vec<Sql>,
+    limit: u32,
+) -> Result<Vec<i64>> {
+    args.push(Sql::Integer(i64::from(limit)));
+    let sql = format!(
+        "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
+         WHERE {} ORDER BY p.key, t.position, t.number LIMIT ?",
+        if conds.is_empty() {
+            "1".to_string()
+        } else {
+            conds.join(" AND ")
+        }
+    );
+    Ok(conn
+        .prepare(&sql)?
+        .query_map(params_from_iter(args), |r| r.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+pub fn list(
+    conn: &Connection,
+    cwd: &Path,
+    a: &ListArgs,
+    identity: &Identity,
+) -> Result<ListResult> {
+    let Some((mut conds, mut args)) = scope_conds(conn, cwd, &a.scope)? else {
+        return Ok(ListResult { tickets: vec![] });
+    };
     let statuses: Vec<&str> = if a.status.is_empty() {
         vec!["draft", "ready", "active"]
     } else {
@@ -615,25 +670,212 @@ pub fn list(
     if !a.archived {
         conds.push("t.archived_at IS NULL".into());
     }
-    args.push(Sql::Integer(i64::from(a.limit.unwrap_or(50))));
-    let sql = format!(
-        "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-         WHERE {} ORDER BY t.position, t.number, p.key LIMIT ?",
-        if conds.is_empty() {
-            "1".to_string()
-        } else {
-            conds.join(" AND ")
-        }
-    );
-    let ids = conn
-        .prepare(&sql)?
-        .query_map(params_from_iter(args), |r| r.get::<_, i64>(0))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let ids = select_ids(conn, &conds, args, a.limit.unwrap_or(50))?;
     let tickets = ids
         .into_iter()
         .map(|id| build(conn, id, false))
         .collect::<Result<Vec<_>>>()?;
     Ok(ListResult { tickets })
+}
+
+fn role_default(who: &Identity) -> ForWho {
+    match who.role {
+        crate::identity::Role::Agent => ForWho::Agent,
+        crate::identity::Role::Human => ForWho::Human,
+    }
+}
+
+/// Conditions for ready, in-scope tickets whose `for` is `for_who`, with
+/// blocked ones kept (`blocked`) or left out (`!blocked`).
+fn pool_conds(
+    conn: &Connection,
+    cwd: &Path,
+    scope: &ScopeArgs,
+    for_who: ForWho,
+    blocked: bool,
+) -> Result<Option<(Vec<String>, Vec<Sql>)>> {
+    let Some((mut conds, mut args)) = scope_conds(conn, cwd, scope)? else {
+        return Ok(None);
+    };
+    conds.push(READY_ROOT.into());
+    conds.push(if blocked {
+        OPEN_BLOCKER.into()
+    } else {
+        format!("NOT {OPEN_BLOCKER}")
+    });
+    conds.push("t.\"for\" = ?".into());
+    args.push(Sql::Text(for_who.as_str().into()));
+    Ok(Some((conds, args)))
+}
+
+fn count(conn: &Connection, conds: &[String], args: Vec<Sql>) -> Result<i64> {
+    Ok(conn.query_row(
+        &format!(
+            "SELECT count(*) FROM tickets t WHERE {}",
+            conds.join(" AND ")
+        ),
+        params_from_iter(args),
+        |r| r.get(0),
+    )?)
+}
+
+/// The first Available tickets in the caller's scope. `human_pending`
+/// counts Available human tickets an agent is not shown; `blocked_pending`
+/// (only when nothing is Available) counts tickets held back by a blocker
+/// alone.
+pub fn next(conn: &Connection, cwd: &Path, a: &NextArgs, who: &Identity) -> Result<NextResult> {
+    let for_who = a.for_who.unwrap_or_else(|| role_default(who));
+    let Some((conds, args)) = pool_conds(conn, cwd, &a.scope, for_who, false)? else {
+        return Ok(NextResult {
+            list: ListResult { tickets: vec![] },
+            human_pending: 0,
+            blocked_pending: Some(0),
+        });
+    };
+    let tickets = select_ids(conn, &conds, args, a.limit.unwrap_or(1))?
+        .into_iter()
+        .map(|id| build(conn, id, false))
+        .collect::<Result<Vec<_>>>()?;
+    let human_pending = if for_who == ForWho::Agent
+        && let Some((c, ar)) = pool_conds(conn, cwd, &a.scope, ForWho::Human, false)?
+    {
+        count(conn, &c, ar)?
+    } else {
+        0
+    };
+    let blocked_pending = if tickets.is_empty()
+        && let Some((c, ar)) = pool_conds(conn, cwd, &a.scope, for_who, true)?
+    {
+        Some(count(conn, &c, ar)?)
+    } else if tickets.is_empty() {
+        Some(0)
+    } else {
+        None
+    };
+    Ok(NextResult {
+        list: ListResult { tickets },
+        human_pending,
+        blocked_pending,
+    })
+}
+
+/// Pick the first Available ticket and claim it in one transaction, so two
+/// callers never get the same one. Nothing Available is NotFound (exit 3).
+pub fn start_next(
+    conn: &mut Connection,
+    cwd: &Path,
+    scope: &ScopeArgs,
+    for_who: Option<ForWho>,
+    who: &Identity,
+) -> Result<Value> {
+    let for_who = for_who.unwrap_or_else(|| role_default(who));
+    if who.role == crate::identity::Role::Agent && for_who == ForWho::Human {
+        return Err(Error::Refused(
+            "an agent cannot start a human ticket".into(),
+        ));
+    }
+    db::write(conn, |tx| {
+        let none = || Error::NotFound("no Available ticket".into());
+        let (conds, args) = pool_conds(tx, cwd, scope, for_who, false)?.ok_or_else(none)?;
+        let row = *select_ids(tx, &conds, args, 1)?.first().ok_or_else(none)?;
+        let id = build(tx, row, false)?["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        claim(tx, row, &id, who)?;
+        build(tx, row, true)
+    })
+}
+
+/// Where a reordered ticket goes among its siblings.
+pub enum Place<'a> {
+    First,
+    Last,
+    Before(&'a str),
+    After(&'a str),
+}
+
+/// The position for a ticket inserted at index `at` of `others` (the
+/// sibling positions without it, ascending): the midpoint of its
+/// neighbours, or `max + 1000` at the end. `None` when no integer gap
+/// remains, which means the set must be renumbered.
+fn slot_position(others: &[i64], at: usize) -> Option<i64> {
+    let lo = if at == 0 { 0 } else { others[at - 1] };
+    let Some(&hi) = others.get(at) else {
+        return Some(lo + 1000);
+    };
+    let mid = lo + (hi - lo) / 2;
+    (mid > lo && mid < hi).then_some(mid)
+}
+
+/// Move one open ticket within its sibling set (same Project, parent and
+/// Worktree). Done and abandoned siblings keep their positions and count as
+/// neighbours. The whole move, including a renumber, is one transaction.
+pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let (project, parent, worktree, status): (i64, Option<i64>, Option<String>, String) = tx
+            .query_row(
+                "SELECT project_id, parent_id, worktree_path, status FROM tickets WHERE id = ?1",
+                [row],
+                |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?, x.get(3)?)),
+            )?;
+        if matches!(status.as_str(), "done" | "abandoned") {
+            return Err(Error::Refused(format!(
+                "cannot reorder a ticket that is {status}"
+            )));
+        }
+        let siblings: Vec<(i64, i64)> = tx
+            .prepare(
+                "SELECT id, position FROM tickets
+                 WHERE project_id = ?1 AND parent_id IS ?2 AND worktree_path IS ?3 AND id <> ?4
+                 ORDER BY position, number",
+            )?
+            .query_map(params![project, parent, worktree, row], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        let index_of = |other: &str| -> Result<usize> {
+            let o = resolve(tx, other)?;
+            if o == row {
+                return Err(Error::Refused(
+                    "cannot reorder a ticket relative to itself".into(),
+                ));
+            }
+            siblings
+                .iter()
+                .position(|(sid, _)| *sid == o)
+                .ok_or_else(|| {
+                    Error::Refused(format!("{other} is not in the same sibling set as {id}"))
+                })
+        };
+        let at = match place {
+            Place::First => 0,
+            Place::Last => siblings.len(),
+            Place::Before(o) => index_of(o)?,
+            Place::After(o) => index_of(o)? + 1,
+        };
+        let positions: Vec<i64> = siblings.iter().map(|(_, p)| *p).collect();
+        let set_pos = |r: i64, p: i64| -> Result<()> {
+            tx.execute(
+                "UPDATE tickets SET position = ?2 WHERE id = ?1",
+                params![r, p],
+            )?;
+            Ok(())
+        };
+        match slot_position(&positions, at) {
+            Some(p) => set_pos(row, p)?,
+            None => {
+                let mut order: Vec<i64> = siblings.iter().map(|(sid, _)| *sid).collect();
+                order.insert(at, row);
+                for (i, r) in order.into_iter().enumerate() {
+                    set_pos(r, (i as i64 + 1) * 1000)?;
+                }
+            }
+        }
+        touch(tx, row)?;
+        build(tx, row, true)
+    })
 }
 
 /// The Ticket JSON shape from `docs/cli.md`; `detail` adds description,
@@ -773,6 +1015,17 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_positions() {
+        assert_eq!(slot_position(&[], 0), Some(1000));
+        assert_eq!(slot_position(&[1000, 2000], 2), Some(3000));
+        assert_eq!(slot_position(&[1000, 2000], 0), Some(500));
+        assert_eq!(slot_position(&[1000, 2000], 1), Some(1500));
+        assert_eq!(slot_position(&[1000, 1001], 1), None);
+        assert_eq!(slot_position(&[1, 2000], 0), None);
+        assert_eq!(slot_position(&[5, 5], 1), None);
+    }
 
     #[test]
     fn append_joins_with_newline() {

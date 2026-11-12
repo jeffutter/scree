@@ -119,6 +119,64 @@ pub struct AddArgs {
     pub key: Option<String>,
 }
 
+/// Which tickets a read command looks at; defaults to the current Worktree.
+#[derive(Debug, Args, Default)]
+pub struct ScopeArgs {
+    /// Every Worktree of the Project
+    #[arg(long, conflicts_with_all = ["all_projects", "project_root"])]
+    pub all_worktrees: bool,
+    /// Every Project
+    #[arg(long, conflicts_with_all = ["all_worktrees", "project_root"])]
+    pub all_projects: bool,
+    /// Narrow to the Project at this root
+    #[arg(long, conflicts_with_all = ["all_worktrees", "all_projects"])]
+    pub project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct NextArgs {
+    /// Whose tickets to pick from; defaults to the caller's Role
+    #[arg(long = "for", value_enum)]
+    pub for_who: Option<ForWho>,
+    /// Default 1
+    #[arg(long)]
+    pub limit: Option<u32>,
+    #[command(flatten)]
+    pub scope: ScopeArgs,
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("place").required(true).multiple(false)
+    .args(["before", "after", "first", "last"])))]
+pub struct ReorderArgs {
+    pub id: String,
+    /// Place just before this sibling
+    #[arg(long)]
+    pub before: Option<String>,
+    /// Place just after this sibling
+    #[arg(long)]
+    pub after: Option<String>,
+    /// Place first in its sibling set
+    #[arg(long)]
+    pub first: bool,
+    /// Place last in its sibling set
+    #[arg(long)]
+    pub last: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct StartArgs {
+    /// The ticket to claim
+    #[arg(required_unless_present = "next", conflicts_with = "next")]
+    pub id: Option<String>,
+    /// Claim the first Available ticket instead
+    #[arg(long)]
+    pub next: bool,
+    /// With --next: whose tickets to pick from; defaults to the caller's Role
+    #[arg(long = "for", value_enum)]
+    pub for_who: Option<ForWho>,
+}
+
 #[derive(Debug, Args, Default)]
 pub struct ListArgs {
     /// Repeatable; default draft, ready and active
@@ -132,15 +190,8 @@ pub struct ListArgs {
     /// Default 50
     #[arg(long)]
     pub limit: Option<u32>,
-    /// Every Worktree of the Project
-    #[arg(long, conflicts_with_all = ["all_projects", "project_root"])]
-    pub all_worktrees: bool,
-    /// Every Project
-    #[arg(long, conflicts_with_all = ["all_worktrees", "project_root"])]
-    pub all_projects: bool,
-    /// Narrow to the Project at this root
-    #[arg(long, conflicts_with_all = ["all_worktrees", "all_projects"])]
-    pub project_root: Option<PathBuf>,
+    #[command(flatten)]
+    pub scope: ScopeArgs,
     /// Include archived tickets
     #[arg(long)]
     pub archived: bool,
@@ -201,7 +252,11 @@ pub enum Command {
     /// Draft to ready
     Ready { id: String },
     /// Claim a ready ticket atomically
-    Start { id: String },
+    Start(StartArgs),
+    /// The first Available ticket for the caller's Role
+    Next(NextArgs),
+    /// Move a ticket relative to a sibling, or first or last
+    Reorder(ReorderArgs),
     /// Active back to ready; clears the claim
     Release { id: String },
     /// Mark done; refused while a criterion is unchecked unless --force

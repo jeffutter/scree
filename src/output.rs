@@ -11,6 +11,17 @@ pub struct ListResult {
     pub tickets: Vec<serde_json::Value>,
 }
 
+/// The `next` result: the list plus what was held back.
+#[derive(Debug, Serialize)]
+pub struct NextResult {
+    #[serde(flatten)]
+    pub list: ListResult,
+    pub human_pending: i64,
+    /// Present only when `tickets` is empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_pending: Option<i64>,
+}
+
 pub fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Other(e.to_string()))
 }

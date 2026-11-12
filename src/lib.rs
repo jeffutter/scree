@@ -70,6 +70,21 @@ fn transition(
     emit(format, &t, || output::render_text_ticket(&t))
 }
 
+/// The global --project picks the Project unless cwd is already inside it.
+fn apply_project_override(scope: &mut cli::ScopeArgs, project: Option<&Path>, cwd: &Path) {
+    if scope.project_root.is_none()
+        && !scope.all_projects
+        && let Some(p) = project
+        && {
+            let here = scope::detect(cwd);
+            let there = scope::detect(&cwd.join(p));
+            scope::root_of(&here).is_none() || scope::root_of(&here) != scope::root_of(&there)
+        }
+    {
+        scope.project_root = Some(p.to_path_buf());
+    }
+}
+
 /// `cwd` is the caller's directory, injected so tests need not chdir.
 pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     let identity = identity::resolve(cli.role, cli.author, cli.session, env);
@@ -84,19 +99,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     let mut conn = db::open(&path)?;
     match cli.command.unwrap_or(Command::List(ListArgs::default())) {
         Command::List(mut args) => {
-            // The global --project picks the Project unless cwd is already inside it.
-            if args.project_root.is_none()
-                && !args.all_projects
-                && let Some(p) = &cli.project
-                && {
-                    let here = scope::detect(cwd);
-                    let there = scope::detect(&cwd.join(p));
-                    scope::root_of(&here).is_none()
-                        || scope::root_of(&here) != scope::root_of(&there)
-                }
-            {
-                args.project_root = Some(p.clone());
-            }
+            apply_project_override(&mut args.scope, cli.project.as_deref(), cwd);
             let list = ticket::list(&conn, cwd, &args, &identity)?;
             match format {
                 Format::Json => output::to_json(&list).map(Outcome::Print),
@@ -107,6 +110,34 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                             text.push('\n');
                         }
                         text.push_str("hint: run `scree --help` for commands");
+                    }
+                    Ok(Outcome::Print(text))
+                }
+            }
+        }
+        Command::Next(mut a) => {
+            apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
+            let r = ticket::next(&conn, cwd, &a, &identity)?;
+            match format {
+                Format::Json => output::to_json(&r).map(Outcome::Print),
+                Format::Text => {
+                    let mut text = output::render_text_list(&r.list, output::use_color(env));
+                    let mut note = |s: String| {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(&s);
+                    };
+                    if r.human_pending > 0 {
+                        note(format!(
+                            "{} ticket(s) for a human not shown",
+                            r.human_pending
+                        ));
+                    }
+                    if let Some(n) = r.blocked_pending
+                        && n > 0
+                    {
+                        note(format!("{n} ticket(s) waiting on blockers"));
                     }
                     Ok(Outcome::Print(text))
                 }
@@ -166,8 +197,27 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Ready { id } => {
             transition(&mut conn, format, &id, ticket::Action::Ready, &identity)
         }
-        Command::Start { id } => {
-            transition(&mut conn, format, &id, ticket::Action::Start, &identity)
+        Command::Start(a) => match a.id {
+            Some(_) if a.for_who.is_some() => {
+                Err(Error::Usage("--for applies only to start --next".into()))
+            }
+            Some(id) => transition(&mut conn, format, &id, ticket::Action::Start, &identity),
+            None => {
+                let mut scope = cli::ScopeArgs::default();
+                apply_project_override(&mut scope, cli.project.as_deref(), cwd);
+                let t = ticket::start_next(&mut conn, cwd, &scope, a.for_who, &identity)?;
+                emit(format, &t, || output::render_text_ticket(&t))
+            }
+        },
+        Command::Reorder(a) => {
+            let place = match (&a.before, &a.after, a.first) {
+                (Some(o), _, _) => ticket::Place::Before(o),
+                (_, Some(o), _) => ticket::Place::After(o),
+                (_, _, true) => ticket::Place::First,
+                _ => ticket::Place::Last,
+            };
+            let t = ticket::reorder(&mut conn, &a.id, place)?;
+            emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Release { id } => {
             transition(&mut conn, format, &id, ticket::Action::Release, &identity)
