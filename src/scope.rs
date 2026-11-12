@@ -17,16 +17,9 @@ pub enum Scope {
     Worktree { root: PathBuf, worktree: PathBuf },
 }
 
-/// Decide the scope from git's canonical common dir and worktree top level.
-/// The root checkout is the parent of a common dir named `.git`; anything
-/// else (bare repo, submodule's `.git/modules/x`) is unscoped.
-fn classify(common_dir: &Path, top: &Path) -> Scope {
-    if common_dir.file_name().is_none_or(|n| n != ".git") {
-        return Scope::Unscoped;
-    }
-    let Some(root) = common_dir.parent() else {
-        return Scope::Unscoped;
-    };
+/// Decide the scope from the repository's root checkout and the worktree
+/// top level the caller is in.
+fn classify(root: &Path, top: &Path) -> Scope {
     if root == top {
         Scope::Checkout {
             root: root.to_path_buf(),
@@ -39,32 +32,74 @@ fn classify(common_dir: &Path, top: &Path) -> Scope {
     }
 }
 
-/// Detect the scope of `dir`. Git missing, failing, or `dir` absent all read
-/// as `Unscoped`.
-pub fn detect(dir: &Path) -> Scope {
-    let Ok(out) = Command::new("git")
+/// Run git in `dir` and return trimmed stdout, or `None` on any failure.
+fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
         .current_dir(dir)
-        .args([
+        .args(args)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// Detect the scope of `dir`. Git missing, failing, or `dir` absent all read
+/// as `Unscoped`, as do bare repos and submodules. The root checkout is the
+/// top level when the git dir is the common dir; for a linked worktree it
+/// comes from `core.worktree` or the `.git` common dir's parent, so a
+/// `--separate-git-dir` repo (git dir not named `.git`) still resolves to
+/// its real work tree.
+pub fn detect(dir: &Path) -> Scope {
+    if git_out(dir, &["rev-parse", "--is-bare-repository"]).as_deref() != Some("false") {
+        return Scope::Unscoped;
+    }
+    // Prints the superproject's path inside a submodule, nothing elsewhere.
+    match git_out(dir, &["rev-parse", "--show-superproject-working-tree"]) {
+        Some(s) if s.is_empty() => {}
+        _ => return Scope::Unscoped,
+    }
+    let Some(paths) = git_out(
+        dir,
+        &[
             "rev-parse",
             "--path-format=absolute",
-            "--git-common-dir",
             "--show-toplevel",
-        ])
-        .output()
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    ) else {
+        return Scope::Unscoped;
+    };
+    let mut lines = paths.lines();
+    let (Some(top), Some(git_dir), Some(common)) = (lines.next(), lines.next(), lines.next())
     else {
         return Scope::Unscoped;
     };
-    if !out.status.success() {
-        return Scope::Unscoped;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut lines = text.lines();
-    let (Some(common), Some(top)) = (lines.next(), lines.next()) else {
+    let (Ok(top), Ok(git_dir), Ok(common)) = (
+        std::fs::canonicalize(top),
+        std::fs::canonicalize(git_dir),
+        std::fs::canonicalize(common),
+    ) else {
         return Scope::Unscoped;
     };
-    match (std::fs::canonicalize(common), std::fs::canonicalize(top)) {
-        (Ok(common), Ok(top)) => classify(&common, &top),
-        _ => Scope::Unscoped,
+    // The git dir is the common dir only in the root checkout.
+    if git_dir == common {
+        return classify(&top, &top);
+    }
+    // Linked worktree: find the root checkout from the common dir.
+    let root = match git_out(&common, &["config", "--get", "core.worktree"]) {
+        // Set by `--separate-git-dir`; relative to the common dir.
+        Some(w) if !w.is_empty() => std::fs::canonicalize(common.join(w)).ok(),
+        _ if common.file_name().is_some_and(|n| n == ".git") => {
+            common.parent().map(Path::to_path_buf)
+        }
+        _ => None,
+    };
+    match root {
+        Some(root) => classify(&root, &top),
+        None => Scope::Unscoped,
     }
 }
 
@@ -92,35 +127,4 @@ pub fn path_str(p: &Path) -> Result<String> {
     p.to_str()
         .map(String::from)
         .ok_or_else(|| Error::Refused(format!("path is not valid UTF-8: {}", p.display())))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classify_cases() {
-        let p = |s: &str| PathBuf::from(s);
-        assert_eq!(
-            classify(&p("/r/app/.git"), &p("/r/app")),
-            Scope::Checkout { root: p("/r/app") }
-        );
-        assert_eq!(
-            classify(&p("/r/app/.git"), &p("/r/wt")),
-            Scope::Worktree {
-                root: p("/r/app"),
-                worktree: p("/r/wt")
-            }
-        );
-        assert_eq!(
-            classify(&p("/r/app.git"), &p("/r/wt")),
-            Scope::Unscoped,
-            "bare repo"
-        );
-        assert_eq!(
-            classify(&p("/r/sup/.git/modules/sub"), &p("/r/sup/sub")),
-            Scope::Unscoped,
-            "submodule"
-        );
-    }
 }

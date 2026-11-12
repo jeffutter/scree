@@ -513,3 +513,65 @@ fn deferred_flags_are_refused() {
     assert_eq!(e.code(&repo, &["add", "x", "--parent", "SCR-1"]), 4);
     assert_eq!(e.code(&repo, &["add", "x", "--blocked-by", "SCR-1"]), 4);
 }
+
+#[test]
+fn separate_git_dir_repo_and_its_worktree_are_scoped() {
+    let e = env();
+    let work = e.base.join("a").join("sep-app");
+    let gitdir = e.base.join("gitdirs").join("sep-app-store");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(gitdir.parent().unwrap()).unwrap();
+    git(
+        &work,
+        &["init", "-q", "--separate-git-dir", gitdir.to_str().unwrap()],
+    );
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "init"]);
+
+    let t = e.ok(&work, &["add", "one"]);
+    assert_eq!(t["id"], "SA-1");
+    assert_eq!(t["worktree"], Value::Null);
+    let p = e.ok(&work, &["list", "--all-worktrees"]);
+    assert_eq!(p["tickets"].as_array().unwrap().len(), 1);
+
+    // Git records the root work tree for linked worktrees only in
+    // `core.worktree` (older git sets it for --separate-git-dir itself).
+    git(
+        &gitdir,
+        &["config", "core.worktree", work.to_str().unwrap()],
+    );
+    let wt = e.worktree(&work, "feat");
+    let t = e.ok(&wt, &["add", "two"]);
+    assert_eq!(t["id"], "SA-2");
+    assert_eq!(t["worktree"], wt.to_str().unwrap());
+}
+
+#[test]
+fn bare_repo_is_unscoped() {
+    let e = env();
+    let bare = e.base.join("bare.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare"]);
+    // Unscoped with no --project is the LOCAL project.
+    assert_eq!(e.ok(&bare, &["add", "x"])["id"], "LOCAL-1");
+}
+
+#[test]
+fn submodule_is_unscoped() {
+    let e = env();
+    let upstream = e.repo("u", "lib");
+    let sup = e.repo("a", "super");
+    git(
+        &sup,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            upstream.to_str().unwrap(),
+            "sub",
+        ],
+    );
+    assert_eq!(e.ok(&sup.join("sub"), &["add", "x"])["id"], "LOCAL-1");
+    assert_eq!(e.ok(&sup, &["add", "y"])["id"], "SUP-1");
+}
