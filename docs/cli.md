@@ -15,6 +15,12 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 
 `SCREE_NO_SWEEP=1` disables automatic sweeps.
 
+### Identity and format resolution
+
+- Role: `--role` / `SCREE_ROLE`, then an agent marker (`CLAUDECODE` or `AI_AGENT` set and non-empty), then human when stdin and stdout are both terminals, else agent. Unknown means agent.
+- Author: `--author` / `SCREE_AUTHOR`, else the role name. Session: `--session` / `SCREE_SESSION`, else `CLAUDE_CODE_SESSION_ID`, else none. Empty values count as unset.
+- Format: `--json` or `--text`, then `SCREE_FORMAT` (`json` or `text`; anything else is a usage error), then text only for a human on a terminal, else JSON.
+
 ## References
 
 - A ticket is named by its display id, `SCR-12` or `SCR-12.3`, case-insensitive. A bare number is refused.
