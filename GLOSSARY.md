@@ -1,0 +1,62 @@
+# Glossary
+
+**Ticket**
+A unit of work that people and agents track. A ticket has a title, a description, a status, acceptance criteria, comments and a place in a hierarchy. Named by its id, such as `SCR-12`.
+_Avoid_: Task, issue, card, story
+
+**Subtask**
+A ticket that has a parent ticket. Named `SCR-12.3`: the parent's id plus a number in creation order. The number is never a ranking: Position is.
+_Avoid_: Child ticket, step, sub-issue
+
+**Key**
+The short uppercase prefix of every ticket id in a Project, such as `SCR`. Derived from the Project's name when the Project is first seen (or chosen explicitly then), made unique among Projects, and never changed afterwards. `LOCAL` is reserved for unscoped tickets.
+
+**Status**
+Where a ticket is in its life: draft, ready, active, done or abandoned. The same five values for every Project.
+
+**Available**
+A computed property: the ticket is ready and nothing blocks it. Never stored.
+
+**Position**
+A ticket's place among its siblings: the root tickets of one Scope, or the subtasks of one parent. Lower goes first. Among root tickets it only orders those already Available; among subtasks it is the running order. Changed by placing a ticket relative to another, never by typing a number.
+_Avoid_: Priority, rank
+
+**Blocked**
+A computed property: a ticket a dependency or a subtask still holds up. Never stored.
+
+**Dependency**
+A statement that one ticket cannot start until another is done. The waiting ticket is Blocked while the other is not done. Allowed between Worktrees of one Project, never between Projects.
+
+**Acceptance Criterion**
+An outcome a ticket must achieve, stated so it can be verified. Checking one is a claim by whoever checked it, recorded with the evidence they gave. It is not a fact Scree established.
+_Avoid_: Subtask (a subtask is work to perform, not an outcome to check)
+
+**Project**
+The git repository a ticket was created in, identified by the path of its root checkout and named by the last segment of that path. A moved root must be relinked to keep its tickets. Fixed when the ticket is created.
+
+**Worktree**
+A linked checkout of a Project, other than its root checkout. A ticket made in one records it; a ticket made in the root checkout has none.
+
+**Scope**
+The Project and Worktree a ticket belongs to, detected from the directory a command runs in. Reads show the current Worktree's tickets unless widened. A ticket may have no Scope at all (an unscoped ticket), for one-off work outside any Project.
+
+**Comment**
+A note on a ticket, added by a person or an agent as work proceeds: findings, a change of direction, a replan. Appended by default and never edited. It can be deleted.
+
+**Archived**
+A ticket removed from default views. Separate from status: an archived ticket keeps the status it ended with. Tickets are archived when their Worktree closes, and the ones still unfinished are abandoned first.
+
+**Sweep**
+Closing out the tickets of Worktrees that no longer exist: done ones are archived, unfinished ones are abandoned then archived. It happens when a command touches the Project, or on request.
+
+**Caller**
+Whoever runs a Scree command: a person or an agent. A Caller has a Role, an author name and optionally a Session.
+
+**Role**
+Whether the Caller acts as `agent` or `human`. Inferred from the environment unless set explicitly, and an unknown Caller counts as an agent. It decides whether `start` may take a ticket marked for a human. A guardrail against accidents, not authentication.
+
+**Session**
+An optional label for one run of an agent, recorded with the author so claims and comments from different runs can be told apart.
+
+**Claimer**
+The Caller (author and session) who started an active ticket.
