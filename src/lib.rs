@@ -25,16 +25,16 @@ pub enum Outcome {
     Help,
 }
 
-/// `-` reads the text from stdin; unset is empty.
+/// `-` reads the text from stdin; unset is empty. Stored text is always trimmed.
 fn text_arg(v: Option<&str>) -> Result<String> {
     match v {
         None => Ok(String::new()),
         Some("-") => {
             let mut s = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
-            Ok(s)
+            Ok(s.trim().to_string())
         }
-        Some(s) => Ok(s.to_string()),
+        Some(s) => Ok(s.trim().to_string()),
     }
 }
 
@@ -202,6 +202,9 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Check { target, evidence } => {
             let evidence = evidence.as_deref().map(|e| text_arg(Some(e))).transpose()?;
+            if evidence.as_deref() == Some("") {
+                return Err(Error::Usage("evidence must not be empty".into()));
+            }
             let t = ticket::check(&mut conn, &target, evidence.as_deref(), &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }

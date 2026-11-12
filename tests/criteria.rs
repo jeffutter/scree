@@ -144,6 +144,12 @@ fn check_and_uncheck() {
     );
     assert_eq!(t["criteria"][1]["evidence"], "from stdin");
 
+    let id3 = new_ticket(&e);
+    let t = e.stdin(&["check", &format!("{id3}#1"), "--evidence", "-"], "ok\n");
+    assert_eq!(t["criteria"][0]["evidence"], "ok");
+    assert_eq!(e.code(&["check", &format!("{id3}#2"), "--evidence", ""]), 2);
+    assert_eq!(e.code(&["check", &format!("{id3}#2"), "--evidence", "  "]), 2);
+
     let t = e.ok(&["uncheck", &r1]);
     let c = &t["criteria"][0];
     assert_eq!(c["checked"], false);
@@ -175,6 +181,10 @@ fn comments() {
     assert_eq!(t["comments"][0]["author"], "bob");
     let t = e.stdin(&["comment", "add", &id, "-"], "piped");
     assert_eq!(t["comments"][1]["body"], "piped");
+    let t = e.stdin(&["comment", "add", &id, "-"], "note\n");
+    assert_eq!(t["comments"][2]["body"], "note");
+    let first_id = t["comments"][2]["id"].to_string();
+    e.ok(&["comment", "rm", &id, &first_id]);
     assert_eq!(e.code(&["comment", "add", &id, ""]), 2);
 
     let first = t["comments"][0]["id"].to_string();
