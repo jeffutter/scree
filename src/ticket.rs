@@ -1076,7 +1076,8 @@ fn slot_position(others: &[i64], at: usize) -> Option<i64> {
 
 /// Move one open ticket within its sibling set (same Project, parent and
 /// Worktree). Done and abandoned siblings keep their positions and count as
-/// neighbours. The whole move, including a renumber, is one transaction.
+/// neighbours. Refused (exit 4) when a subtask's new place would close a
+/// dependency cycle. The whole move, including a renumber, is one transaction.
 pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
@@ -1136,6 +1137,27 @@ pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
                 order.insert(at, row);
                 for (i, r) in order.into_iter().enumerate() {
                     set_pos(r, (i as i64 + 1) * 1000)?;
+                }
+            }
+        }
+        if parent.is_some() {
+            // Only the moved row's relative order changed, so any new cycle
+            // passes through one of its outgoing edges: explicit blockers
+            // and (now) earlier siblings.
+            let out: Vec<i64> = tx
+                .prepare(
+                    "SELECT blocked_by_id FROM dependencies WHERE ticket_id = ?1
+                     UNION SELECT e.id FROM tickets c
+                         JOIN tickets e ON e.parent_id = c.parent_id
+                         WHERE c.id = ?1 AND (e.position, e.number) < (c.position, c.number)",
+                )?
+                .query_map([row], |r| r.get(0))?
+                .collect::<std::result::Result<_, _>>()?;
+            for x in out {
+                if waits_for(tx, x, row)? {
+                    return Err(Error::Refused(format!(
+                        "reordering {id} would make a dependency cycle"
+                    )));
                 }
             }
         }

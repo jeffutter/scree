@@ -200,6 +200,25 @@ fn cycles_count_parent_and_sibling_order() {
 }
 
 #[test]
+fn reorder_refuses_a_move_that_closes_a_cycle() {
+    let e = env();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let s1 = e.sub(&repo, &p, "s1");
+    let s2 = e.sub(&repo, &p, "s2");
+    let s3 = e.sub(&repo, &p, "s3");
+    e.ok(&repo, &["dep", "add", &s2, &s1]);
+    let before = e.ok(&repo, &["show", &p]).to_string();
+    // s1 after s2 would make s1 wait on s2, which waits on s1.
+    assert_eq!(e.code(&repo, &["reorder", &s1, "--after", &s2]), 4);
+    assert_eq!(e.code(&repo, &["reorder", &s2, "--before", &s1]), 4);
+    assert_eq!(e.code(&repo, &["reorder", &s1, "--last"]), 4);
+    assert_eq!(e.ok(&repo, &["show", &p]).to_string(), before);
+    // A move that adds no cycle still works.
+    e.ok(&repo, &["reorder", &s3, "--first"]);
+}
+
+#[test]
 fn cross_project_refused_cross_worktree_allowed() {
     let e = env();
     let repo = e.repo("scree");
