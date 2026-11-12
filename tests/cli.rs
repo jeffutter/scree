@@ -129,3 +129,60 @@ fn bare_with_bad_format_prints_help() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage"));
 }
+
+fn with_empty(var: &str, extra: &[(&str, &str)], args: &[&str]) -> Output {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
+    for (k, _) in std::env::vars() {
+        if k.starts_with("SCREE_") || k == "CLAUDECODE" || k == "AI_AGENT" || k == "NO_COLOR" {
+            cmd.env_remove(k);
+        }
+    }
+    cmd.env(var, "");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    if var != "SCREE_DB" {
+        cmd.arg("--db").arg(dir.path().join("s.db"));
+    } else {
+        cmd.env("XDG_DATA_HOME", dir.path());
+    }
+    let out = cmd.args(args).output().unwrap();
+    if var == "SCREE_DB" {
+        assert!(dir.path().join("scree").join("scree.db").exists());
+    }
+    out
+}
+
+fn assert_json_list(out: &Output) {
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v, serde_json::json!({"tickets": []}));
+}
+
+#[test]
+fn empty_scree_db_falls_back_to_xdg() {
+    assert_json_list(&with_empty("SCREE_DB", &[], &["list"]));
+}
+
+#[test]
+fn empty_scree_role_resolves_as_unset() {
+    // Unset role off a tty is the agent/json default.
+    assert_json_list(&with_empty("SCREE_ROLE", &[], &["list"]));
+}
+
+#[test]
+fn empty_scree_format_resolves_as_unset() {
+    assert_json_list(&with_empty("SCREE_FORMAT", &[], &["list"]));
+}
+
+#[test]
+fn empty_scree_author_resolves_as_unset() {
+    // Unset author defaults to the role name; empty must not become "".
+    assert_json_list(&with_empty("SCREE_AUTHOR", &[], &["list"]));
+}
+
+#[test]
+fn empty_scree_session_resolves_as_unset() {
+    assert_json_list(&with_empty("SCREE_SESSION", &[], &["list"]));
+}
