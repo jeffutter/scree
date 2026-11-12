@@ -106,8 +106,14 @@ pub fn normalize(p: &Path) -> PathBuf {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
+                // Only a normal component can be cancelled; `..` at the root
+                // stays at the root, and a leading `..` is kept.
+                match out.components().next_back() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    Some(Component::RootDir | Component::Prefix(_)) => {}
+                    _ => out.push(".."),
                 }
             }
             c => out.push(c.as_os_str()),
@@ -116,9 +122,15 @@ pub fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// The Project whose root is `path`: tried lexically normalized first (the
-/// root may be gone), then canonicalized (symlinks).
+/// The Project whose root is `path`. Canonicalizing the raw path comes
+/// first so `link/../x` follows the symlink as the filesystem does; if the
+/// root is gone, the lexically normalized text is looked up instead.
 pub fn find_by_path(conn: &Connection, path: &Path) -> Result<Option<Project>> {
+    if let Ok(c) = std::fs::canonicalize(path)
+        && let Some(p) = find_by_root(conn, &path_str(&c)?)?
+    {
+        return Ok(Some(p));
+    }
     let norm = normalize(path);
     if let Some(p) = find_by_root(conn, &path_str(&norm)?)? {
         return Ok(Some(p));
@@ -210,6 +222,16 @@ pub fn relink(conn: &Connection, old: &Path, new: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_keeps_unresolvable_parents() {
+        let n = |s: &str| normalize(Path::new(s));
+        assert_eq!(n("../../x"), Path::new("../../x"));
+        assert_eq!(n("/.."), Path::new("/"));
+        assert_eq!(n("/a/../../b"), Path::new("/b"));
+        assert_eq!(n("a/b/../c/./d"), Path::new("a/c/d"));
+        assert_eq!(n("a/../.."), Path::new(".."));
+    }
 
     #[test]
     fn derive() {

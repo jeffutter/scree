@@ -644,3 +644,46 @@ fn list_all_projects_orders_by_position_then_number() {
         ["ALP-1", "ZET-1"]
     );
 }
+
+#[test]
+fn list_global_project_overrides_a_different_repo_cwd() {
+    let e = env();
+    let a = e.repo("a", "alpha");
+    let b = e.repo("b", "beta");
+    e.ok(&a, &["add", "in a"]);
+    e.ok(&b, &["add", "in b"]);
+    assert_eq!(e.ids(&b, &["--project", a.to_str().unwrap()]), ["ALP-1"]);
+    // Naming the project cwd is already in changes nothing.
+    assert_eq!(e.ids(&b, &["--project", b.to_str().unwrap()]), ["BET-1"]);
+}
+
+#[test]
+fn symlinked_path_with_dotdot_resolves_through_the_link() {
+    let e = env();
+    let repo = e.repo("a", "my-app");
+    e.ok(&repo, &["add", "x"]);
+    // link -> a/my-app; "link/../my-app" is a/my-app/../my-app via the
+    // filesystem, but lexically it would be "my-app" beside the link.
+    let link = e.base.join("link");
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    assert_eq!(
+        e.ids(&e.base, &["--project-root", "link/../my-app"]),
+        ["MA-1"]
+    );
+    let moved = e.base.join("a").join("moved");
+    std::fs::rename(&repo, &moved).unwrap();
+    // The root is gone and the link dangles, so the text lookup is used.
+    let other = e.repo("c", "elsewhere");
+    let out = e.ok(
+        &other,
+        &[
+            "project",
+            "relink",
+            repo.to_str().unwrap(),
+            moved.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out["project"]["key"], "MA");
+    // The stored root was updated: list from the new location.
+    assert_eq!(e.ids(&moved, &[]), ["MA-1"]);
+}

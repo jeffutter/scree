@@ -105,6 +105,14 @@ pub fn detect(dir: &Path) -> Scope {
 
 /// The scope a write targets: the caller's own repo when inside one, else
 /// the repo named by `--project`, else `Unscoped` (the `LOCAL` Project).
+/// The root checkout a scope belongs to, if any.
+pub fn root_of(s: &Scope) -> Option<&Path> {
+    match s {
+        Scope::Checkout { root } | Scope::Worktree { root, .. } => Some(root),
+        Scope::Unscoped => None,
+    }
+}
+
 pub fn for_write(cwd: &Path, project: Option<&Path>) -> Result<Scope> {
     let here = detect(cwd);
     if here != Scope::Unscoped {

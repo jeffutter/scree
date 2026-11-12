@@ -63,12 +63,18 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     let mut conn = db::open(&path)?;
     match cli.command.unwrap_or(Command::List(ListArgs::default())) {
         Command::List(mut args) => {
-            // Like `add`, outside any repo the global --project picks the Project.
+            // The global --project picks the Project unless cwd is already inside it.
             if args.project_root.is_none()
                 && !args.all_projects
-                && scope::detect(cwd) == scope::Scope::Unscoped
+                && let Some(p) = &cli.project
+                && {
+                    let here = scope::detect(cwd);
+                    let there = scope::detect(&cwd.join(p));
+                    scope::root_of(&here).is_none()
+                        || scope::root_of(&here) != scope::root_of(&there)
+                }
             {
-                args.project_root = cli.project.clone();
+                args.project_root = Some(p.clone());
             }
             let list = ticket::list(&conn, cwd, &args, &identity)?;
             match format {
@@ -120,7 +126,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
             let v = db::write(&mut conn, |tx| {
-                project::relink(tx, &project::normalize(&cwd.join(&old)), &cwd.join(&new))
+                project::relink(tx, &cwd.join(&old), &cwd.join(&new))
             })?;
             emit(format, &v, || {
                 let p = &v["project"];
