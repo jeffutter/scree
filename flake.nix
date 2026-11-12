@@ -1,0 +1,83 @@
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    crane.url = "github:ipetkov/crane";
+  };
+
+  outputs =
+    { self
+    , nixpkgs
+    , flake-utils
+    , rust-overlay
+    , crane
+    ,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs { inherit system overlays; };
+
+        lib = nixpkgs.lib;
+
+        # One rust-overlay toolchain for rustc, cargo, rustfmt and clippy.
+        rustToolchain = pkgs.rust-bin.stable.latest.default;
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+
+        src = lib.cleanSourceWith { src = craneLib.path ./.; };
+
+        envVars = lib.attrsets.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold";
+        };
+
+        # rusqlite uses the bundled feature, so it needs only a C compiler.
+        commonArgs = {
+          inherit src;
+          strictDeps = true;
+          nativeBuildInputs = [ pkgs.clang ];
+          buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.libiconv ];
+        } // envVars;
+
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        scree = craneLib.buildPackage (commonArgs // {
+          inherit cargoArtifacts;
+          doCheck = false; # nextest runs in checks.nextest
+        });
+      in
+      {
+        packages.default = scree;
+
+        checks = {
+          build = scree;
+          clippy = craneLib.cargoClippy (commonArgs // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets -- -D warnings";
+          });
+          fmt = craneLib.cargoFmt { inherit src; };
+          nextest = craneLib.cargoNextest (commonArgs // {
+            inherit cargoArtifacts;
+            nativeCheckInputs = [ pkgs.git ];
+          });
+        };
+
+        devShells.default = pkgs.mkShell ({
+          packages = [
+            rustToolchain
+            pkgs.cargo-nextest
+            pkgs.cargo-release
+            pkgs.cargo-watch
+            pkgs.clang
+            pkgs.sqlite
+          ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.mold ];
+        } // envVars);
+
+        formatter = pkgs.nixpkgs-fmt;
+      }
+    );
+}

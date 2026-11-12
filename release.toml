@@ -1,0 +1,8 @@
+# cargo-release config. Usage: `cargo release patch|minor|major --execute`
+# (without --execute it is a dry run).
+
+# Not a library for crates.io; Scree is consumed through the flake.
+publish = false
+
+tag-name = "v{{version}}"
+allow-branch = ["main"]
