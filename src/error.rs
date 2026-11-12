@@ -23,6 +23,24 @@ pub enum Error {
     Other(String),
 }
 
+/// Exit codes and what they mean, for the generated skill. A test keeps it
+/// in step with `Error::exit_code`.
+pub const EXIT_CODES: [(i32, &str); 7] = [
+    (0, "ok, including `next` with nothing available"),
+    (1, "generic failure; `skill --check` when stale"),
+    (2, "usage error"),
+    (3, "not found"),
+    (
+        4,
+        "refused by a rule: blocked, open criteria, open subtasks, human-only, cycle, cross-Project; do not retry with `--force`",
+    ),
+    (
+        5,
+        "conflict: already active, claim lost; pick another ticket",
+    ),
+    (6, "database or migration error"),
+];
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
@@ -73,6 +91,22 @@ mod tests {
             .exit_code(),
             6
         );
+    }
+
+    #[test]
+    fn exit_code_table_covers_every_error_code() {
+        let errors = [
+            Error::Other("x".into()),
+            Error::Usage("x".into()),
+            Error::NotFound("x".into()),
+            Error::Refused("x".into()),
+            Error::Conflict("x".into()),
+            Error::Db(rusqlite::Error::InvalidQuery),
+        ];
+        for e in errors {
+            assert!(EXIT_CODES.iter().any(|(c, _)| *c == e.exit_code()), "{e}");
+        }
+        assert_eq!(EXIT_CODES[0].0, 0);
     }
 
     #[test]

@@ -329,6 +329,11 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print the agent SKILL.md; --check PATH exits 1 when the file differs
+    Skill {
+        #[arg(long, value_name = "PATH")]
+        check: Option<PathBuf>,
+    },
     /// Hide a ticket (and its subtasks) from list without --archived
     Archive { id: String },
     /// Undo archive; a subtask of an archived parent is refused

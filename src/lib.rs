@@ -5,6 +5,7 @@ pub mod identity;
 pub mod output;
 pub mod project;
 pub mod scope;
+pub mod skill;
 pub mod sweep;
 pub mod ticket;
 
@@ -94,6 +95,15 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     let bare = cli.command.is_none();
     if bare && !(identity.role == Role::Human && env.stdout_tty) {
         return Ok(Outcome::Help);
+    }
+    // The skill is raw text and needs no database: handle it before db::open.
+    if let Some(Command::Skill { check }) = &cli.command {
+        let text = skill::generate();
+        return Ok(match check {
+            None => Outcome::Print(text.strip_suffix('\n').unwrap_or(&text).to_string()),
+            Some(p) if skill::check(&cwd.join(p), &text) => Outcome::Print("ok".into()),
+            Some(p) => Outcome::PrintFail(format!("stale or missing: {}", p.display())),
+        });
     }
     let format = output::decide_format(cli.json, cli.text, identity.role, env)?;
 
@@ -247,6 +257,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 &identity,
             )
         }
+        Command::Skill { .. } => unreachable!("handled before the database opens"),
         Command::Sweep { dry_run } => {
             let r = sweep::sweep_command(&mut conn, cwd, cli.project.as_deref(), dry_run)?;
             let out = match format {
