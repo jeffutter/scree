@@ -22,13 +22,12 @@ pub enum Outcome {
 }
 
 pub fn run(cli: Cli, env: &Env) -> Result<Outcome> {
-    let identity = identity::resolve(cli.role, cli.author, cli.session, env);
-    let format = output::decide_format(cli.json, cli.text, identity.role, env)?;
-
+    let identity = identity::resolve(cli.role.and_then(|r| r.0), cli.author, cli.session, env);
     let bare = cli.command.is_none();
     if bare && !(identity.role == Role::Human && env.stdout_tty) {
         return Ok(Outcome::Help);
     }
+    let format = output::decide_format(cli.json, cli.text, identity.role, env)?;
 
     // clap already folded SCREE_DB into `cli.db`; the XDG fallback lives in db.
     let path = db::resolve_path_from_env(cli.db)?;

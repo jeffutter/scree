@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::identity::Role;
 
@@ -12,8 +12,8 @@ pub struct Cli {
     pub db: Option<PathBuf>,
 
     /// The caller's role; inferred when unset
-    #[arg(long, global = true, env = "SCREE_ROLE", value_enum)]
-    pub role: Option<Role>,
+    #[arg(long, global = true, env = "SCREE_ROLE", value_parser = parse_role)]
+    pub role: Option<RoleArg>,
 
     /// Author recorded by start, check and comment; defaults to the role name
     #[arg(long, global = true, env = "SCREE_AUTHOR")]
@@ -33,6 +33,18 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+/// A parsed `--role` / `SCREE_ROLE` value. Empty parses to `None` so an empty
+/// `SCREE_ROLE=` counts as unset, like every other variable.
+#[derive(Debug, Clone, Copy)]
+pub struct RoleArg(pub Option<Role>);
+
+fn parse_role(s: &str) -> Result<RoleArg, String> {
+    if s.is_empty() {
+        return Ok(RoleArg(None));
+    }
+    <Role as ValueEnum>::from_str(s, true).map(|r| RoleArg(Some(r)))
 }
 
 #[derive(Debug, Subcommand)]

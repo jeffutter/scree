@@ -32,7 +32,10 @@ impl Env {
     pub fn from_process() -> Self {
         use std::io::IsTerminal;
         Env {
-            vars: std::env::vars().collect(),
+            // vars() panics on non-UTF-8 entries; skip them instead.
+            vars: std::env::vars_os()
+                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                .collect(),
             stdin_tty: std::io::stdin().is_terminal(),
             stdout_tty: std::io::stdout().is_terminal(),
         }

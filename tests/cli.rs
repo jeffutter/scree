@@ -86,3 +86,46 @@ fn explicit_role_human_off_tty_stays_json() {
     assert_eq!(out.status.code(), Some(0));
     serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
 }
+
+#[test]
+fn non_utf8_env_does_not_panic() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
+    cmd.env("JUNK", std::ffi::OsStr::from_bytes(b"\xff\xfe"));
+    let out = cmd
+        .arg("--db")
+        .arg(dir.path().join("s.db"))
+        .arg("list")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn empty_scree_role_is_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
+    cmd.env("SCREE_ROLE", "");
+    let out = cmd
+        .arg("--db")
+        .arg(dir.path().join("s.db"))
+        .arg("list")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn bare_with_bad_format_prints_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
+    cmd.env("SCREE_FORMAT", "yaml").env_remove("CLAUDECODE");
+    let out = cmd
+        .arg("--db")
+        .arg(dir.path().join("s.db"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Usage"));
+}
