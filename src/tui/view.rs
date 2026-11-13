@@ -461,32 +461,55 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let n_collapsed = collapsed.iter().filter(|&&x| x).count();
     let n_fill = cols.len() - n_collapsed;
     let stacked = stack_columns(area.width, n_fill, n_collapsed);
-    // Height each unfocused populated column may take when stacked: what is
-    // left after the focused column keeps STACKED_FOCUS_MIN_H, shared out,
-    // but never below the 2 border rows.
-    let n_other = cols
-        .iter()
-        .zip(&collapsed)
-        .filter(|&(&c, &e)| !e && c != state.col)
-        .count();
-    let reserved = COLLAPSED_H * u16::try_from(n_collapsed).unwrap_or(0) + STACKED_FOCUS_MIN_H;
-    let other_h = (area.height.saturating_sub(reserved)
-        / u16::try_from(n_other.max(1)).unwrap_or(1))
-    .clamp(2, STACKED_OTHER_MAX_H);
+    // Stacked heights. The focused column is a Fill pane, so it gets whatever
+    // the fixed panes leave; to keep STACKED_FOCUS_MIN_H of it, the fixed panes
+    // draw from a budget of `area.height - STACKED_FOCUS_MIN_H`, granted in
+    // priority order: populated floors (2 border rows), collapsed floors,
+    // then growth of populated panes to their wanted height (up to
+    // STACKED_OTHER_MAX_H), then of collapsed ones to COLLAPSED_H. On a
+    // terminal too short for all of it the later panes shrink, never the
+    // focused one.
+    let mut fixed_h = vec![0u16; cols.len()];
+    if stacked {
+        let focus_min = STACKED_FOCUS_MIN_H.min(area.height);
+        let mut budget = area.height - focus_min;
+        let wanted = |i: usize| -> u16 {
+            if collapsed[i] {
+                COLLAPSED_H
+            } else {
+                let rows = u16::try_from(state.column(cols[i]).len()).unwrap_or(u16::MAX);
+                rows.saturating_add(2).clamp(2, STACKED_OTHER_MAX_H)
+            }
+        };
+        let focus = state.col;
+        let others = |pop: bool| -> Vec<usize> {
+            (0..cols.len())
+                .filter(|&i| cols[i] != focus && collapsed[i] != pop)
+                .collect()
+        };
+        for pop in [true, false] {
+            for i in others(pop) {
+                let g = 2.min(budget);
+                fixed_h[i] += g;
+                budget -= g;
+            }
+        }
+        for pop in [true, false] {
+            for i in others(pop) {
+                let g = wanted(i).saturating_sub(fixed_h[i]).min(budget);
+                fixed_h[i] += g;
+                budget -= g;
+            }
+        }
+    }
     let constraints: Vec<Constraint> = cols
         .iter()
         .zip(&collapsed)
-        .map(|(&c, &e)| match (e, stacked) {
-            (true, true) => Constraint::Length(COLLAPSED_H),
+        .enumerate()
+        .map(|(i, (&c, &e))| match (e, stacked) {
+            (_, true) if c != state.col => Constraint::Length(fixed_h[i]),
             (true, false) => Constraint::Length(COLLAPSED_W),
-            // Stacked, the focused column takes the spare height and the
-            // other populated ones shrink to a few rows, so the selected
-            // row stays visible on short terminals.
-            (false, true) if c != state.col => {
-                let rows = u16::try_from(state.column(c).len()).unwrap_or(u16::MAX);
-                Constraint::Length(rows.saturating_add(2).clamp(2, other_h))
-            }
-            (false, _) => Constraint::Fill(1),
+            (_, true) | (false, false) => Constraint::Fill(1),
         })
         .collect();
     let areas = if stacked {
@@ -1144,6 +1167,59 @@ mod tests {
                 s.col,
                 out.join("\n")
             );
+        }
+    }
+
+    #[test]
+    fn stacked_focused_column_keeps_selected_row_on_short_terminals() {
+        use ratatui::crossterm::event::KeyCode;
+        for h in [8u16, 10, 12] {
+            let mut s = sample_state();
+            render(&mut s, 90, h);
+            for step in 0..STATUSES.len() {
+                let out = render(&mut s, 90, h);
+                let col = s.column(s.col);
+                if !col.is_empty() {
+                    let id = col[s.rows[s.col]].id.clone();
+                    // Skip the header row; the id must be in the board.
+                    assert!(
+                        out.iter().skip(1).any(|l| l.contains(&id)),
+                        "h {h} step {step} col {}: {}",
+                        s.col,
+                        out.join("\n")
+                    );
+                }
+                crate::tui::state::update(&mut s, key_event(KeyCode::Right));
+            }
+        }
+    }
+
+    #[test]
+    fn stacked_focused_column_keeps_selected_row_with_all_columns_populated() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut s = sample_state();
+        let mut t = s.tickets.clone();
+        t.push(ticket("SCR-20", "active", "Another active", "agent", false));
+        t.push(ticket(
+            "SCR-21",
+            "abandoned",
+            "Another abandoned",
+            "agent",
+            false,
+        ));
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        for h in [8u16, 10, 12] {
+            s.col = 0;
+            for step in 0..STATUSES.len() {
+                let out = render(&mut s, 90, h);
+                let id = s.column(s.col)[s.rows[s.col]].id.clone();
+                assert!(
+                    out.iter().skip(1).any(|l| l.contains(&id)),
+                    "h {h} step {step}: {}",
+                    out.join("\n")
+                );
+                crate::tui::state::update(&mut s, key_event(KeyCode::Right));
+            }
         }
     }
 
