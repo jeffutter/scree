@@ -6,7 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
-use super::state::{Detail, ListEntry, STATUSES, State, View, allowed};
+use super::state::{Detail, DetailSel, ListEntry, STATUSES, State, View, allowed};
 use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
@@ -26,11 +26,16 @@ const HINTS: [(&str, &str); 10] = [
 
 const HINTS_EDIT: [(&str, &str); 1] = [("e/E/P", "title/desc/plan")];
 
-const HINTS_DETAIL: [(&str, &str); 4] = [
+const HINTS_DETAIL: [(&str, &str); 9] = [
     ("Esc/q", "back"),
     ("j/k", "scroll"),
     ("PgUp/PgDn", "page"),
     ("g/G", "top/bottom"),
+    ("[/]", "select"),
+    ("Space", "check"),
+    ("n", "criterion"),
+    ("m/M", "comment"),
+    ("X", "remove"),
 ];
 
 /// Greedy word wrap of `text` to `width` cells; every output line starts with
@@ -80,8 +85,28 @@ fn who(c: &Claimer) -> String {
     }
 }
 
-/// Every field of the ticket as plain wrapped lines, in reading order.
-fn detail_lines(d: &Detail, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// Mark `lines` as the selected item: a ">" in the indent of the first line
+/// and the theme's selected style on all of them.
+fn mark_selected(lines: &mut [Line<'static>], theme: &Theme) {
+    for (i, line) in lines.iter_mut().enumerate() {
+        if i == 0
+            && let Some(first) = line.spans.first_mut()
+            && first.content.starts_with("  ")
+        {
+            first.content = format!("> {}", &first.content[2..]).into();
+        }
+        line.style = theme.selected_style();
+    }
+}
+
+/// Every field of the ticket as plain wrapped lines, in reading order, and
+/// the line range of the selected item.
+fn detail_lines(
+    d: &Detail,
+    width: usize,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
+    let mut sel_line = None;
     let t = &d.ticket.ticket;
     let mut out: Vec<Line<'static>> = vec![];
     let plain = |out: &mut Vec<Line<'static>>, text: &str, indent: &str| {
@@ -162,7 +187,8 @@ fn detail_lines(d: &Detail, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     if d.ticket.criteria.is_empty() {
         plain(&mut out, "none", "  ");
     }
-    for c in &d.ticket.criteria {
+    for (i, c) in d.ticket.criteria.iter().enumerate() {
+        let start = out.len();
         let mark = if c.checked { "[x]" } else { "[ ]" };
         plain(&mut out, &format!("{mark} {}. {}", c.number, c.text), "  ");
         if let Some(e) = &c.evidence {
@@ -175,12 +201,17 @@ fn detail_lines(d: &Detail, width: usize, theme: &Theme) -> Vec<Line<'static>> {
                 "      ",
             );
         }
+        if d.sel == Some(DetailSel::Criterion(i)) {
+            sel_line = Some((start, out.len()));
+            mark_selected(&mut out[start..], theme);
+        }
     }
     heading(&mut out, "Comments");
     if d.ticket.comments.is_empty() {
         plain(&mut out, "none", "  ");
     }
-    for c in &d.ticket.comments {
+    for (i, c) in d.ticket.comments.iter().enumerate() {
+        let start = out.len();
         let role = c
             .role
             .as_deref()
@@ -197,8 +228,12 @@ fn detail_lines(d: &Detail, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             "  ",
         );
         plain(&mut out, &c.body, "    ");
+        if d.sel == Some(DetailSel::Comment(i)) {
+            sel_line = Some((start, out.len()));
+            mark_selected(&mut out[start..], theme);
+        }
     }
-    out
+    (out, sel_line)
 }
 
 /// Draw the open detail view, clamping its scroll to the wrapped height.
@@ -209,9 +244,21 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &mut State) {
     };
     let block = widgets::bordered_pane(&d.ticket.ticket.id, true, &theme);
     let inner = block.inner(area);
-    let lines = detail_lines(d, usize::from(inner.width), &theme);
-    let max = lines.len().saturating_sub(usize::from(inner.height));
+    let (lines, sel_line) = detail_lines(d, usize::from(inner.width), &theme);
+    let height = usize::from(inner.height);
+    let max = lines.len().saturating_sub(height);
     d.scroll = d.scroll.min(max);
+    // Bring the whole selected item into view; one taller than the pane
+    // shows its first line.
+    if let (true, Some((start, end))) = (d.reveal, sel_line) {
+        if end > d.scroll + height {
+            d.scroll = (end.saturating_sub(height)).min(max);
+        }
+        if start < d.scroll {
+            d.scroll = start;
+        }
+    }
+    d.reveal = false;
     let visible: Vec<Line> = lines
         .into_iter()
         .skip(d.scroll)
@@ -683,5 +730,26 @@ mod tests {
         key(&mut s, 'l');
         key(&mut s, 'x');
         insta::assert_snapshot!(render(&mut s, 90, 14).join("\n"));
+    }
+
+    #[test]
+    fn selection_is_marked_and_scroll_follows_it() {
+        let mut s = detail_state();
+        s.detail.as_mut().unwrap().scroll = usize::MAX;
+        render(&mut s, 60, 12);
+        key(&mut s, ']');
+        let rows = render(&mut s, 60, 12);
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("> [x] 1. Renders every field")),
+            "{rows:?}"
+        );
+        key(&mut s, ']');
+        key(&mut s, ']');
+        key(&mut s, ']');
+        let rows = render(&mut s, 60, 12);
+        assert!(rows.iter().any(|r| r.contains("bob")), "{rows:?}");
+        assert!(rows.iter().any(|r| r.contains("pane edge")), "{rows:?}");
+        assert!(!rows.iter().any(|r| r.contains("> [x]")));
     }
 }

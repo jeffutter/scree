@@ -78,6 +78,70 @@ pub enum ListEntry {
 pub struct Detail {
     pub ticket: TicketDetail,
     pub scroll: usize,
+    /// The criterion or comment the criteria keys act on.
+    pub sel: Option<DetailSel>,
+    /// Set when `sel` changed; the view scrolls it into range and clears it.
+    pub reveal: bool,
+}
+
+/// A selectable item of the detail view; indexes into the ticket's
+/// criteria or comments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailSel {
+    Criterion(usize),
+    Comment(usize),
+}
+
+impl Detail {
+    fn new(ticket: TicketDetail) -> Self {
+        Detail {
+            ticket,
+            scroll: 0,
+            sel: None,
+            reveal: false,
+        }
+    }
+
+    /// Position of `sel` over criteria then comments.
+    fn linear(&self) -> Option<usize> {
+        match self.sel? {
+            DetailSel::Criterion(i) => Some(i),
+            DetailSel::Comment(i) => Some(self.ticket.criteria.len() + i),
+        }
+    }
+
+    /// Move the selection one item along criteria then comments, without
+    /// wrapping. From no selection, forward picks the first item and
+    /// backward the last.
+    fn step(&mut self, forward: bool) {
+        let nc = self.ticket.criteria.len();
+        let total = nc + self.ticket.comments.len();
+        if total == 0 {
+            return;
+        }
+        let next = match (self.linear(), forward) {
+            (None, true) => 0,
+            (None, false) => total - 1,
+            (Some(i), true) => (i + 1).min(total - 1),
+            (Some(i), false) => i.saturating_sub(1),
+        };
+        self.sel = Some(if next < nc {
+            DetailSel::Criterion(next)
+        } else {
+            DetailSel::Comment(next - nc)
+        });
+        self.reveal = true;
+    }
+
+    /// Keep `sel` inside the lists after a reload shrank them.
+    fn clamp_sel(&mut self) {
+        let (nc, nm) = (self.ticket.criteria.len(), self.ticket.comments.len());
+        self.sel = match self.sel {
+            Some(DetailSel::Criterion(i)) if nc > 0 => Some(DetailSel::Criterion(i.min(nc - 1))),
+            Some(DetailSel::Comment(i)) if nm > 0 => Some(DetailSel::Comment(i.min(nm - 1))),
+            _ => None,
+        };
+    }
 }
 
 /// A lifecycle change a key asks for on the selected ticket.
@@ -132,8 +196,16 @@ pub fn allowed(status: &str, archived: bool) -> Vec<Offer> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Confirm {
     pub id: String,
-    pub action: Lifecycle,
+    pub action: ConfirmAction,
     pub prompt: String,
+}
+
+/// What a confirm popup runs when answered yes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    Lifecycle(Lifecycle),
+    RemoveCriterion { number: i64 },
+    RemoveComment { comment_id: i64 },
 }
 
 /// A ticket text field the prompt or $EDITOR edits.
@@ -141,13 +213,22 @@ pub struct Confirm {
 pub enum TextField {
     Description,
     Plan,
+    /// A new comment: the editor opens on an empty file.
+    Comment,
 }
 
-/// What an open prompt will edit when submitted. Title only for now; a later
-/// evidence or comment prompt adds a variant here.
+/// What an open prompt will edit when submitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptField {
     Title,
+    /// Optional evidence for checking criterion `number`.
+    Evidence {
+        number: i64,
+    },
+    /// Text of a new criterion.
+    Criterion,
+    /// Body of a new comment.
+    Comment,
 }
 
 /// An open one-line prompt and the ticket it edits.
@@ -455,6 +536,32 @@ pub enum Effect {
         id: String,
         field: TextField,
     },
+    /// Check criterion `number`, with optional evidence.
+    CheckCriterion {
+        id: String,
+        number: i64,
+        evidence: Option<String>,
+    },
+    UncheckCriterion {
+        id: String,
+        number: i64,
+    },
+    AddCriterion {
+        id: String,
+        text: String,
+    },
+    RemoveCriterion {
+        id: String,
+        number: i64,
+    },
+    AddComment {
+        id: String,
+        body: String,
+    },
+    RemoveComment {
+        id: String,
+        comment_id: i64,
+    },
 }
 
 pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
@@ -478,10 +585,18 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
         }
         Event::DetailLoaded(Ok(ticket)) => {
             state.error = None;
-            state.detail = Some(Detail {
-                ticket: *ticket,
-                scroll: 0,
-            });
+            // A reload of the open ticket (after an action) keeps scroll and
+            // selection; another ticket starts fresh.
+            let mut d = Detail::new(*ticket);
+            if let Some(old) = &state.detail
+                && old.ticket.ticket.id == d.ticket.ticket.id
+            {
+                d.scroll = old.scroll;
+                d.sel = old.sel;
+                d.reveal = old.sel.is_some();
+                d.clamp_sel();
+            }
+            state.detail = Some(d);
             vec![]
         }
         Event::DetailLoaded(Err(e)) => {
@@ -527,7 +642,7 @@ fn lifecycle_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
             state.confirm = Some(Confirm {
                 prompt: format!("{label} {id}?"),
                 id,
-                action,
+                action: ConfirmAction::Lifecycle(action),
             });
             Some(vec![])
         }
@@ -565,6 +680,83 @@ fn edit_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
     })
 }
 
+/// Detail-only keys over criteria and comments: `[`/`]` move the selection,
+/// Space or `v` checks (via an evidence prompt) or unchecks the selected
+/// criterion, `n` adds a criterion, `X` removes the selection after a
+/// confirm, `m` adds a comment in the prompt and `M` in $EDITOR. Returns
+/// None for other keys; keys that need a selection are inert without one.
+fn criteria_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
+    if !matches!(c, ' ' | 'v' | 'n' | 'X' | 'm' | 'M' | '[' | ']') {
+        return None;
+    }
+    let d = state.detail.as_mut()?;
+    let id = d.ticket.ticket.id.clone();
+    let prompt = |label: &str, field| PromptState {
+        id: id.clone(),
+        field,
+        seed: String::new(),
+        prompt: Prompt::new(label, ""),
+    };
+    let criterion = match d.sel {
+        Some(DetailSel::Criterion(i)) => d.ticket.criteria.get(i).cloned(),
+        _ => None,
+    };
+    let comment = match d.sel {
+        Some(DetailSel::Comment(i)) => d.ticket.comments.get(i).cloned(),
+        _ => None,
+    };
+    Some(match c {
+        '[' | ']' => {
+            d.step(c == ']');
+            vec![]
+        }
+        ' ' | 'v' => match criterion {
+            Some(cr) if cr.checked => vec![Effect::UncheckCriterion {
+                id,
+                number: cr.number,
+            }],
+            Some(cr) => {
+                let p = prompt(
+                    "evidence (optional)",
+                    PromptField::Evidence { number: cr.number },
+                );
+                state.prompt = Some(p);
+                vec![]
+            }
+            None => vec![],
+        },
+        'n' => {
+            let p = prompt("criterion", PromptField::Criterion);
+            state.prompt = Some(p);
+            vec![]
+        }
+        'm' => {
+            let p = prompt("comment", PromptField::Comment);
+            state.prompt = Some(p);
+            vec![]
+        }
+        'M' => vec![Effect::EditExternal {
+            id,
+            field: TextField::Comment,
+        }],
+        _ => {
+            let (action, prompt) = match (criterion, comment) {
+                (Some(cr), _) => (
+                    ConfirmAction::RemoveCriterion { number: cr.number },
+                    format!("remove criterion {id}#{}?", cr.number),
+                ),
+                (_, Some(cm)) => (
+                    ConfirmAction::RemoveComment { comment_id: cm.id },
+                    format!("delete comment {}?", cm.id),
+                ),
+                _ => return Some(vec![]),
+            };
+            state.confirm = Some(Confirm { id, action, prompt });
+            vec![]
+        }
+    })
+}
+
 /// Keys while the prompt is open. Enter submits: an unchanged title makes no
 /// effect (no write); an empty one closes the prompt with an error.
 fn on_prompt_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
@@ -582,6 +774,27 @@ fn on_prompt_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
                 return vec![];
             };
             match p.field {
+                PromptField::Evidence { number } => vec![Effect::CheckCriterion {
+                    id: p.id,
+                    number,
+                    evidence: (!text.trim().is_empty()).then_some(text),
+                }],
+                PromptField::Criterion | PromptField::Comment if text.trim().is_empty() => {
+                    state.error = Some(
+                        if p.field == PromptField::Criterion {
+                            "criterion must not be empty"
+                        } else {
+                            "comment must not be empty"
+                        }
+                        .into(),
+                    );
+                    vec![]
+                }
+                PromptField::Criterion => vec![Effect::AddCriterion { id: p.id, text }],
+                PromptField::Comment => vec![Effect::AddComment {
+                    id: p.id,
+                    body: text,
+                }],
                 PromptField::Title if text.trim().is_empty() => {
                     state.error = Some("title must not be empty".into());
                     vec![]
@@ -602,9 +815,15 @@ fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     };
     match k.code {
-        KeyCode::Char('y') | KeyCode::Enter => vec![Effect::Transition {
-            id: c.id,
-            action: c.action,
+        KeyCode::Char('y') | KeyCode::Enter => vec![match c.action {
+            ConfirmAction::Lifecycle(action) => Effect::Transition { id: c.id, action },
+            ConfirmAction::RemoveCriterion { number } => {
+                Effect::RemoveCriterion { id: c.id, number }
+            }
+            ConfirmAction::RemoveComment { comment_id } => Effect::RemoveComment {
+                id: c.id,
+                comment_id,
+            },
         }],
         _ => vec![],
     }
@@ -616,7 +835,9 @@ fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     let page = state.page;
     let half = (page / 2).max(1);
     if let (KeyCode::Char(c), false) = (k.code, ctrl)
-        && let Some(fx) = lifecycle_key(state, c).or_else(|| edit_key(state, c))
+        && let Some(fx) = lifecycle_key(state, c)
+            .or_else(|| edit_key(state, c))
+            .or_else(|| criteria_key(state, c))
     {
         return fx;
     }
@@ -1440,5 +1661,206 @@ mod tests {
     fn edit_keys_are_inert_without_a_ticket() {
         let (s, fx) = drive(vec![press('e'), press('E'), press('P')]);
         assert!(fx.is_empty() && s.prompt.is_none());
+    }
+
+    fn rich_detail() -> TicketDetail {
+        let mut d = detail_of("D1");
+        d.criteria = serde_json::from_value(serde_json::json!([
+            {"checked": false, "checked_at": null, "checked_by": null, "evidence": null, "number": 1, "ref": "D1#1", "text": "a"},
+            {"checked": true, "checked_at": "t", "checked_by": {"author": "x", "session": null}, "evidence": "e", "number": 2, "ref": "D1#2", "text": "b"}
+        ]))
+        .unwrap();
+        d.comments = serde_json::from_value(serde_json::json!([
+            {"author": "x", "body": "hi", "created_at": "t", "id": 7, "role": null, "session": null}
+        ]))
+        .unwrap();
+        d
+    }
+
+    fn rich() -> State {
+        loaded(vec![Event::DetailLoaded(Ok(Box::new(rich_detail())))])
+    }
+
+    fn sel(s: &State) -> Option<DetailSel> {
+        s.detail.as_ref().unwrap().sel
+    }
+
+    #[test]
+    fn brackets_walk_criteria_then_comments_without_wrapping() {
+        let mut s = rich();
+        assert_eq!(sel(&s), None);
+        let want = [
+            DetailSel::Criterion(0),
+            DetailSel::Criterion(1),
+            DetailSel::Comment(0),
+            DetailSel::Comment(0),
+        ];
+        for w in want {
+            assert!(update(&mut s, press(']')).is_empty());
+            assert_eq!(sel(&s), Some(w));
+        }
+        update(&mut s, press('['));
+        assert_eq!(sel(&s), Some(DetailSel::Criterion(1)));
+        update(&mut s, press('['));
+        update(&mut s, press('['));
+        assert_eq!(sel(&s), Some(DetailSel::Criterion(0)));
+        // Backward from nothing starts at the last item.
+        let mut s = rich();
+        update(&mut s, press('['));
+        assert_eq!(sel(&s), Some(DetailSel::Comment(0)));
+        // Nothing to select: inert.
+        let mut s = opened();
+        update(&mut s, press(']'));
+        assert_eq!(sel(&s), None);
+    }
+
+    #[test]
+    fn space_on_unchecked_prompts_for_evidence_then_checks() {
+        for (typed, want) in [("proof", Some("proof")), ("", None)] {
+            let mut s = rich();
+            update(&mut s, press(']'));
+            assert!(update(&mut s, press(' ')).is_empty());
+            assert_eq!(
+                s.prompt.as_ref().unwrap().prompt.label,
+                "evidence (optional)"
+            );
+            type_str(&mut s, typed);
+            assert_eq!(
+                update(&mut s, code(KeyCode::Enter)),
+                vec![Effect::CheckCriterion {
+                    id: "D1".into(),
+                    number: 1,
+                    evidence: want.map(String::from),
+                }]
+            );
+        }
+        let mut s = rich();
+        update(&mut s, press('v'));
+        assert!(s.prompt.is_none(), "inert without a selection");
+        update(&mut s, press(']'));
+        update(&mut s, press('v'));
+        update(&mut s, code(KeyCode::Esc));
+        assert!(s.prompt.is_none());
+    }
+
+    #[test]
+    fn space_on_checked_unchecks_and_is_inert_on_a_comment() {
+        let mut s = rich();
+        update(&mut s, press(']'));
+        update(&mut s, press(']'));
+        assert_eq!(
+            update(&mut s, press(' ')),
+            vec![Effect::UncheckCriterion {
+                id: "D1".into(),
+                number: 2
+            }]
+        );
+        update(&mut s, press(']'));
+        assert!(update(&mut s, press(' ')).is_empty());
+        assert!(s.prompt.is_none());
+    }
+
+    #[test]
+    fn n_adds_a_criterion_and_refuses_empty() {
+        let mut s = rich();
+        update(&mut s, press('n'));
+        type_str(&mut s, "new one");
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::AddCriterion {
+                id: "D1".into(),
+                text: "new one".into()
+            }]
+        );
+        update(&mut s, press('n'));
+        assert!(update(&mut s, code(KeyCode::Enter)).is_empty());
+        assert_eq!(s.error.as_deref(), Some("criterion must not be empty"));
+    }
+
+    #[test]
+    fn x_removes_criterion_or_comment_after_confirm() {
+        let mut s = rich();
+        update(&mut s, press('X'));
+        assert!(s.confirm.is_none(), "inert without a selection");
+        update(&mut s, press(']'));
+        update(&mut s, press(']'));
+        update(&mut s, press('X'));
+        assert_eq!(s.confirm.as_ref().unwrap().prompt, "remove criterion D1#2?");
+        assert_eq!(
+            update(&mut s, press('y')),
+            vec![Effect::RemoveCriterion {
+                id: "D1".into(),
+                number: 2
+            }]
+        );
+        update(&mut s, press(']'));
+        update(&mut s, press('X'));
+        assert_eq!(s.confirm.as_ref().unwrap().prompt, "delete comment 7?");
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::RemoveComment {
+                id: "D1".into(),
+                comment_id: 7
+            }]
+        );
+        update(&mut s, press('X'));
+        assert!(update(&mut s, press('n')).is_empty());
+        assert!(s.confirm.is_none());
+    }
+
+    #[test]
+    fn m_prompts_for_a_comment_and_capital_m_uses_the_editor() {
+        let mut s = rich();
+        update(&mut s, press('m'));
+        assert_eq!(s.prompt.as_ref().unwrap().prompt.label, "comment");
+        assert!(update(&mut s, code(KeyCode::Enter)).is_empty());
+        assert_eq!(s.error.as_deref(), Some("comment must not be empty"));
+        update(&mut s, press('m'));
+        type_str(&mut s, "note");
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::AddComment {
+                id: "D1".into(),
+                body: "note".into()
+            }]
+        );
+        assert_eq!(
+            update(&mut s, press('M')),
+            vec![Effect::EditExternal {
+                id: "D1".into(),
+                field: TextField::Comment
+            }]
+        );
+    }
+
+    #[test]
+    fn criteria_keys_do_nothing_on_the_board() {
+        let (s, fx) = drive(vec![press('n'), press('m'), press('X'), press(']')]);
+        assert!(fx.is_empty() && s.prompt.is_none() && s.confirm.is_none());
+    }
+
+    #[test]
+    fn reload_keeps_and_clamps_selection_for_same_ticket() {
+        let mut s = rich();
+        for _ in 0..3 {
+            update(&mut s, press(']'));
+        }
+        s.detail.as_mut().unwrap().scroll = 4;
+        let mut shrunk = rich_detail();
+        shrunk.comments.clear();
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(shrunk))));
+        assert_eq!(sel(&s), None);
+        assert_eq!(s.detail.as_ref().unwrap().scroll, 4);
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(rich_detail()))));
+        update(&mut s, press(']'));
+        update(&mut s, press(']'));
+        let mut fewer = rich_detail();
+        fewer.criteria.truncate(1);
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(fewer))));
+        assert_eq!(sel(&s), Some(DetailSel::Criterion(0)));
+        // A different ticket resets.
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(detail_of("D2")))));
+        assert_eq!(sel(&s), None);
+        assert_eq!(s.detail.as_ref().unwrap().scroll, 0);
     }
 }

@@ -62,6 +62,52 @@ pub fn run_effect(conn: &mut Connection, cwd: &Path, identity: &Identity, effect
         Effect::EditTitle { id, title } => {
             Event::ActionDone(edit_title(conn, &id, &title, identity))
         }
+        Effect::CheckCriterion {
+            id,
+            number,
+            evidence,
+        } => {
+            let r = format!("{id}#{number}");
+            Event::ActionDone(
+                ticket::check(conn, &r, evidence.as_deref(), identity)
+                    .map(|_| format!("{r} checked"))
+                    .map_err(|e| e.to_string()),
+            )
+        }
+        Effect::UncheckCriterion { id, number } => {
+            let r = format!("{id}#{number}");
+            Event::ActionDone(
+                ticket::uncheck(conn, &r)
+                    .map(|_| format!("{r} unchecked"))
+                    .map_err(|e| e.to_string()),
+            )
+        }
+        Effect::AddCriterion { id, text } => Event::ActionDone(
+            ticket::criteria_add(conn, &id, &text)
+                .map(|d| {
+                    let n = d.criteria.iter().map(|c| c.number).max().unwrap_or(0);
+                    format!("{id}#{n} added")
+                })
+                .map_err(|e| e.to_string()),
+        ),
+        Effect::RemoveCriterion { id, number } => {
+            let r = format!("{id}#{number}");
+            Event::ActionDone(
+                ticket::criteria_rm(conn, &r)
+                    .map(|_| format!("{r} removed"))
+                    .map_err(|e| e.to_string()),
+            )
+        }
+        Effect::AddComment { id, body } => Event::ActionDone(
+            ticket::comment_add(conn, &id, &body, identity)
+                .map(|_| format!("comment added to {id}"))
+                .map_err(|e| e.to_string()),
+        ),
+        Effect::RemoveComment { id, comment_id } => Event::ActionDone(
+            ticket::comment_rm(conn, &id, comment_id)
+                .map(|_| format!("comment {comment_id} deleted"))
+                .map_err(|e| e.to_string()),
+        ),
         // Only the run loop holds the terminal; it intercepts this before here.
         Effect::EditExternal { .. } => {
             Event::ActionDone(Err("external edit needs the terminal".into()))
@@ -129,9 +175,18 @@ pub fn apply_external(
     } else {
         edited.strip_suffix('\n').unwrap_or(edited)
     };
+    if field == TextField::Comment {
+        if edited.trim().is_empty() {
+            return Ok("no comment added".into());
+        }
+        return ticket::comment_add(conn, id, edited, identity)
+            .map(|_| format!("comment added to {id}"))
+            .map_err(|e| e.to_string());
+    }
     let name = match field {
         TextField::Description => "description",
         TextField::Plan => "plan",
+        TextField::Comment => unreachable!("handled above"),
     };
     if edited == seed {
         return Ok(format!("{id} {name} unchanged"));
@@ -162,6 +217,7 @@ pub fn external_edit(
     let seed = match field {
         TextField::Description => detail.description,
         TextField::Plan => detail.plan,
+        TextField::Comment => String::new(),
     };
     let mut file = tempfile::Builder::new()
         .prefix("scree-")
@@ -575,5 +631,141 @@ mod tests {
         let e = run_editor("false", Path::new("/")).unwrap_err();
         assert!(e.starts_with("editor failed"), "{e}");
         assert_eq!(ticket::show(&conn, &id).unwrap().description, "keep");
+    }
+
+    fn run(conn: &mut Connection, eff: Effect) -> Result<String, String> {
+        let human = Identity {
+            role: Role::Human,
+            author: "human".into(),
+            session: None,
+        };
+        let Event::ActionDone(r) = run_effect(conn, Path::new("/"), &human, eff) else {
+            panic!("not ActionDone");
+        };
+        r
+    }
+
+    #[test]
+    fn criteria_end_to_end_with_human_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add(
+            &mut conn,
+            NewStatus::Ready,
+            ForWho::Agent,
+            &["one".to_string(), "two".to_string()],
+        );
+        let check = |number, evidence: Option<&str>| Effect::CheckCriterion {
+            id: id.clone(),
+            number,
+            evidence: evidence.map(String::from),
+        };
+        assert_eq!(
+            run(&mut conn, check(1, Some("ran it"))).unwrap(),
+            format!("{id}#1 checked")
+        );
+        run(&mut conn, check(2, None)).unwrap();
+        let d = ticket::show(&conn, &id).unwrap();
+        assert!(d.criteria[0].checked && d.criteria[1].checked);
+        assert_eq!(d.criteria[0].evidence.as_deref(), Some("ran it"));
+        assert_eq!(d.criteria[1].evidence, None);
+        let by = d.criteria[0].checked_by.as_ref().unwrap();
+        assert_eq!(by.author, "human");
+        let eff = Effect::UncheckCriterion {
+            id: id.clone(),
+            number: 1,
+        };
+        assert_eq!(run(&mut conn, eff).unwrap(), format!("{id}#1 unchecked"));
+        let d = ticket::show(&conn, &id).unwrap();
+        assert!(!d.criteria[0].checked && d.criteria[0].evidence.is_none());
+        let eff = Effect::AddCriterion {
+            id: id.clone(),
+            text: "three".into(),
+        };
+        assert_eq!(run(&mut conn, eff).unwrap(), format!("{id}#3 added"));
+        assert_eq!(ticket::show(&conn, &id).unwrap().criteria.len(), 3);
+        let eff = Effect::RemoveCriterion {
+            id: id.clone(),
+            number: 3,
+        };
+        assert_eq!(run(&mut conn, eff).unwrap(), format!("{id}#3 removed"));
+        assert_eq!(ticket::show(&conn, &id).unwrap().criteria.len(), 2);
+        // Errors become text.
+        assert!(run(&mut conn, check(9, None)).is_err());
+        let eff = Effect::RemoveCriterion {
+            id: id.clone(),
+            number: 9,
+        };
+        assert!(run(&mut conn, eff).is_err());
+        let eff = Effect::AddCriterion {
+            id: id.clone(),
+            text: " ".into(),
+        };
+        assert!(run(&mut conn, eff).is_err());
+    }
+
+    #[test]
+    fn comments_add_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add(&mut conn, NewStatus::Ready, ForWho::Agent, &[]);
+        let eff = Effect::AddComment {
+            id: id.clone(),
+            body: "hello".into(),
+        };
+        assert_eq!(
+            run(&mut conn, eff).unwrap(),
+            format!("comment added to {id}")
+        );
+        let d = ticket::show(&conn, &id).unwrap();
+        assert_eq!(
+            (d.comments.len(), d.comments[0].author.as_str()),
+            (1, "human")
+        );
+        let cid = d.comments[0].id;
+        let eff = Effect::RemoveComment {
+            id: id.clone(),
+            comment_id: cid,
+        };
+        assert_eq!(
+            run(&mut conn, eff).unwrap(),
+            format!("comment {cid} deleted")
+        );
+        assert!(ticket::show(&conn, &id).unwrap().comments.is_empty());
+        let eff = Effect::RemoveComment {
+            id: id.clone(),
+            comment_id: cid,
+        };
+        assert!(run(&mut conn, eff).is_err());
+        let eff = Effect::AddComment {
+            id: id.clone(),
+            body: "  ".into(),
+        };
+        assert!(run(&mut conn, eff).is_err());
+    }
+
+    #[test]
+    fn external_comment_added_only_when_not_blank() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add(&mut conn, NewStatus::Ready, ForWho::Agent, &[]);
+        let script = dir.path().join("ed.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'long\\ntext\\n' >> \"$1\"\n").unwrap();
+        let cmd = format!("sh {}", script.display());
+        let r = external_edit(&mut conn, &id, TextField::Comment, &agent(), |p| {
+            run_editor(&cmd, p)
+        });
+        assert_eq!(r.unwrap(), format!("comment added to {id}"));
+        let d = ticket::show(&conn, &id).unwrap();
+        assert_eq!(d.comments.len(), 1);
+        assert_eq!(d.comments[0].body, "long\ntext");
+        let blank = dir.path().join("blank.sh");
+        std::fs::write(&blank, "#!/bin/sh\nprintf '  \\n' >> \"$1\"\n").unwrap();
+        let cmd = format!("sh {}", blank.display());
+        let r = external_edit(&mut conn, &id, TextField::Comment, &agent(), |p| {
+            run_editor(&cmd, p)
+        });
+        assert_eq!(r.unwrap(), "no comment added");
+        assert_eq!(ticket::show(&conn, &id).unwrap().comments.len(), 1);
     }
 }
