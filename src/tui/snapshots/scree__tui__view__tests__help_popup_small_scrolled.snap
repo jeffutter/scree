@@ -2,27 +2,27 @@
 source: src/tui/view.rs
 expression: "bottom.join(\"\\n\")"
 ---
-scre+help (j/k scroll, Esc closes) - end-----------------------------------+
-+dra|  g/G                        top/bottom                               |1)-+
-|- S|  [ ]                        select previous/next criterion or comment|ed~|
-|   |  Space, v                   check (evidence prompt) / uncheck        |   |
-|   |  n                          add criterion                            |   |
-|   |  m M                        add comment in prompt / editor           |   |
-|   |  X                          remove criterion or comment (confirm)    |   |
-|   |  b B                        add / remove blocker                     |   |
-|   |  r S R d D x o A e E P      as on the board                          |   |
-|   |  Esc, q, h, Left            back to board/list                       |   |
-|   |  ?                          this help                                |   |
-|   |  Ctrl-c                     quit                                     |   |
-|   |                                                                      |   |
-|   |Popups and prompts:                                                   |   |
-|   |  Filter: s f b              cycle status / for / blocked             |   |
-|   |  Filter: x                  clear all filters                        |   |
-|   |  Filter: Esc, Enter         close                                    |   |
-|   |  Picker: type               filter tickets                           |   |
-|   |  Picker: Up/Down, Ctrl-p/n  move                                     |   |
-|   |  Picker: Enter, Esc         apply, cancel                            |   |
-|   |  Prompt: Enter, Esc         save, cancel                             |   |
-+---|  Confirm: y, Enter          confirm; any other key cancels           |---+
-[Ent|  Help: Esc, ?, q            close                                    |e
-[g/G+----------------------------------------------------------------------+
++help (j/k scroll, Esc closes) - end-------------------------------------------+
+|  g/G                        top/bottom                                       |
+|  [ ]                        select previous/next criterion or comment        |
+|  Space, v                   check (evidence prompt) / uncheck                |
+|  n                          add criterion                                    |
+|  m M                        add comment in prompt / editor                   |
+|  X                          remove criterion or comment (confirm)            |
+|  b B                        add / remove blocker                             |
+|  r S R d D x o A e E P      as on the board                                  |
+|  Esc, q, h, Left            back to board/list                               |
+|  ?                          this help                                        |
+|  Ctrl-c                     quit                                             |
+|                                                                              |
+|Popups and prompts:                                                           |
+|  Filter: s f b              cycle status / for / blocked                     |
+|  Filter: x                  clear all filters                                |
+|  Filter: Esc, Enter         close                                            |
+|  Picker: type               filter tickets                                   |
+|  Picker: Up/Down, Ctrl-p/n  move                                             |
+|  Picker: Enter, Esc         apply, cancel                                    |
+|  Prompt: Enter, Esc         save, cancel                                     |
+|  Confirm: y, Enter          confirm; any other key cancels                   |
+|  Help: Esc, ?, q            close                                            |
++------------------------------------------------------------------------------+

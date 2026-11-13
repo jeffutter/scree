@@ -6,7 +6,7 @@ It runs as Role human with author `human` unless `--role`, `--author` or their `
 
 ## Views
 
-- Board: one column per status (draft, ready, active, done, abandoned).
+- Board: one column per status (draft, ready, active, done, abandoned). Empty columns collapse to a narrow strip. When the terminal is too narrow for the columns to stay readable side by side (each expanded column needs 22 cells, each strip 5), the columns are stacked top to bottom instead, each using the full width; empty ones collapse to a short pane. The layout is chosen on every draw, so resizing switches it without a restart. `h`/`l` still move to the previous/next column, which is up/down on screen in the stacked layout.
 - List: one row per ticket. `Tab` switches between board and list.
 - Detail: `Enter` opens the selected ticket full-pane: every field, blocked-by, subtasks, criteria with evidence and comments, as plain text. Esc, `q`, `h` or Left return to the board or list.
 
@@ -22,7 +22,7 @@ Board and list:
 
 | Key | Action |
 | --- | --- |
-| `h`/`l`, Left/Right | previous/next column (board) |
+| `h`/`l`, Left/Right | previous/next column (board; up/down on screen when stacked) |
 | `j`/`k`, Down/Up | next/previous row |
 | PgUp/PgDn | page up/down |
 | Ctrl-u/Ctrl-d | half page up/down |

@@ -36,7 +36,10 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
     (
         "Board and list",
         &[
-            ("h/l, Left/Right", "previous/next column (board)"),
+            (
+                "h/l, Left/Right",
+                "previous/next column (board; up/down when stacked)",
+            ),
             ("j/k, Down/Up", "next/previous row"),
             ("PgUp/PgDn", "page up/down"),
             ("Ctrl-u/Ctrl-d", "half page up/down"),
@@ -418,38 +421,50 @@ fn row_line(t: &Ticket, width: usize, theme: &Theme) -> Line<'static> {
 /// Width of a collapsed (empty) board column: 2 border cells + 3 title chars.
 const COLLAPSED_W: u16 = 5;
 
-/// Least inner width a non-collapsed column must keep for strips to be used.
+/// Least inner width a non-collapsed column must keep to stay readable.
 const MIN_FILL_W: u16 = 20;
+
+/// Height of a collapsed (empty) column in the stacked layout: 2 border rows
+/// plus one blank row.
+const COLLAPSED_H: u16 = 3;
+
+/// Whether the board must stack its columns vertically: the columns do not
+/// fit side by side at their readable width (2 border cells + `MIN_FILL_W`
+/// per expanded column, `COLLAPSED_W` per collapsed one).
+fn stack_columns(width: u16, n_fill: usize, n_collapsed: usize) -> bool {
+    let need = n_fill * usize::from(MIN_FILL_W + 2) + n_collapsed * usize::from(COLLAPSED_W);
+    usize::from(width) < need
+}
 
 fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let cols = state.visible_columns();
     // Empty columns collapse to a narrow strip (derived from the data at
     // draw time, so a column expands as soon as it gains a ticket). When
-    // every column is empty, or the strips would not fit, share the width
-    // equally so full titles stay readable.
+    // every column is empty none collapse, so full titles stay readable.
     // The focused column never collapses, so its full title stays visible.
+    // The layout is decided from the area width on every draw: when the
+    // columns would be too thin side by side they are stacked top to bottom.
+    let any_populated = cols.iter().any(|&c| !state.column(c).is_empty());
     let collapsed: Vec<bool> = cols
         .iter()
-        .map(|&c| c != state.col && state.column(c).is_empty())
+        .map(|&c| any_populated && c != state.col && state.column(c).is_empty())
         .collect();
     let n_collapsed = collapsed.iter().filter(|&&x| x).count();
     let n_fill = cols.len() - n_collapsed;
-    let strips_w = n_collapsed * usize::from(COLLAPSED_W);
-    let any_populated = cols.iter().any(|&c| !state.column(c).is_empty());
-    let use_strips = n_collapsed > 0
-        && any_populated
-        && usize::from(area.width).saturating_sub(strips_w) >= n_fill * usize::from(MIN_FILL_W);
+    let stacked = stack_columns(area.width, n_fill, n_collapsed);
     let constraints: Vec<Constraint> = collapsed
         .iter()
-        .map(|&e| {
-            if use_strips && e {
-                Constraint::Length(COLLAPSED_W)
-            } else {
-                Constraint::Fill(1)
-            }
+        .map(|&e| match (e, stacked) {
+            (true, true) => Constraint::Length(COLLAPSED_H),
+            (true, false) => Constraint::Length(COLLAPSED_W),
+            (false, _) => Constraint::Fill(1),
         })
         .collect();
-    let areas = Layout::horizontal(constraints).split(area);
+    let areas = if stacked {
+        Layout::vertical(constraints).split(area)
+    } else {
+        Layout::horizontal(constraints).split(area)
+    };
     let mut offsets = state.offsets;
     for (&c, &pane) in cols.iter().zip(areas.iter()) {
         let tickets = state.column(c);
@@ -1050,7 +1065,16 @@ mod tests {
     }
 
     #[test]
-    fn narrow_width_falls_back_to_equal_columns() {
+    fn stack_threshold_boundary() {
+        // 5 expanded columns need 5 * 22 = 110 cells.
+        assert!(!stack_columns(110, 5, 0));
+        assert!(stack_columns(109, 5, 0));
+        // 1 expanded + 4 strips need 22 + 4 * 5 = 42 cells.
+        assert!(!stack_columns(42, 1, 4));
+        assert!(stack_columns(41, 1, 4));
+    }
+
+    fn ready_only_state() -> State {
         let mut s = sample_state();
         let t: Vec<_> = s
             .tickets
@@ -1059,14 +1083,48 @@ mod tests {
             .cloned()
             .collect();
         crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
-        // Width 30, one populated column: strips would leave it 10 cells.
-        // Equal split gives every column 6, so no 5-wide strips appear: the
-        // first border row has 5 equal 6-cell panes.
-        let top = render(&mut s, 30, 8)[1].clone();
-        let corners = top.chars().filter(|&c| c == '+').count();
-        assert_eq!(corners, 2 * cols_count(&s));
-        // At 110 wide the populated column shows its full title and count.
-        assert!(render(&mut s, 110, 8)[1].contains("ready ("));
+        s.col = STATUSES.iter().position(|&x| x == "ready").unwrap();
+        s
+    }
+
+    #[test]
+    fn narrow_width_stacks_columns_vertically() {
+        let mut s = ready_only_state();
+        // Width 41 is one under the threshold for 1 expanded + 4 strips.
+        let out = render(&mut s, 41, 24);
+        // Every column title sits on its own row, full width, left-aligned.
+        let titles: Vec<&String> = out
+            .iter()
+            .filter(|l| l.starts_with('+') && l.chars().any(char::is_alphabetic))
+            .collect();
+        assert_eq!(titles.len(), cols_count(&s), "{}", out.join("\n"));
+        for t in titles {
+            assert!(t.ends_with('+') && t.chars().count() >= 41, "{t}");
+        }
+        // The populated column shows its title and count; empty ones collapse
+        // to a short stacked pane and still show the full name.
+        let joined = out.join("\n");
+        assert!(joined.contains("ready ("), "{joined}");
+        assert!(joined.contains("abandoned"), "{joined}");
+    }
+
+    #[test]
+    fn at_threshold_columns_stay_side_by_side() {
+        let mut s = ready_only_state();
+        let out = render(&mut s, 42, 12);
+        // Side by side: the first border row holds all five panes.
+        let corners = out[1].chars().filter(|&c| c == '+').count();
+        assert_eq!(corners, 2 * cols_count(&s), "{}", out.join("\n"));
+    }
+
+    #[test]
+    fn resizing_across_threshold_switches_layout() {
+        let mut s = ready_only_state();
+        let wide = render(&mut s, 42, 12);
+        let narrow = render(&mut s, 41, 12);
+        let wide_again = render(&mut s, 42, 12);
+        assert_ne!(wide, narrow);
+        assert_eq!(wide, wide_again);
     }
 
     fn cols_count(s: &State) -> usize {
