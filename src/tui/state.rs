@@ -734,23 +734,25 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             vec![]
         }
         Event::Loaded(Ok(tickets)) => {
-            // If the selected ticket vanished, move to its neighbour in the
-            // order the user was navigating: the next survivor, else the previous.
+            // If the selected ticket vanished, or is still loaded but no
+            // longer passes the filter, move to its neighbour in the order
+            // the user was navigating: the next survivor, else the previous.
             let old_ids = state.nav_ids();
             state.tickets = tickets;
+            let alive =
+                |st: &State, id: &String| st.tickets.iter().any(|t| t.id == *id && st.matches(t));
             if let Some(sel) = state.selected_id.clone()
-                && !state.tickets.iter().any(|t| t.id == sel)
+                && !alive(state, &sel)
                 && let Some(pos) = old_ids.iter().position(|i| *i == sel)
             {
-                let alive = |i: &&String| state.tickets.iter().any(|t| t.id == **i);
                 state.selected_id = old_ids[pos + 1..]
                     .iter()
-                    .find(alive)
-                    .or_else(|| old_ids[..pos].iter().rev().find(alive))
+                    .find(|i| alive(state, i))
+                    .or_else(|| old_ids[..pos].iter().rev().find(|i| alive(state, i)))
                     .cloned();
             }
             state.error = None;
-            state.reselect();
+            state.refilter();
             // Every reload (db change, action, scope switch) refreshes an
             // open detail, so it never shows stale status or comments.
             state
@@ -2620,6 +2622,40 @@ mod tests {
         .into();
         update(&mut s, Event::DescriptionsLoaded(Ok(d)));
         s
+    }
+
+    #[test]
+    fn loaded_moves_selection_when_selected_stops_matching_filter() {
+        for view in [View::Board, View::List] {
+            let mut s = State::default();
+            update(&mut s, Event::Loaded(Ok(sample())));
+            s.view = view;
+            s.filter.status = Some(1);
+            s.refilter();
+            s.selected_id = Some("R2".into());
+            s.reselect();
+            assert_eq!(s.selected_id.as_deref(), Some("R2"));
+            let mut t = sample();
+            t[2] = ticket("R2", "active");
+            update(&mut s, Event::Loaded(Ok(t)));
+            assert_eq!(s.selected_id.as_deref(), Some("R3"), "{view:?}");
+        }
+    }
+
+    #[test]
+    fn loaded_clears_selection_when_nothing_matches_filter() {
+        for view in [View::Board, View::List] {
+            let mut s = State::default();
+            update(&mut s, Event::Loaded(Ok(sample())));
+            s.view = view;
+            s.filter.status = Some(1);
+            s.refilter();
+            s.selected_id = Some("R2".into());
+            s.reselect();
+            let t = vec![ticket("R1", "active"), ticket("R2", "active")];
+            update(&mut s, Event::Loaded(Ok(t)));
+            assert_eq!(s.selected_id, None, "{view:?}");
+        }
     }
 
     fn ids(s: &State) -> Vec<String> {
