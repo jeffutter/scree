@@ -68,12 +68,15 @@ function countsLine(groups) {
     .map((g) => `${g.tickets.length} ${g.status}`).join(", ");
 }
 
+// Done tickets are fetched with --done-since so the server's position order cannot drop recent ones.
+const DONE_DAYS = 7;
+
 // The two list calls of one poll: open tickets, and done tickets (for the Done count and tail).
 function listArgs(allWorktrees) {
   const scope = allWorktrees ? ["--all-worktrees"] : [];
   return {
     open: ["--json", "list", ...scope, "--status", "draft", "--status", "ready", "--status", "active", "--limit", "200"],
-    done: ["--json", "list", ...scope, "--status", "done", "--limit", "500"],
+    done: ["--json", "list", ...scope, "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "500"],
   };
 }
 
@@ -123,7 +126,7 @@ function boardListArgs() {
   const open = BOARD_COLUMNS.filter((s) => s !== "done");
   return {
     open: ["--json", "list", "--all-projects", ...open.flatMap((s) => ["--status", s]), "--limit", "1000"],
-    done: ["--json", "list", "--all-projects", "--status", "done", "--limit", "1000"],
+    done: ["--json", "list", "--all-projects", "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "1000"],
   };
 }
 
@@ -140,7 +143,7 @@ function machineLabel(on) { return on ? String(on) : "this computer"; }
 // Filters apply first; abandoned, archived and done older than doneDays are dropped. Projects sort
 // by key with LOCAL (no root) last; lanes list the root checkout first, then worktrees by path.
 // Tickets keep list order (position) inside a cell. Empty lanes and projects are omitted.
-function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.now(), doneDays = 7 } = {}) {
+function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.now(), doneDays = DONE_DAYS } = {}) {
   const cutoff = now - doneDays * 86400000;
   const projects = new Map();
   for (const t of applyFilters(tickets, { forRole, blockedOnly })) {
@@ -270,12 +273,10 @@ export default class Scree extends View {
         if (this.mode === "board") {
           // Two calls on the focused space's machine; all-projects needs no repo, so a missing cwd is fine.
           const bargs = boardListArgs();
-          const open = JSON.parse(await this.scree(bargs.open, loc));
-          const done = JSON.parse(await this.scree(bargs.done, loc));
+          const [open, done] = (await Promise.all([this.scree(bargs.open, loc), this.scree(bargs.done, loc)])).map((x) => JSON.parse(x));
           if (this.key() === context) { this.board = [...(open.tickets ?? []), ...(done.tickets ?? [])]; this.error = null; this.loaded = true; }
         } else {
-          const open = JSON.parse(await this.scree(args.open, loc));
-          const done = JSON.parse(await this.scree(args.done, loc));
+          const [open, done] = (await Promise.all([this.scree(args.open, loc), this.scree(args.done, loc)])).map((x) => JSON.parse(x));
           if (this.key() === context) { this.open = open.tickets ?? []; this.done = done.tickets ?? []; this.error = null; this.loaded = true; }
         }
       } catch (e) {

@@ -204,6 +204,10 @@ pub struct ListArgs {
     /// Default 50
     #[arg(long)]
     pub limit: Option<u32>,
+    /// Only tickets done at or after this time: an RFC 3339 timestamp or `Nd` (N days ago).
+    /// Applies before --limit, so recent done tickets are not cut off by position.
+    #[arg(long, value_name = "WHEN")]
+    pub done_since: Option<String>,
     #[command(flatten)]
     pub scope: ScopeArgs,
     /// Include archived tickets

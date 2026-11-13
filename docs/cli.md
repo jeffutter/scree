@@ -52,7 +52,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 
 - `add TITLE [--parent ID] [--description TEXT|-] [--plan TEXT|-] [--criterion TEXT]... [--for agent|human] [--status draft|ready] [--blocked-by ID]... [--key KEY]`. Default status is `draft`. `--key` is accepted only when the Project is first seen. A subtask inherits its parent's Scope.
 - `show ID`: the full ticket. Never sweeps.
-- `list [--status S]... [--for agent|human] [--blocked] [--available] [--parent ID] [--mine] [--limit N]`. With no `--status`, shows draft, ready and active; `--status` may name done and abandoned. Default limit 50. Sorted by `(position, number)`.
+- `list [--status S]... [--for agent|human] [--blocked] [--available] [--parent ID] [--mine] [--limit N] [--done-since WHEN]`. With no `--status`, shows draft, ready and active; `--status` may name done and abandoned. Default limit 50. `--done-since` keeps tickets done at or after an RFC 3339 timestamp or `Nd` (N days ago); it applies before the limit, so recently done tickets are not cut off by position. Sorted by `(position, number)`.
 - `next [--for agent|human] [--limit N]`. Returns the first Available ticket for the given `for` (default: the caller's Role). Prints a count of human tickets that were hidden. With nothing available it exits 0 and returns an empty list.
 
 ### Change

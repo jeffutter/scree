@@ -197,3 +197,47 @@ fn tui_without_a_tty_exits_2_and_leaves_terminal_and_db_alone() {
     assert!(out.stdout.is_empty(), "no escape sequences on stdout");
     assert!(!db.exists(), "must not open the database");
 }
+
+#[test]
+fn done_since_applies_before_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("scree.db");
+    for t in ["one", "two", "three"] {
+        assert_eq!(scree_args(&db, &["add", t]).status.code(), Some(0));
+    }
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "UPDATE tickets SET status = 'done', done_at = '2020-01-01T00:00:00Z' WHERE number IN (1, 2);
+         UPDATE tickets SET status = 'done', done_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE number = 3;",
+    )
+    .unwrap();
+    let ids = |extra: &[&str]| -> Vec<String> {
+        let mut args = vec!["list", "--status", "done", "--limit", "2"];
+        args.extend(extra);
+        let out = scree_args(&db, &args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let plain = ids(&[]);
+    assert_eq!(plain.len(), 2);
+    let recent = ids(&["--done-since", "7d"]);
+    assert_eq!(recent.len(), 1);
+    assert!(
+        !plain.contains(&recent[0]),
+        "recent ticket sits past the limit by position"
+    );
+    assert_eq!(ids(&["--done-since", "2021-01-01T00:00:00Z"]), recent);
+    let bad = scree_args(&db, &["list", "--done-since", "soon"]);
+    assert_eq!(bad.status.code(), Some(2));
+}

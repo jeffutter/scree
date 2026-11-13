@@ -940,6 +940,27 @@ fn select_ids(
         .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+/// Resolve `--done-since` (`Nd` or an RFC 3339 timestamp) to the
+/// `YYYY-MM-DDTHH:MM:SSZ` form `done_at` is stored in, using SQLite's date
+/// functions so no time dependency is needed.
+fn done_since_bound(conn: &Connection, when: &str) -> Result<String> {
+    let bad = || {
+        Error::Usage(format!(
+            "invalid --done-since {when:?}: use an RFC 3339 timestamp or Nd (N days ago)"
+        ))
+    };
+    let when = when.trim();
+    let (expr, arg) = match when.strip_suffix('d').map(str::parse::<u32>) {
+        Some(Ok(days)) => (
+            "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)",
+            format!("-{days} days"),
+        ),
+        _ => ("strftime('%Y-%m-%dT%H:%M:%SZ', ?)", when.to_string()),
+    };
+    let bound: Option<String> = conn.query_row(&format!("SELECT {expr}"), [arg], |r| r.get(0))?;
+    bound.ok_or_else(bad)
+}
+
 pub fn list(
     conn: &Connection,
     cwd: &Path,
@@ -973,6 +994,10 @@ pub fn list(
     }
     if !a.archived {
         conds.push("t.archived_at IS NULL".into());
+    }
+    if let Some(when) = &a.done_since {
+        conds.push("t.done_at >= ?".into());
+        args.push(Sql::Text(done_since_bound(conn, when)?));
     }
     if a.blocked {
         conds.push(BLOCKED.into());
