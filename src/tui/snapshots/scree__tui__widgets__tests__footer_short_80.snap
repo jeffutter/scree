@@ -1,0 +1,5 @@
+---
+source: src/tui/widgets.rs
+expression: "footer(80, &[(\"q\", \"quit\")])"
+---
+[q] quit

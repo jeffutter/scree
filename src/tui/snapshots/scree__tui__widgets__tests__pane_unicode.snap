@@ -1,0 +1,7 @@
+---
+source: src/tui/widgets.rs
+expression: dump(&t)
+---
+┌Tickets───┐
+│          │
+└──────────┘

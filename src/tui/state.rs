@@ -3,16 +3,33 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use super::theme::Theme;
 use crate::model::Ticket;
+use crate::scope::Scope;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
     /// "role/author" shown in the header.
     pub who: String,
+    pub scope: Scope,
+    pub theme: Theme,
     pub tickets: Vec<Ticket>,
     /// The last load error, shown in the footer.
     pub error: Option<String>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            should_quit: false,
+            who: String::new(),
+            scope: Scope::Unscoped,
+            theme: Theme::default(),
+            tickets: vec![],
+            error: None,
+        }
+    }
 }
 
 #[derive(Debug)]

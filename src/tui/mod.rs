@@ -7,7 +7,9 @@
 mod effects;
 mod state;
 mod terminal;
+mod theme;
 mod view;
+mod widgets;
 
 use std::path::Path;
 use std::time::Duration;
@@ -32,9 +34,11 @@ pub fn check_tty(env: &Env) -> Result<()> {
     }
 }
 
-pub fn run(conn: &Connection, cwd: &Path, identity: &Identity) -> Result<()> {
+pub fn run(conn: &Connection, cwd: &Path, identity: &Identity, env: &Env) -> Result<()> {
     let mut state = State {
         who: format!("{}/{}", identity.role.as_str(), identity.author),
+        scope: crate::scope::detect(cwd),
+        theme: theme::Theme::from_env(env),
         ..State::default()
     };
     let _guard = terminal::Guard::enter()?;

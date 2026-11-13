@@ -2,29 +2,41 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use super::state::State;
+use super::widgets;
+
+const HINTS: [(&str, &str); 1] = [("q", "quit")];
 
 pub fn draw(frame: &mut Frame, state: &State) {
+    let area = frame.area();
+    let footer_h =
+        widgets::footer_height(&HINTS, area.width, &state.theme) + u16::from(state.error.is_some());
     let [header, _body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(footer_h),
     ])
-    .areas(frame.area());
-    let title = format!("scree  {}  {} tickets", state.who, state.tickets.len());
-    frame.render_widget(
-        Paragraph::new(Line::from(title)).style(Style::new().add_modifier(Modifier::BOLD)),
+    .areas(area);
+    widgets::render_header(
+        frame.buffer_mut(),
         header,
+        &state.scope,
+        &state.who,
+        state.tickets.len(),
+        &state.theme,
     );
-    let hint = match &state.error {
-        Some(e) => format!("error: {e}  |  q quit"),
-        None => "q quit".to_string(),
-    };
-    frame.render_widget(Paragraph::new(Line::from(hint)), footer);
+    match &state.error {
+        Some(e) => {
+            let [err, hints] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(footer);
+            frame.render_widget(Paragraph::new(Line::from(format!("error: {e}"))), err);
+            widgets::render_footer(frame.buffer_mut(), hints, &HINTS, &state.theme);
+        }
+        None => widgets::render_footer(frame.buffer_mut(), footer, &HINTS, &state.theme),
+    }
 }
 
 #[cfg(test)]
@@ -34,11 +46,11 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn render(state: &State) -> Vec<String> {
-        let mut t = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        let mut t = Terminal::new(TestBackend::new(70, 5)).unwrap();
         t.draw(|f| draw(f, state)).unwrap();
         let buf = t.backend().buffer();
         (0..5)
-            .map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect())
+            .map(|y| (0..70).map(|x| buf[(x, y)].symbol()).collect())
             .collect()
     }
 
@@ -49,8 +61,21 @@ mod tests {
             ..State::default()
         };
         let rows = render(&s);
-        assert!(rows[0].starts_with("scree  human/human  0 tickets"));
-        assert!(rows[4].starts_with("q quit"));
+        assert!(rows[0].contains("all Projects"));
+        assert!(rows[0].contains("human/human"));
+        assert!(rows[0].contains("0 tickets"));
+        assert!(rows[4].starts_with("[q] quit"));
         assert!(rows[1..4].iter().all(|r| r.trim().is_empty()));
+    }
+
+    #[test]
+    fn error_shows_above_hints() {
+        let s = State {
+            error: Some("boom".into()),
+            ..State::default()
+        };
+        let rows = render(&s);
+        assert!(rows[3].starts_with("error: boom"));
+        assert!(rows[4].starts_with("[q] quit"));
     }
 }

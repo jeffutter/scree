@@ -1,0 +1,6 @@
+---
+source: src/tui/widgets.rs
+expression: at80
+---
+[j/k] move | [Enter] open | [/] search | [n] new ticket | [d] done | [c] comment
+[r] reload | [?] help | [q] quit

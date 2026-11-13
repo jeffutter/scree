@@ -1,0 +1,11 @@
+---
+source: src/tui/widgets.rs
+expression: "text.join(\"\\n\")"
+---
+◌ draft
+○ ready
+◐ active
+● done
+✕ abandoned
+⊘ blocked
+◉ available

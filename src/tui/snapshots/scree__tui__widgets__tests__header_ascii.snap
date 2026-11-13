@@ -1,0 +1,5 @@
+---
+source: src/tui/widgets.rs
+expression: dump(&t)
+---
+scree  |  all Projects  |  agent/x  |  0 tickets
