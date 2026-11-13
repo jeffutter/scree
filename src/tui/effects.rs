@@ -12,12 +12,18 @@ use crate::identity::Identity;
 use crate::ticket;
 
 /// The ScopeArgs a mode reads with: Worktree is the CLI default (the cwd's
-/// Worktree), Project widens to every Worktree of the cwd's Project.
-pub fn scope_args(mode: ScopeMode) -> ScopeArgs {
+/// Worktree), Project widens to every Worktree of the cwd's Project. With a
+/// `--project` override (`project_root`), both name that whole Project instead
+/// (as `scree list --project` does); AllProjects ignores it.
+pub fn scope_args(mode: ScopeMode, project_root: Option<&Path>) -> ScopeArgs {
     match mode {
-        ScopeMode::Worktree => ScopeArgs::default(),
+        ScopeMode::Worktree => ScopeArgs {
+            project_root: project_root.map(Path::to_path_buf),
+            ..ScopeArgs::default()
+        },
         ScopeMode::Project => ScopeArgs {
-            all_worktrees: true,
+            all_worktrees: project_root.is_none(),
+            project_root: project_root.map(Path::to_path_buf),
             ..ScopeArgs::default()
         },
         ScopeMode::AllProjects => ScopeArgs {
@@ -28,7 +34,7 @@ pub fn scope_args(mode: ScopeMode) -> ScopeArgs {
 }
 
 /// Every status, no practical limit (the CLI default of 50 would cut a board).
-pub fn list_args(spec: LoadSpec) -> ListArgs {
+pub fn list_args(spec: LoadSpec, project_root: Option<&Path>) -> ListArgs {
     ListArgs {
         status: vec![
             Status::Draft,
@@ -38,16 +44,22 @@ pub fn list_args(spec: LoadSpec) -> ListArgs {
             Status::Abandoned,
         ],
         limit: Some(100_000),
-        scope: scope_args(spec.mode),
+        scope: scope_args(spec.mode, project_root),
         archived: spec.show_archived,
         ..ListArgs::default()
     }
 }
 
-pub fn run_effect(conn: &mut Connection, cwd: &Path, identity: &Identity, effect: Effect) -> Event {
+pub fn run_effect(
+    conn: &mut Connection,
+    cwd: &Path,
+    project_root: Option<&Path>,
+    identity: &Identity,
+    effect: Effect,
+) -> Event {
     match effect {
         Effect::Reload(spec) => Event::Loaded(
-            ticket::list(conn, cwd, &list_args(spec), identity)
+            ticket::list(conn, cwd, &list_args(spec, project_root), identity)
                 .map(|r| r.tickets)
                 .map_err(|e| e.to_string()),
         ),
@@ -304,12 +316,82 @@ mod tests {
 
     #[test]
     fn scope_args_per_mode() {
-        let w = scope_args(ScopeMode::Worktree);
+        let w = scope_args(ScopeMode::Worktree, None);
         assert!(!w.all_worktrees && !w.all_projects && w.project_root.is_none());
-        let p = scope_args(ScopeMode::Project);
+        let p = scope_args(ScopeMode::Project, None);
         assert!(p.all_worktrees && !p.all_projects);
-        let a = scope_args(ScopeMode::AllProjects);
+        let a = scope_args(ScopeMode::AllProjects, None);
         assert!(a.all_projects && !a.all_worktrees);
+    }
+
+    #[test]
+    fn project_override_sets_project_root_for_worktree_and_project_modes() {
+        let root = Path::new("/elsewhere");
+        for mode in [ScopeMode::Worktree, ScopeMode::Project] {
+            let s = scope_args(mode, Some(root));
+            assert_eq!(s.project_root.as_deref(), Some(root), "{mode:?}");
+            assert!(!s.all_worktrees && !s.all_projects, "{mode:?}");
+        }
+        let a = scope_args(ScopeMode::AllProjects, Some(root));
+        assert!(a.project_root.is_none() && a.all_projects);
+    }
+
+    #[test]
+    fn reload_with_project_override_lists_the_other_repos_tickets() {
+        let git = |dir: &Path| {
+            let ok = std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        git(&a);
+        git(&b);
+        let (a, b) = (a.canonicalize().unwrap(), b.canonicalize().unwrap());
+        let mut conn = crate::db::open(&tmp.path().join("t.db")).unwrap();
+        let add = |conn: &mut Connection, root: &Path, title: &str| {
+            ticket::add(
+                conn,
+                &Scope::Checkout {
+                    root: root.to_path_buf(),
+                },
+                &NewTicket {
+                    title,
+                    description: "",
+                    plan: "",
+                    criteria: &[],
+                    for_who: ForWho::Agent,
+                    status: NewStatus::Ready,
+                    key: None,
+                    parent: None,
+                    blocked_by: &[],
+                },
+            )
+            .unwrap();
+        };
+        add(&mut conn, &a, "in-a");
+        add(&mut conn, &b, "in-b");
+        let who = agent();
+        for mode in [ScopeMode::Worktree, ScopeMode::Project] {
+            let spec = LoadSpec {
+                mode,
+                show_archived: false,
+            };
+            let Event::Loaded(Ok(ts)) =
+                run_effect(&mut conn, &a, Some(&b), &who, Effect::Reload(spec))
+            else {
+                panic!("load failed");
+            };
+            let titles: Vec<_> = ts.iter().map(|t| t.title.as_str()).collect();
+            assert_eq!(titles, ["in-b"], "{mode:?}");
+        }
     }
 
     #[test]
@@ -344,7 +426,7 @@ mod tests {
             session: None,
         };
         let Event::DescriptionsLoaded(Ok(m)) =
-            run_effect(&mut conn, dir.path(), &who, Effect::LoadDescriptions)
+            run_effect(&mut conn, dir.path(), None, &who, Effect::LoadDescriptions)
         else {
             panic!("load failed");
         };
@@ -392,7 +474,8 @@ mod tests {
             mode: ScopeMode::AllProjects,
             show_archived: false,
         };
-        let Event::Loaded(Ok(ts)) = run_effect(&mut conn, dir.path(), &who, Effect::Reload(spec))
+        let Event::Loaded(Ok(ts)) =
+            run_effect(&mut conn, dir.path(), None, &who, Effect::Reload(spec))
         else {
             panic!("load failed");
         };
@@ -431,6 +514,7 @@ mod tests {
         let Event::DetailLoaded(Ok(d)) = run_effect(
             &mut conn,
             dir.path(),
+            None,
             &who,
             Effect::LoadDetail(t.ticket.id.clone()),
         ) else {
@@ -442,6 +526,7 @@ mod tests {
         let Event::DetailLoaded(Err(_)) = run_effect(
             &mut conn,
             dir.path(),
+            None,
             &who,
             Effect::LoadDetail("NOPE-99".into()),
         ) else {
@@ -488,7 +573,7 @@ mod tests {
             id: id.into(),
             action,
         };
-        let Event::ActionDone(r) = run_effect(conn, Path::new("/"), &agent(), eff) else {
+        let Event::ActionDone(r) = run_effect(conn, Path::new("/"), None, &agent(), eff) else {
             panic!("not ActionDone");
         };
         r
@@ -612,7 +697,8 @@ mod tests {
             id: id.clone(),
             title: "  new title ".into(),
         };
-        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), &agent(), eff) else {
+        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), None, &agent(), eff)
+        else {
             panic!()
         };
         assert_eq!(r.unwrap(), format!("{id} title updated"));
@@ -621,7 +707,8 @@ mod tests {
             id: id.clone(),
             title: "  ".into(),
         };
-        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), &agent(), eff) else {
+        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), None, &agent(), eff)
+        else {
             panic!()
         };
         assert!(r.unwrap_err().contains("empty"));
@@ -705,7 +792,7 @@ mod tests {
             author: "human".into(),
             session: None,
         };
-        let Event::ActionDone(r) = run_effect(conn, Path::new("/"), &human, eff) else {
+        let Event::ActionDone(r) = run_effect(conn, Path::new("/"), None, &human, eff) else {
             panic!("not ActionDone");
         };
         r
@@ -868,7 +955,7 @@ mod tests {
             mode: ScopeMode::AllProjects,
             show_archived: false,
         };
-        let args = list_args(spec);
+        let args = list_args(spec, None);
         ticket::list(conn, dir, &args, &agent())
             .unwrap()
             .tickets
@@ -890,7 +977,7 @@ mod tests {
             before: true,
         };
         assert_eq!(
-            done_msg(run_effect(&mut conn, dir.path(), &agent(), fx)),
+            done_msg(run_effect(&mut conn, dir.path(), None, &agent(), fx)),
             Ok(format!("{b} moved"))
         );
         assert_eq!(order(&conn, dir.path()), [b.clone(), a.clone()]);
@@ -901,7 +988,7 @@ mod tests {
             anchor: a,
             before: false,
         };
-        let r = done_msg(run_effect(&mut conn, dir.path(), &agent(), fx));
+        let r = done_msg(run_effect(&mut conn, dir.path(), None, &agent(), fx));
         assert!(r.unwrap_err().contains("cannot reorder"));
     }
 
@@ -923,7 +1010,8 @@ mod tests {
             [],
         )
         .unwrap();
-        let run = |conn: &mut Connection, fx| done_msg(run_effect(conn, dir.path(), &agent(), fx));
+        let run =
+            |conn: &mut Connection, fx| done_msg(run_effect(conn, dir.path(), None, &agent(), fx));
         let add = |id: &str, blocker: &str| Effect::AddDep {
             id: id.into(),
             blocker: blocker.into(),

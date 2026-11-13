@@ -104,7 +104,16 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         let path = db::resolve_path_from_env(cli.db)?;
         let mut conn = db::open(&path)?;
         sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
-        tui::run(&mut conn, &path, cwd, &identity, env)?;
+        let mut scope = cli::ScopeArgs::default();
+        apply_project_override(&mut scope, cli.project.as_deref(), cwd);
+        tui::run(
+            &mut conn,
+            &path,
+            cwd,
+            scope.project_root.as_deref(),
+            &identity,
+            env,
+        )?;
         return Ok(Outcome::Quiet);
     }
     let identity = identity::resolve(cli.role, cli.author, cli.session, env);

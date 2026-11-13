@@ -39,12 +39,13 @@ pub fn run(
     conn: &mut Connection,
     db_path: &Path,
     cwd: &Path,
+    project_root: Option<&Path>,
     identity: &Identity,
     env: &Env,
 ) -> Result<()> {
     let changes = watch::spawn(db_path)?;
     let mut state = State::starting_in(
-        crate::scope::detect(cwd),
+        crate::scope::detect(&project_root.map_or_else(|| cwd.to_path_buf(), |p| cwd.join(p))),
         format!("{}/{}", identity.role.as_str(), identity.author),
         theme::Theme::from_env(env),
     );
@@ -67,7 +68,7 @@ pub fn run(
                     term.clear()?;
                     Event::ActionDone(r)
                 }
-                other => effects::run_effect(conn, cwd, identity, other),
+                other => effects::run_effect(conn, cwd, project_root, identity, other),
             };
             pending.extend(update(&mut state, ev));
         }
