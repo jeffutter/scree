@@ -577,40 +577,66 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         draw_filter_menu(frame, area, &state.filter, &state.theme);
     }
     if state.help {
-        draw_help(frame, area, &state.theme);
+        draw_help(frame, area, state);
     }
 }
 
-/// A centered popup listing every key by section from `HELP`; lines past the
-/// popup height are cut.
-fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
+/// A centered popup listing every key by section from `HELP`. It is as wide
+/// as the widest line, up to the screen; longer lines end in an ellipsis.
+/// Content taller than the popup scrolls by `state.help_scroll`, which is
+/// clamped here and written back so keys act on the real position.
+fn draw_help(frame: &mut Frame, area: Rect, state: &mut State) {
+    let theme = &state.theme;
     let key_w = HELP
         .iter()
         .flat_map(|(_, rows)| rows.iter())
         .map(|(k, _)| k.chars().count())
         .max()
         .unwrap_or(0);
-    let mut text: Vec<Line> = vec![];
+    let mut lines: Vec<String> = vec![];
     for (section, rows) in HELP {
-        if !text.is_empty() {
-            text.push(Line::from(""));
+        if !lines.is_empty() {
+            lines.push(String::new());
         }
-        text.push(Line::from(format!("{section}:")));
+        lines.push(format!("{section}:"));
         for (k, m) in *rows {
-            text.push(Line::from(format!("  {k:<key_w$}  {m}")));
+            lines.push(format!("  {k:<key_w$}  {m}"));
         }
     }
-    let w = ((key_w + 50) as u16).min(area.width);
-    let h = (text.len() as u16 + 2).min(area.height);
+    let widest = lines
+        .iter()
+        .map(|l| Span::raw(l.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let w = ((widest + 2) as u16).min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect {
         x: area.x + (area.width - w) / 2,
         y: area.y + (area.height - h) / 2,
         width: w,
         height: h,
     };
+    let inner_h = usize::from(h.saturating_sub(2));
+    let max_scroll = lines.len().saturating_sub(inner_h);
+    let scroll = usize::from(state.help_scroll).min(max_scroll);
+    state.help_scroll = scroll as u16;
+    let inner_w = usize::from(w.saturating_sub(2));
+    let text: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(inner_h)
+        .map(|l| Line::from(truncate(l, inner_w, theme)))
+        .collect();
+    let title = if max_scroll == 0 {
+        "help (Esc closes)".to_string()
+    } else if scroll < max_scroll {
+        "help (j/k scroll, Esc closes) - more below".to_string()
+    } else {
+        "help (j/k scroll, Esc closes) - end".to_string()
+    };
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(text).block(widgets::bordered_pane("help (Esc closes)", true, theme)),
+        Paragraph::new(text).block(widgets::bordered_pane(&title, true, theme)),
         rect,
     );
 }
@@ -894,6 +920,24 @@ mod tests {
         let mut s = sample_state();
         s.help = true;
         insta::assert_snapshot!(render(&mut s, 90, 60).join("\n"));
+    }
+
+    #[test]
+    fn help_popup_small_reaches_last_section_after_scrolling() {
+        let mut s = sample_state();
+        s.help = true;
+        let top = render(&mut s, 80, 24);
+        assert!(!top.iter().any(|r| r.contains("Detail")));
+        assert!(top.iter().any(|r| r.contains("more below")));
+        insta::assert_snapshot!("help_popup_small", top.join("\n"));
+        s.help_scroll = u16::MAX;
+        let bottom = render(&mut s, 80, 24);
+        let (last, rows) = HELP.last().unwrap();
+        assert!(bottom.iter().any(|r| r.contains(&format!("{last}:"))));
+        let (k, m) = rows.last().unwrap();
+        assert!(bottom.iter().any(|r| r.contains(k) && r.contains(m)));
+        assert_ne!(s.help_scroll, u16::MAX);
+        insta::assert_snapshot!("help_popup_small_scrolled", bottom.join("\n"));
     }
 
     #[test]

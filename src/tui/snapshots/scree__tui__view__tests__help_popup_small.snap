@@ -1,0 +1,28 @@
+---
+source: src/tui/view.rs
+expression: "top.join(\"\\n\")"
+---
+scre+help (j/k scroll, Esc closes) - more below----------------------------+
++dra|Board and list:                                                       |1)-+
+|- S|  h/l, Left/Right            previous/next column (board)             |ed~|
+|   |  j/k, Down/Up               next/previous row                        |   |
+|   |  PgUp/PgDn                  page up/down                             |   |
+|   |  Ctrl-u/Ctrl-d              half page up/down                        |   |
+|   |  g/G, Home/End              first/last row                           |   |
+|   |  Enter                      open ticket detail                       |   |
+|   |  Tab                        switch board/list                        |   |
+|   |  c                          hide/show closed columns                 |   |
+|   |  a                          show/hide archived                       |   |
+|   |  s                          cycle scope worktree/project/all         |   |
+|   |  /                          search id, title, description            |   |
+|   |  f                          filter popup                             |   |
+|   |  Esc                        clear search and filters                 |   |
+|   |  Shift-Up/Down              move ticket before/after neighbour       |   |
+|   |  r S R                      ready / start / release                  |   |
+|   |  d D                        done / done --force (confirm)            |   |
+|   |  x o A                      abandon (confirm) / reopen / archive     |   |
+|   |  e                          edit title                               |   |
+|   |  E P                        edit description / plan in editor        |   |
++---|  ?                          this help                                |---+
+[Ent|  q, Ctrl-c                  quit                                     |e
+[g/G+----------------------------------------------------------------------+

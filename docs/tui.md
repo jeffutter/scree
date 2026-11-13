@@ -75,6 +75,7 @@ Popups and prompts:
 | Prompt: Enter, Esc | save, cancel |
 | Confirm: `y`, Enter | confirm; any other key cancels |
 | Help: Esc, `?`, `q` | close |
+| Help: `j`/`k`, Down/Up, PgUp/PgDn, Ctrl-u/Ctrl-d, `g`/`G` | scroll when the list is taller than the terminal |
 
 Lifecycle keys act on the selected ticket and only when valid for its status. `D` and `x` ask for `y` first; abandon uses the fixed reason "abandoned from tui". Refusals appear in the status line. The footer lists the keys valid for the current view and selection.
 

@@ -345,6 +345,8 @@ pub struct State {
     pub filter_menu: bool,
     /// The key help popup is open; it swallows every key but its closers.
     pub help: bool,
+    /// First help line shown; the view clamps it to the content on draw.
+    pub help_scroll: u16,
 }
 
 impl Default for State {
@@ -376,6 +378,7 @@ impl Default for State {
             search: None,
             filter_menu: false,
             help: false,
+            help_scroll: 0,
         }
     }
 }
@@ -1278,13 +1281,26 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         return on_confirm_key(state, k);
     }
     if state.help {
-        if matches!(k.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-            state.help = false;
+        let page = u16::try_from(state.page).unwrap_or(u16::MAX);
+        let half = (page / 2).max(1);
+        let h = &mut state.help_scroll;
+        match (k.code, ctrl) {
+            (KeyCode::Esc | KeyCode::Char('?' | 'q'), false) => state.help = false,
+            (KeyCode::Down | KeyCode::Char('j'), false) => *h = h.saturating_add(1),
+            (KeyCode::Up | KeyCode::Char('k'), false) => *h = h.saturating_sub(1),
+            (KeyCode::PageDown, _) => *h = h.saturating_add(page),
+            (KeyCode::PageUp, _) => *h = h.saturating_sub(page),
+            (KeyCode::Char('d'), true) => *h = h.saturating_add(half),
+            (KeyCode::Char('u'), true) => *h = h.saturating_sub(half),
+            (KeyCode::Home | KeyCode::Char('g'), false) => *h = 0,
+            (KeyCode::End | KeyCode::Char('G'), false) => *h = u16::MAX,
+            _ => {}
         }
         return vec![];
     }
     if k.code == KeyCode::Char('?') && !ctrl {
         state.help = true;
+        state.help_scroll = 0;
         return vec![];
     }
     if state.detail.is_some() {
@@ -1422,6 +1438,36 @@ mod tests {
             let (s, _) = drive(vec![press('?'), close]);
             assert!(!s.help && !s.should_quit);
         }
+    }
+
+    #[test]
+    fn help_scroll_keys_move_and_esc_still_closes() {
+        let (s, _) = drive(vec![press('?'), press('j'), press('j'), press('k')]);
+        assert!(s.help && s.help_scroll == 1);
+        let (s, _) = drive(vec![press('?'), code(KeyCode::PageDown)]);
+        assert_eq!(usize::from(s.help_scroll), s.page);
+        let (s, _) = drive(vec![
+            press('?'),
+            code(KeyCode::PageDown),
+            code(KeyCode::PageUp),
+        ]);
+        assert_eq!(s.help_scroll, 0);
+        let (s, _) = drive(vec![press('?'), press('G'), press('g')]);
+        assert_eq!(s.help_scroll, 0);
+        let (s, _) = drive(vec![
+            press('?'),
+            press('j'),
+            press('j'),
+            press('?'),
+            press('?'),
+        ]);
+        assert!(s.help && s.help_scroll == 0);
+        let (s, _) = drive(vec![
+            press('?'),
+            press('j'),
+            key(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Press),
+        ]);
+        assert!(!s.help);
     }
 
     #[test]
