@@ -418,8 +418,10 @@ fn row_line(t: &Ticket, width: usize, theme: &Theme) -> Line<'static> {
     ])
 }
 
-/// Width of a collapsed (empty) board column: 2 border cells + 3 title chars.
-const COLLAPSED_W: u16 = 5;
+/// Width of a collapsed (empty) board column: 2 border cells + the longest
+/// status name ("abandoned", 9 chars), so every strip shows its full title and
+/// keeps one width whichever column has focus.
+const COLLAPSED_W: u16 = 11;
 
 /// Least inner width a non-collapsed column must keep to stay readable.
 const MIN_FILL_W: u16 = 20;
@@ -470,12 +472,12 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
         let tickets = state.column(c);
         let active = c == state.col;
         let title = if tickets.is_empty() {
+            // Fits whenever the pane is at least COLLAPSED_W wide; the
+            // truncation only matters for a pane squeezed below that.
             let name = STATUSES[c];
-            if pane.width.saturating_sub(2) as usize >= name.chars().count() {
-                name.to_string()
-            } else {
-                name.chars().take(usize::from(COLLAPSED_W - 2)).collect()
-            }
+            name.chars()
+                .take(usize::from(pane.width.saturating_sub(2)))
+                .collect()
         } else {
             format!("{} ({})", STATUSES[c], tickets.len())
         };
@@ -1069,9 +1071,9 @@ mod tests {
         // 5 expanded columns need 5 * 22 = 110 cells.
         assert!(!stack_columns(110, 5, 0));
         assert!(stack_columns(109, 5, 0));
-        // 1 expanded + 4 strips need 22 + 4 * 5 = 42 cells.
-        assert!(!stack_columns(42, 1, 4));
-        assert!(stack_columns(41, 1, 4));
+        // 1 expanded + 4 strips need 22 + 4 * 11 = 66 cells.
+        assert!(!stack_columns(66, 1, 4));
+        assert!(stack_columns(65, 1, 4));
     }
 
     fn ready_only_state() -> State {
@@ -1090,8 +1092,8 @@ mod tests {
     #[test]
     fn narrow_width_stacks_columns_vertically() {
         let mut s = ready_only_state();
-        // Width 41 is one under the threshold for 1 expanded + 4 strips.
-        let out = render(&mut s, 41, 24);
+        // Width 65 is one under the threshold for 1 expanded + 4 strips.
+        let out = render(&mut s, 65, 24);
         // Every column title sits on its own row, full width, left-aligned.
         let titles: Vec<&String> = out
             .iter()
@@ -1099,7 +1101,7 @@ mod tests {
             .collect();
         assert_eq!(titles.len(), cols_count(&s), "{}", out.join("\n"));
         for t in titles {
-            assert!(t.ends_with('+') && t.chars().count() >= 41, "{t}");
+            assert!(t.ends_with('+') && t.chars().count() >= 65, "{t}");
         }
         // The populated column shows its title and count; empty ones collapse
         // to a short stacked pane and still show the full name.
@@ -1111,7 +1113,7 @@ mod tests {
     #[test]
     fn at_threshold_columns_stay_side_by_side() {
         let mut s = ready_only_state();
-        let out = render(&mut s, 42, 12);
+        let out = render(&mut s, 66, 12);
         // Side by side: the first border row holds all five panes.
         let corners = out[1].chars().filter(|&c| c == '+').count();
         assert_eq!(corners, 2 * cols_count(&s), "{}", out.join("\n"));
@@ -1120,11 +1122,35 @@ mod tests {
     #[test]
     fn resizing_across_threshold_switches_layout() {
         let mut s = ready_only_state();
-        let wide = render(&mut s, 42, 12);
-        let narrow = render(&mut s, 41, 12);
-        let wide_again = render(&mut s, 42, 12);
+        let wide = render(&mut s, 66, 12);
+        let narrow = render(&mut s, 65, 12);
+        let wide_again = render(&mut s, 66, 12);
         assert_ne!(wide, narrow);
         assert_eq!(wide, wide_again);
+    }
+
+    #[test]
+    fn collapsed_strips_show_full_names_and_keep_width() {
+        let mut s = ready_only_state();
+        let out = render(&mut s, 110, 12);
+        for name in ["draft", "active", "done", "abandoned"] {
+            assert!(out[1].contains(name), "{name}: {}", out.join("\n"));
+        }
+        // Moving focus onto a collapsed column leaves the other strips alone.
+        let before = out[1].clone();
+        s.col = STATUSES.iter().position(|&x| x == "draft").unwrap();
+        let after = render(&mut s, 110, 12)[1].clone();
+        for name in ["active", "done", "abandoned"] {
+            let w = |l: &str| {
+                let i = l.find(name).unwrap();
+                l[i..].find('+').unwrap() + l[..i].len()
+            };
+            assert_eq!(
+                before.len() - w(&before),
+                after.len() - w(&after),
+                "{before}\n{after}"
+            );
+        }
     }
 
     fn cols_count(s: &State) -> usize {
@@ -1163,7 +1189,7 @@ mod tests {
         t.retain(|t| t.status != "abandoned");
         crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
         let collapsed = render(&mut s, 110, 12)[1].clone();
-        assert!(!collapsed.contains("abandoned"), "{collapsed}");
+        assert!(!collapsed.contains("abandoned ("), "{collapsed}");
         let mut t = s.tickets.clone();
         t.push(ticket("SCR-30", "abandoned", "Back again", "agent", false));
         crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));

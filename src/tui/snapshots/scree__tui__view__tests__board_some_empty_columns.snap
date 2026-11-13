@@ -3,14 +3,14 @@ source: src/tui/view.rs
 expression: "render(&mut s, 110, 12).join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  5 tickets
-+draft--------------------------++ready (3)-----------------------++act++done (2)-----------------------++aba+
-|                               ||o SCR-8 Review the rele~ [human]||   ||+ SCR-3 Theme and header       ||   |
-|                               ||! SCR-7 Wire the sear~ [blocked]||   ||+ SCR-2 TUI scaffold           ||   |
-|                               ||o SCR-6 Add keyboard help       ||   ||                               ||   |
-|                               ||                                ||   ||                               ||   |
-|                               ||                                ||   ||                               ||   |
-|                               ||                                ||   ||                               ||   |
-|                               ||                                ||   ||                               ||   |
-+-------------------------------++--------------------------------++---++-------------------------------++---+
++draft----------------------++ready (3)-------------------++active---++done (2)-------------------++abandoned+
+|                           ||o SCR-8 Review the ~ [human]||         ||+ SCR-3 Theme and header   ||         |
+|                           ||! SCR-7 Wire the ~ [blocked]||         ||+ SCR-2 TUI scaffold       ||         |
+|                           ||o SCR-6 Add keyboard help   ||         ||                           ||         |
+|                           ||                            ||         ||                           ||         |
+|                           ||                            ||         ||                           ||         |
+|                           ||                            ||         ||                           ||         |
+|                           ||                            ||         ||                           ||         |
++---------------------------++----------------------------++---------++---------------------------++---------+
 [Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [/] search
 [f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder | [?] help | [q] quit

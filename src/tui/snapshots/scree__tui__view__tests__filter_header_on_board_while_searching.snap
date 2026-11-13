@@ -4,13 +4,13 @@ expression: "rows.join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  3 tickets
 / bo  (Enter keeps, Esc clears)
-+draft-----------------------++ready (2)-------------------++active (1)------------------++don++aba+
-|                            ||! SCR-7 Wire the ~ [blocked]||* SCR-5 Board view          ||   ||   |
-|                            ||o SCR-6 Add keyboard help   ||                            ||   ||   |
-|                            ||                            ||                            ||   ||   |
-|                            ||                            ||                            ||   ||   |
-|                            ||                            ||                            ||   ||   |
-|                            ||                            ||                            ||   ||   |
-+----------------------------++----------------------------++----------------------------++---++---+
++draft-------------------++ready (2)---------------++active (1)--------------++done-----++abandoned+
+|                        ||! SCR-7 Wire ~ [blocked]||* SCR-5 Board view      ||         ||         |
+|                        ||o SCR-6 Add keyboard he~||                        ||         ||         |
+|                        ||                        ||                        ||         ||         |
+|                        ||                        ||                        ||         ||         |
+|                        ||                        ||                        ||         ||         |
+|                        ||                        ||                        ||         ||         |
++------------------------++------------------------++------------------------++---------++---------+
 [Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last
 [/] search | [f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder
