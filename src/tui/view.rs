@@ -6,12 +6,13 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use super::state::{STATUSES, State};
+use super::state::{ListEntry, STATUSES, State, View};
 use super::theme::Theme;
 use super::widgets;
 use crate::model::Ticket;
 
-const HINTS: [(&str, &str); 8] = [
+const HINTS: [(&str, &str); 9] = [
+    ("Tab", "board/list"),
     ("h/l", "column"),
     ("j/k", "row"),
     ("PgUp/PgDn", "page"),
@@ -95,6 +96,45 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
+fn draw_list(frame: &mut Frame, area: Rect, state: &State) {
+    let order = state.list_order();
+    let block = widgets::bordered_pane(
+        &format!("list ({})", state.visible_count()),
+        true,
+        &state.theme,
+    );
+    let width = usize::from(area.width.saturating_sub(2));
+    let items: Vec<ListItem> = order
+        .iter()
+        .map(|e| match *e {
+            ListEntry::Header(c) => {
+                let n = state.column(c).len();
+                let (icon, style) = state.theme.status_style(STATUSES[c], false, false);
+                ListItem::new(Line::from(Span::styled(
+                    format!("{icon} {} ({n})", STATUSES[c]),
+                    style,
+                )))
+            }
+            ListEntry::Ticket { idx, depth } => {
+                let indent = "  ".repeat(depth);
+                let mut line = row_line(
+                    &state.tickets[idx],
+                    width.saturating_sub(indent.len()),
+                    &state.theme,
+                );
+                line.spans.insert(0, Span::raw(indent));
+                ListItem::new(line)
+            }
+        })
+        .collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(state.theme.selected_style());
+    let mut ls = ListState::default();
+    ls.select(state.list_selected());
+    frame.render_stateful_widget(list, area, &mut ls);
+}
+
 pub fn draw(frame: &mut Frame, state: &State) {
     let area = frame.area();
     let footer_h =
@@ -113,7 +153,10 @@ pub fn draw(frame: &mut Frame, state: &State) {
         state.visible_count(),
         &state.theme,
     );
-    draw_board(frame, body, state);
+    match state.view {
+        View::Board => draw_board(frame, body, state),
+        View::List => draw_list(frame, body, state),
+    }
     match &state.error {
         Some(e) => {
             let [err, hints] =
@@ -197,6 +240,35 @@ mod tests {
     }
 
     #[test]
+    fn list_sample() {
+        let mut s = sample_state();
+        let mut t = s.tickets.clone();
+        let mut c1 = ticket(
+            "SCR-10",
+            "ready",
+            "Subtask of keyboard help",
+            "agent",
+            false,
+        );
+        c1.parent = Some("SCR-6".into());
+        let mut c2 = ticket("SCR-11", "ready", "Another subtask", "agent", true);
+        c2.parent = Some("SCR-6".into());
+        t.extend([c1, c2]);
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        for k in [
+            ratatui::crossterm::event::KeyCode::Tab,
+            ratatui::crossterm::event::KeyCode::Down,
+            ratatui::crossterm::event::KeyCode::Down,
+        ] {
+            crate::tui::state::update(
+                &mut s,
+                Event::Key(ratatui::crossterm::event::KeyEvent::from(k)),
+            );
+        }
+        insta::assert_snapshot!(render(&s, 90, 20).join("\n"));
+    }
+
+    #[test]
     fn board_hide_closed() {
         let mut s = sample_state();
         s.hide_closed = true;
@@ -216,7 +288,7 @@ mod tests {
         for st in STATUSES {
             assert!(rows[1].contains(&format!("{st} (0)")), "{st}");
         }
-        assert!(rows[7].starts_with("[h/l] column"));
+        assert!(rows[7].starts_with("[Tab] board/list"));
     }
 
     #[test]
@@ -227,6 +299,6 @@ mod tests {
         };
         let rows = render(&s, 200, 8);
         assert!(rows[6].starts_with("error: boom"));
-        assert!(rows[7].starts_with("[h/l] column"));
+        assert!(rows[7].starts_with("[Tab] board/list"));
     }
 }

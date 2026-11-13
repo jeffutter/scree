@@ -14,5 +14,5 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |                    ||                    ||                    ||                    ||                    |
 |                    ||                    ||                    ||                    ||                    |
 +--------------------++--------------------++--------------------++--------------------++--------------------+
-[h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [c] hide closed | [a] archived | [s] scope
-[q] quit
+[Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [c] hide closed
+[a] archived | [s] scope | [q] quit

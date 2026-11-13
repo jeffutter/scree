@@ -53,6 +53,23 @@ pub struct LoadSpec {
     pub show_archived: bool,
 }
 
+/// Which presentation of the tickets is on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Board,
+    List,
+}
+
+/// One line of the list view, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListEntry {
+    /// A status group heading (index into STATUSES).
+    Header(usize),
+    /// A ticket (index into `State::tickets`), indented `depth` levels.
+    Ticket { idx: usize, depth: usize },
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -72,6 +89,7 @@ pub struct State {
     pub selected_id: Option<String>,
     pub hide_closed: bool,
     pub show_archived: bool,
+    pub view: View,
     /// Rows a PgUp/PgDn moves; set from the terminal height.
     pub page: usize,
 }
@@ -91,6 +109,7 @@ impl Default for State {
             selected_id: None,
             hide_closed: false,
             show_archived: false,
+            view: View::Board,
             page: 10,
         }
     }
@@ -151,6 +170,73 @@ impl State {
             .sum()
     }
 
+    /// The list view's lines: per visible status a header, then its tickets
+    /// with subtasks indented under a parent in the same group. A subtask
+    /// whose parent has another status (or is not loaded) stands at depth 0
+    /// in its own group. Draw and navigation both read this.
+    pub fn list_order(&self) -> Vec<ListEntry> {
+        fn push(
+            out: &mut Vec<ListEntry>,
+            members: &[usize],
+            tickets: &[Ticket],
+            idx: usize,
+            depth: usize,
+        ) {
+            out.push(ListEntry::Ticket { idx, depth });
+            for &m in members {
+                if tickets[m].parent.as_deref() == Some(tickets[idx].id.as_str()) {
+                    push(out, members, tickets, m, depth + 1);
+                }
+            }
+        }
+        let mut out = vec![];
+        for c in self.visible_columns() {
+            let members: Vec<usize> = (0..self.tickets.len())
+                .filter(|&i| self.tickets[i].status == STATUSES[c])
+                .collect();
+            out.push(ListEntry::Header(c));
+            for &i in &members {
+                let nested = self.tickets[i]
+                    .parent
+                    .as_deref()
+                    .is_some_and(|p| members.iter().any(|&m| self.tickets[m].id == p && m != i));
+                if !nested {
+                    push(&mut out, &members, &self.tickets, i, 0);
+                }
+            }
+        }
+        out
+    }
+
+    /// Position of the selected ticket within `list_order()`.
+    pub fn list_selected(&self) -> Option<usize> {
+        let id = self.selected_id.as_deref()?;
+        self.list_order()
+            .iter()
+            .position(|e| matches!(e, ListEntry::Ticket { idx, .. } if self.tickets[*idx].id == id))
+    }
+
+    /// Move over the list's selectable rows (tickets, not headers).
+    fn move_list(&mut self, f: impl FnOnce(usize, usize) -> usize) {
+        let ids: Vec<String> = self
+            .list_order()
+            .into_iter()
+            .filter_map(|e| match e {
+                ListEntry::Ticket { idx, .. } => Some(self.tickets[idx].id.clone()),
+                ListEntry::Header(_) => None,
+            })
+            .collect();
+        if !ids.is_empty() {
+            let cur = self
+                .selected_id
+                .as_ref()
+                .and_then(|id| ids.iter().position(|i| i == id))
+                .unwrap_or(0);
+            self.selected_id = Some(ids[f(cur, ids.len()).min(ids.len() - 1)].clone());
+        }
+        self.reselect();
+    }
+
     /// Clamp every column's row to its length, then record the selected id.
     fn settle(&mut self) {
         for c in 0..STATUSES.len() {
@@ -164,6 +250,9 @@ impl State {
     }
 
     fn move_col(&mut self, delta: isize) {
+        if self.view == View::List {
+            return;
+        }
         let vis = self.visible_columns();
         let pos = vis.iter().position(|&c| c == self.col).unwrap_or(0) as isize;
         self.col = vis[(pos + delta).clamp(0, vis.len() as isize - 1) as usize];
@@ -171,6 +260,9 @@ impl State {
     }
 
     fn move_row(&mut self, f: impl FnOnce(usize, usize) -> usize) {
+        if self.view == View::List {
+            return self.move_list(f);
+        }
         let len = self.column(self.col).len();
         if len > 0 {
             self.rows[self.col] = f(self.rows[self.col], len).min(len - 1);
@@ -255,6 +347,13 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         (KeyCode::Char('d'), true) => state.move_row(|r, _| r + half),
         (KeyCode::Home | KeyCode::Char('g'), false) => state.move_row(|_, _| 0),
         (KeyCode::End | KeyCode::Char('G'), false) => state.move_row(|_, len| len - 1),
+        (KeyCode::Tab | KeyCode::BackTab, _) => {
+            state.view = match state.view {
+                View::Board => View::List,
+                View::List => View::Board,
+            };
+            state.reselect();
+        }
         (KeyCode::Char('c'), false) => {
             state.hide_closed = !state.hide_closed;
             if state.hide_closed && state.col >= FIRST_CLOSED {
@@ -574,5 +673,111 @@ mod tests {
         );
         assert_eq!((s.col, s.rows[1]), (1, 1));
         assert_eq!(s.selected_id.as_deref(), Some("R2"));
+    }
+
+    fn child(id: &str, status: &str, parent: &str) -> Ticket {
+        let mut t = ticket(id, status);
+        t.parent = Some(parent.to_string());
+        t
+    }
+
+    fn list_ids(s: &State) -> Vec<String> {
+        s.list_order()
+            .into_iter()
+            .map(|e| match e {
+                ListEntry::Header(c) => format!("#{}", STATUSES[c]),
+                ListEntry::Ticket { idx, depth } => {
+                    format!("{}{}", "-".repeat(depth), s.tickets[idx].id)
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tab_toggles_view_and_keeps_selection_and_mode() {
+        let mut s = loaded(vec![press('l'), press('j')]);
+        s.mode = ScopeMode::Project;
+        update(&mut s, code(KeyCode::Tab));
+        assert_eq!(s.view, View::List);
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        assert_eq!(s.mode, ScopeMode::Project);
+        update(&mut s, press('j'));
+        assert_eq!(s.selected_id.as_deref(), Some("R3"));
+        let fx = update(&mut s, code(KeyCode::Tab));
+        assert!(fx.is_empty());
+        assert_eq!(s.view, View::Board);
+        assert_eq!((s.col, s.rows[1]), (1, 2));
+        assert_eq!(s.selected_id.as_deref(), Some("R3"));
+    }
+
+    #[test]
+    fn list_selection_survives_reload() {
+        let mut s = loaded(vec![code(KeyCode::Tab), press('j'), press('j')]);
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        update(
+            &mut s,
+            Event::Loaded(Ok(vec![ticket("R0", "ready"), ticket("R2", "ready")])),
+        );
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        assert_eq!(s.list_selected(), Some(3));
+    }
+
+    #[test]
+    fn list_groups_by_status_with_subtasks_indented() {
+        let mut s = State::default();
+        update(
+            &mut s,
+            Event::Loaded(Ok(vec![
+                ticket("R1", "ready"),
+                child("R1a", "ready", "R1"),
+                child("R1b", "ready", "R1"),
+                ticket("X1", "done"),
+                child("X1a", "done", "X1"),
+                child("D1a", "draft", "R1"),
+            ])),
+        );
+        assert_eq!(
+            list_ids(&s),
+            [
+                "#draft",
+                "D1a",
+                "#ready",
+                "R1",
+                "-R1a",
+                "-R1b",
+                "#active",
+                "#done",
+                "X1",
+                "-X1a",
+                "#abandoned"
+            ]
+        );
+    }
+
+    #[test]
+    fn list_navigation_skips_headers() {
+        let mut s = loaded(vec![code(KeyCode::Tab)]);
+        assert_eq!(s.selected_id.as_deref(), Some("D1"));
+        update(&mut s, press('j'));
+        assert_eq!(s.selected_id.as_deref(), Some("R1"));
+        update(&mut s, press('k'));
+        assert_eq!(s.selected_id.as_deref(), Some("D1"));
+        update(&mut s, press('G'));
+        assert_eq!(s.selected_id.as_deref(), Some("A1"));
+        update(&mut s, press('g'));
+        assert_eq!(s.selected_id.as_deref(), Some("D1"));
+        update(&mut s, press('l'));
+        assert_eq!(s.selected_id.as_deref(), Some("D1"));
+    }
+
+    #[test]
+    fn hide_closed_hides_closed_groups_in_list() {
+        let mut s = loaded(vec![code(KeyCode::Tab), press('c')]);
+        let ids = list_ids(&s);
+        assert!(!ids.contains(&"#done".to_string()));
+        assert!(!ids.contains(&"X1".to_string()));
+        assert!(ids.contains(&"#active".to_string()));
+        update(&mut s, press('c'));
+        assert!(list_ids(&s).contains(&"#abandoned".to_string()));
     }
 }
