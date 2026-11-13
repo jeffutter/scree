@@ -1,0 +1,17 @@
+---
+source: src/tui/view.rs
+assertion_line: 717
+expression: "rows.join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  3 tickets
+/ bo  (Enter keeps, Esc clears)
++draft (0)---------++ready (2)---------++active (1)--------++done (0)----------++abandoned (0)-----+
+|                  ||! SCR-7 ~ [blocked||* SCR-5 Board view||                  ||                  |
+|                  ||o SCR-6 Add keybo~||                  ||                  ||                  |
+|                  ||                  ||                  ||                  ||                  |
+|                  ||                  ||                  ||                  ||                  |
+|                  ||                  ||                  ||                  ||                  |
+|                  ||                  ||                  ||                  ||                  |
++------------------++------------------++------------------++------------------++------------------+
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last
+[/] search | [f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder

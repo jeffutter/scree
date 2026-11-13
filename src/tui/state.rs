@@ -1,6 +1,8 @@
 //! The TUI's model and its pure transition function. Nothing here touches the
 //! terminal or the database, so key handling is tested with scripted events.
 
+use std::collections::HashMap;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::theme::Theme;
@@ -272,6 +274,32 @@ impl Picker {
     }
 }
 
+/// Which tickets the blocked/available filter keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Avail {
+    Blocked,
+    Available,
+}
+
+/// Client-side narrowing of the loaded tickets. Every field that is set must
+/// match (AND).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// Case-insensitive substring over id, title and description.
+    pub query: String,
+    /// Index into STATUSES.
+    pub status: Option<usize>,
+    /// "agent" or "human".
+    pub for_who: Option<String>,
+    pub avail: Option<Avail>,
+}
+
+impl Filter {
+    pub fn is_active(&self) -> bool {
+        *self != Filter::default()
+    }
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -304,6 +332,13 @@ pub struct State {
     pub prompt: Option<PromptState>,
     /// While Some, the dependency picker owns the keyboard.
     pub picker: Option<Picker>,
+    pub filter: Filter,
+    /// Ticket id to description, for searching; filled on demand.
+    pub descriptions: HashMap<String, String>,
+    /// While Some, the search input owns the keyboard.
+    pub search: Option<Prompt>,
+    /// While true, the filter popup owns the keyboard.
+    pub filter_menu: bool,
 }
 
 impl Default for State {
@@ -328,6 +363,10 @@ impl Default for State {
             confirm: None,
             prompt: None,
             picker: None,
+            filter: Filter::default(),
+            descriptions: HashMap::new(),
+            search: None,
+            filter_menu: false,
         }
     }
 }
@@ -386,12 +425,54 @@ impl State {
             .map(|t| t.title.clone())
     }
 
-    /// Tickets of one column, in list order.
+    /// Whether `t` passes the filter.
+    pub fn matches(&self, t: &Ticket) -> bool {
+        let f = &self.filter;
+        if f.status.is_some_and(|c| t.status != STATUSES[c]) {
+            return false;
+        }
+        if f.for_who.as_ref().is_some_and(|w| t.for_who != *w) {
+            return false;
+        }
+        match f.avail {
+            Some(Avail::Blocked) if !t.blocked => return false,
+            Some(Avail::Available) if !t.available => return false,
+            _ => {}
+        }
+        if f.query.is_empty() {
+            return true;
+        }
+        let q = f.query.to_lowercase();
+        t.id.to_lowercase().contains(&q)
+            || t.title.to_lowercase().contains(&q)
+            || self
+                .descriptions
+                .get(&t.id)
+                .is_some_and(|d| d.to_lowercase().contains(&q))
+    }
+
+    /// Tickets of one column that pass the filter, in list order.
     pub fn column(&self, col: usize) -> Vec<&Ticket> {
         self.tickets
             .iter()
-            .filter(|t| t.status == STATUSES[col])
+            .filter(|t| t.status == STATUSES[col] && self.matches(t))
             .collect()
+    }
+
+    /// After the filter changed: keep the selection on a visible ticket.
+    fn refilter(&mut self) {
+        if self.view == View::List {
+            let ids = self.nav_ids();
+            if !self.selected_id.as_ref().is_some_and(|s| ids.contains(s)) {
+                self.selected_id = ids.first().cloned();
+            }
+        }
+        self.reselect();
+    }
+
+    /// Whether descriptions are needed to evaluate the filter.
+    fn wants_descriptions(&self) -> bool {
+        !self.filter.query.is_empty()
     }
 
     /// Column indexes on screen.
@@ -433,7 +514,9 @@ impl State {
         let mut out = vec![];
         for c in self.visible_columns() {
             let members: Vec<usize> = (0..self.tickets.len())
-                .filter(|&i| self.tickets[i].status == STATUSES[c])
+                .filter(|&i| {
+                    self.tickets[i].status == STATUSES[c] && self.matches(&self.tickets[i])
+                })
                 .collect();
             out.push(ListEntry::Header(c));
             for &i in &members {
@@ -558,6 +641,7 @@ pub enum Event {
     Resize(u16),
     Loaded(Result<Vec<Ticket>, String>),
     DetailLoaded(Result<Box<TicketDetail>, String>),
+    DescriptionsLoaded(Result<HashMap<String, String>, String>),
     /// A lifecycle action finished: Ok is a success message, Err the library's
     /// refusal text.
     ActionDone(Result<String, String>),
@@ -571,6 +655,8 @@ pub enum Effect {
     Reload(LoadSpec),
     /// Fetch the full ticket with this id.
     LoadDetail(String),
+    /// Fetch every ticket's description, for search.
+    LoadDescriptions,
     /// Apply a lifecycle action to the ticket with this id.
     Transition {
         id: String,
@@ -682,10 +768,22 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             state.error = Some(e);
             vec![]
         }
+        Event::DescriptionsLoaded(Ok(d)) => {
+            state.descriptions = d;
+            state.refilter();
+            vec![]
+        }
+        Event::DescriptionsLoaded(Err(e)) => {
+            state.error = Some(e);
+            vec![]
+        }
         Event::ActionDone(Ok(msg)) => {
             state.notice = Some(msg);
             state.error = None;
             let mut fx = vec![Effect::Reload(state.load_spec())];
+            if state.wants_descriptions() {
+                fx.push(Effect::LoadDescriptions);
+            }
             if let Some(d) = &state.detail {
                 fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
             }
@@ -693,6 +791,9 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
         }
         Event::DbChanged => {
             let mut fx = vec![Effect::Reload(state.load_spec())];
+            if state.wants_descriptions() {
+                fx.push(Effect::LoadDescriptions);
+            }
             if let Some(d) = &state.detail {
                 fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
             }
@@ -841,6 +942,58 @@ fn criteria_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
             vec![]
         }
     })
+}
+
+/// Keys while the search input is open: each key edits the query live, Enter
+/// closes the input and keeps it, Esc clears it and closes.
+fn on_search_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let Some(p) = state.search.as_mut() else {
+        return vec![];
+    };
+    match p.handle_key(k) {
+        PromptOutcome::Pending => state.filter.query = p.text.clone(),
+        PromptOutcome::Submit(_) => state.search = None,
+        PromptOutcome::Cancel => {
+            state.search = None;
+            state.filter.query.clear();
+        }
+    }
+    state.refilter();
+    vec![]
+}
+
+/// Keys in the filter popup: s/f/b cycle status, for and blocked/available;
+/// x clears every filter; Esc or Enter closes.
+fn on_filter_menu_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let f = &mut state.filter;
+    match k.code {
+        KeyCode::Char('s') => {
+            f.status = match f.status {
+                None => Some(0),
+                Some(c) if c + 1 < STATUSES.len() => Some(c + 1),
+                Some(_) => None,
+            }
+        }
+        KeyCode::Char('f') => {
+            f.for_who = match f.for_who.as_deref() {
+                None => Some("agent".into()),
+                Some("agent") => Some("human".into()),
+                Some(_) => None,
+            }
+        }
+        KeyCode::Esc | KeyCode::Enter => state.filter_menu = false,
+        KeyCode::Char('b') => {
+            f.avail = match f.avail {
+                None => Some(Avail::Blocked),
+                Some(Avail::Blocked) => Some(Avail::Available),
+                Some(Avail::Available) => None,
+            }
+        }
+        KeyCode::Char('x') => *f = Filter::default(),
+        _ => {}
+    }
+    state.refilter();
+    vec![]
 }
 
 /// Keys while the prompt is open. Enter submits: an unchanged title makes no
@@ -1087,6 +1240,12 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     if state.picker.is_some() {
         return on_picker_key(state, k);
     }
+    if state.search.is_some() {
+        return on_search_key(state, k);
+    }
+    if state.filter_menu {
+        return on_filter_menu_key(state, k);
+    }
     if state.confirm.is_some() {
         return on_confirm_key(state, k);
     }
@@ -1097,6 +1256,19 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         && let KeyCode::Up | KeyCode::Down = k.code
     {
         return reorder_key(state, k.code == KeyCode::Up);
+    }
+    if let (KeyCode::Char(c), false) = (k.code, ctrl) {
+        match c {
+            '/' => {
+                state.search = Some(Prompt::new("/", &state.filter.query));
+                return vec![Effect::LoadDescriptions];
+            }
+            'f' => {
+                state.filter_menu = true;
+                return vec![];
+            }
+            _ => {}
+        }
     }
     if let (KeyCode::Char(c), false) = (k.code, ctrl)
         && let Some(fx) = lifecycle_key(state, c).or_else(|| edit_key(state, c))
@@ -1121,6 +1293,10 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
             if let Some(id) = state.selected_id.clone() {
                 return vec![Effect::LoadDetail(id)];
             }
+        }
+        (KeyCode::Esc, _) if state.filter.is_active() => {
+            state.filter = Filter::default();
+            state.refilter();
         }
         (KeyCode::Tab | KeyCode::BackTab, _) => {
             state.view = match state.view {
@@ -2285,5 +2461,188 @@ mod tests {
         update(&mut s, press('b'));
         update(&mut s, ctrl('c'));
         assert!(s.should_quit);
+    }
+
+    /// sample() with R2 human-for, R3 blocked, X1 available, and
+    /// descriptions on R1 and D1.
+    fn filterable() -> State {
+        let mut t = sample();
+        t[2].for_who = "human".into();
+        t[3].blocked = true;
+        t[4].available = true;
+        let mut s = State::default();
+        update(&mut s, Event::Loaded(Ok(t)));
+        let d: HashMap<String, String> = [
+            ("R1".to_string(), "Mentions Needle here".to_string()),
+            ("D1".to_string(), "other".to_string()),
+        ]
+        .into();
+        update(&mut s, Event::DescriptionsLoaded(Ok(d)));
+        s
+    }
+
+    fn ids(s: &State) -> Vec<String> {
+        s.nav_ids()
+    }
+
+    fn all_ids(s: &State) -> Vec<String> {
+        s.visible_columns()
+            .into_iter()
+            .flat_map(|c| s.column(c).into_iter().map(|t| t.id.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn slash_opens_search_and_typing_narrows_live_on_board_and_list() {
+        let mut s = filterable();
+        let fx = update(&mut s, press('/'));
+        assert_eq!(fx, vec![Effect::LoadDescriptions]);
+        type_str(&mut s, "r2");
+        assert_eq!(all_ids(&s), ["R2"]);
+        assert_eq!(s.visible_count(), 1);
+        update(&mut s, code(KeyCode::Tab));
+        let rows: Vec<String> = list_ids(&s)
+            .into_iter()
+            .filter(|i| !i.starts_with('#'))
+            .collect();
+        assert_eq!(rows, ["R2"]);
+        type_str(&mut s, "x");
+        assert!(all_ids(&s).is_empty());
+        update(&mut s, code(KeyCode::Backspace));
+        assert_eq!(all_ids(&s), ["R2"]);
+    }
+
+    #[test]
+    fn search_covers_id_title_and_description_case_insensitively() {
+        let mut s = filterable();
+        update(&mut s, press('/'));
+        type_str(&mut s, "NEEDLE");
+        assert_eq!(all_ids(&s), ["R1"]);
+        s.filter.query = "TITLE d1".into();
+        assert_eq!(all_ids(&s), ["D1"]);
+        s.filter.query = "r3".into();
+        assert_eq!(all_ids(&s), ["R3"]);
+    }
+
+    #[test]
+    fn esc_clears_search_enter_keeps_it() {
+        let mut s = filterable();
+        update(&mut s, press('/'));
+        type_str(&mut s, "r1");
+        update(&mut s, code(KeyCode::Enter));
+        assert!(s.search.is_none());
+        assert_eq!(all_ids(&s), ["R1"]);
+        // j is a normal key again, not typed into the query.
+        update(&mut s, press('j'));
+        assert_eq!(s.filter.query, "r1");
+        update(&mut s, press('/'));
+        update(&mut s, code(KeyCode::Esc));
+        assert!(s.search.is_none());
+        assert!(s.filter.query.is_empty());
+        assert_eq!(all_ids(&s).len(), 7);
+    }
+
+    #[test]
+    fn esc_in_normal_mode_clears_every_filter() {
+        let mut s = filterable();
+        s.filter.status = Some(1);
+        s.filter.for_who = Some("agent".into());
+        s.filter.query = "r".into();
+        update(&mut s, code(KeyCode::Esc));
+        assert!(!s.filter.is_active());
+        assert_eq!(all_ids(&s).len(), 7);
+        assert!(!s.should_quit);
+    }
+
+    #[test]
+    fn filter_menu_cycles_and_clears() {
+        let mut s = filterable();
+        update(&mut s, press('f'));
+        assert!(s.filter_menu);
+        update(&mut s, press('s'));
+        update(&mut s, press('s'));
+        assert_eq!(s.filter.status, Some(1));
+        assert_eq!(all_ids(&s), ["R1", "R2", "R3"]);
+        update(&mut s, press('f'));
+        assert_eq!(s.filter.for_who.as_deref(), Some("agent"));
+        assert_eq!(all_ids(&s), ["R1", "R3"]);
+        update(&mut s, press('f'));
+        assert_eq!(all_ids(&s), ["R2"]);
+        update(&mut s, press('f'));
+        assert_eq!(s.filter.for_who, None);
+        update(&mut s, press('b'));
+        assert_eq!(s.filter.avail, Some(Avail::Blocked));
+        assert_eq!(all_ids(&s), ["R3"]);
+        update(&mut s, press('b'));
+        assert_eq!(s.filter.avail, Some(Avail::Available));
+        assert!(all_ids(&s).is_empty());
+        update(&mut s, code(KeyCode::Esc));
+        assert!(!s.filter_menu);
+        assert!(s.filter.is_active());
+        update(&mut s, press('f'));
+        update(&mut s, press('x'));
+        assert!(!s.filter.is_active());
+        for _ in 0..6 {
+            update(&mut s, press('s'));
+        }
+        assert_eq!(s.filter.status, None);
+    }
+
+    #[test]
+    fn filters_compose_with_search_and_widen_when_removed() {
+        let mut s = filterable();
+        s.filter.query = "r".into();
+        // R1 R2 R3 plus "title ..." matches every ticket's title, so narrow by id.
+        s.filter.query = "title r".into();
+        assert_eq!(all_ids(&s), ["R1", "R2", "R3"]);
+        s.filter.for_who = Some("agent".into());
+        assert_eq!(all_ids(&s), ["R1", "R3"]);
+        s.filter.avail = Some(Avail::Blocked);
+        assert_eq!(all_ids(&s), ["R3"]);
+        s.filter.status = Some(0);
+        assert!(all_ids(&s).is_empty());
+        s.filter.status = Some(1);
+        assert_eq!(all_ids(&s), ["R3"]);
+        s.filter.avail = None;
+        assert_eq!(all_ids(&s), ["R1", "R3"]);
+        s.filter.for_who = None;
+        assert_eq!(all_ids(&s), ["R1", "R2", "R3"]);
+        s.filter.query.clear();
+        s.filter.status = None;
+        assert_eq!(all_ids(&s).len(), 7);
+        s.filter.avail = Some(Avail::Available);
+        assert_eq!(all_ids(&s), ["X1"]);
+    }
+
+    #[test]
+    fn filtering_keeps_selection_on_a_visible_ticket() {
+        let mut s = filterable();
+        update(&mut s, press('j'));
+        update(&mut s, code(KeyCode::Right));
+        update(&mut s, press('/'));
+        type_str(&mut s, "r3");
+        assert_eq!(s.selected_id.as_deref(), Some("R3"));
+        // List view: selection that vanishes moves to the first visible row.
+        let mut s = filterable();
+        update(&mut s, code(KeyCode::Tab));
+        update(&mut s, press('/'));
+        type_str(&mut s, "x2");
+        assert_eq!(s.selected_id.as_deref(), Some("X2"));
+        assert_eq!(ids(&s), ["X2"]);
+        s.filter.query = "zzz".into();
+        s.refilter();
+        assert_eq!(s.selected_id, None);
+    }
+
+    #[test]
+    fn reload_with_a_query_keeps_it_and_asks_for_descriptions() {
+        let mut s = filterable();
+        s.filter.query = "r2".into();
+        assert_eq!(
+            update(&mut s, Event::DbChanged),
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDescriptions]
+        );
+        update(&mut s, Event::Loaded(Ok(sample())));
+        assert_eq!(all_ids(&s), ["R2"]);
     }
 }

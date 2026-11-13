@@ -1,5 +1,6 @@
 ---
 source: src/tui/view.rs
+assertion_line: 745
 expression: "render(&mut s, 90, 12).join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  5 tickets
@@ -13,4 +14,4 @@ scree  |  all Projects  |  agent/jeff  |  5 tickets
 |                            ||                            ||                            |
 +----------------------------++----------------------------++----------------------------+
 [Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page
-[g/G] first/last | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder
+[g/G] first/last | [/] search | [f] filter | [c] hide closed | [a] archived | [s] scope

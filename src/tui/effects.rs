@@ -51,6 +51,9 @@ pub fn run_effect(conn: &mut Connection, cwd: &Path, identity: &Identity, effect
                 .map(|r| r.tickets)
                 .map_err(|e| e.to_string()),
         ),
+        Effect::LoadDescriptions => {
+            Event::DescriptionsLoaded(ticket::descriptions(conn).map_err(|e| e.to_string()))
+        }
         Effect::LoadDetail(id) => Event::DetailLoaded(
             ticket::show(conn, &id)
                 .map(Box::new)
@@ -307,6 +310,47 @@ mod tests {
         assert!(p.all_worktrees && !p.all_projects);
         let a = scope_args(ScopeMode::AllProjects);
         assert!(a.all_projects && !a.all_worktrees);
+    }
+
+    #[test]
+    fn load_descriptions_maps_every_id_to_its_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let add = |conn: &mut Connection, title: &str, description: &str, parent: Option<&str>| {
+            ticket::add(
+                conn,
+                &Scope::Unscoped,
+                &NewTicket {
+                    title,
+                    description,
+                    plan: "",
+                    criteria: &[],
+                    for_who: ForWho::Agent,
+                    status: NewStatus::Ready,
+                    key: None,
+                    parent,
+                    blocked_by: &[],
+                },
+            )
+            .unwrap()
+            .ticket
+            .id
+        };
+        let a = add(&mut conn, "a", "alpha text", None);
+        let b = add(&mut conn, "b", "beta text", Some(&a));
+        let who = Identity {
+            role: Role::Agent,
+            author: "a".into(),
+            session: None,
+        };
+        let Event::DescriptionsLoaded(Ok(m)) =
+            run_effect(&mut conn, dir.path(), &who, Effect::LoadDescriptions)
+        else {
+            panic!("load failed");
+        };
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[&a], "alpha text");
+        assert_eq!(m[&b], "beta text");
     }
 
     #[test]

@@ -1,0 +1,17 @@
+---
+source: src/tui/view.rs
+assertion_line: 735
+expression: "rows.join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  1 tickets
+/ wire  status:ready  for:agent  blocked  (Esc clears)
++list (1)------------------------------------------------------------------------------------------+
+|- draft (0)                                                                                       |
+|o ready (1)                                                                                       |
+|! SCR-7 Wire the search box [blocked]                                                             |
+|* active (0)                                                                                      |
+|+ done (0)                                                                                        |
+|x abandoned (0)                                                                                   |
++--------------------------------------------------------------------------------------------------+
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last
+[/] search | [f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder

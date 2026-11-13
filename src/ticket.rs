@@ -1290,6 +1290,19 @@ pub fn move_tree(conn: &mut Connection, id: &str, target: MoveTarget) -> Result<
     })
 }
 
+/// Every ticket's public id mapped to its description, in one query. The
+/// summary shape carries no description, so the TUI search loads them here.
+pub fn descriptions(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
+    let rows = conn
+        .prepare(&format!(
+            "SELECT {ID_EXPR}, t.description FROM tickets t JOIN projects p ON p.id = t.project_id
+             LEFT JOIN tickets pt ON pt.id = t.parent_id"
+        ))?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// The summary shape used by `list` and `next`.
 fn build_summary(conn: &Connection, id: i64) -> Result<Ticket> {
     Ok(load(conn, id)?.0)

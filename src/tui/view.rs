@@ -7,19 +7,21 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
 use super::state::{
-    Detail, DetailSel, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
+    Avail, Detail, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
 };
 use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
 
-const HINTS: [(&str, &str); 11] = [
+const HINTS: [(&str, &str); 13] = [
     ("Enter", "open"),
     ("Tab", "board/list"),
     ("h/l", "column"),
     ("j/k", "row"),
     ("PgUp/PgDn", "page"),
     ("g/G", "first/last"),
+    ("/", "search"),
+    ("f", "filter"),
     ("c", "hide closed"),
     ("a", "archived"),
     ("s", "scope"),
@@ -418,8 +420,11 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     } else {
         widgets::footer_height(hints, area.width, &state.theme) + u16::from(status_line)
     };
-    let [header, body, footer] = Layout::vertical([
+    let show_filter =
+        state.detail.is_none() && (state.filter.is_active() || state.search.is_some());
+    let [header, filter_row, body, footer] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(u16::from(show_filter)),
         Constraint::Min(0),
         Constraint::Length(footer_h),
     ])
@@ -432,6 +437,14 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         state.visible_count(),
         &state.theme,
     );
+    if show_filter {
+        let line = filter_line(&state.filter, state.search.is_some());
+        frame.render_widget(Paragraph::new(line), filter_row);
+        if let Some(p) = &state.search {
+            let col = (p.cursor_col() as u16).min(filter_row.width.saturating_sub(1));
+            frame.set_cursor_position((filter_row.x + col, filter_row.y));
+        }
+    }
     if state.detail.is_some() {
         draw_detail(frame, body, state);
     } else {
@@ -468,6 +481,63 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     if let Some(p) = &state.picker {
         draw_picker(frame, area, p, &state.theme);
     }
+    if state.filter_menu {
+        draw_filter_menu(frame, area, &state.filter, &state.theme);
+    }
+}
+
+/// The filter header: "/ query" then each set filter, and how to clear.
+fn filter_line(f: &Filter, searching: bool) -> String {
+    let mut parts = vec![format!("/ {}", f.query)];
+    if let Some(c) = f.status {
+        parts.push(format!("status:{}", STATUSES[c]));
+    }
+    if let Some(w) = &f.for_who {
+        parts.push(format!("for:{w}"));
+    }
+    match f.avail {
+        Some(Avail::Blocked) => parts.push("blocked".into()),
+        Some(Avail::Available) => parts.push("available".into()),
+        None => {}
+    }
+    parts.push(if searching {
+        "(Enter keeps, Esc clears)".into()
+    } else {
+        "(Esc clears)".into()
+    });
+    parts.join("  ")
+}
+
+/// A centered popup showing the three cyclable filters and their keys.
+fn draw_filter_menu(frame: &mut Frame, area: Rect, f: &Filter, theme: &Theme) {
+    let w = 40.min(area.width);
+    let h = 7.min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    let any = |o: Option<&str>| o.unwrap_or("any").to_string();
+    let avail = match f.avail {
+        Some(Avail::Blocked) => "blocked",
+        Some(Avail::Available) => "available",
+        None => "any",
+    };
+    let text = vec![
+        Line::from(format!(
+            "[s] status:  {}",
+            any(f.status.map(|c| STATUSES[c]))
+        )),
+        Line::from(format!("[f] for:     {}", any(f.for_who.as_deref()))),
+        Line::from(format!("[b] blocked: {avail}")),
+        Line::from("[x] clear | Esc/Enter close"),
+    ];
+    frame.render_widget(
+        Paragraph::new(text).block(widgets::bordered_pane("filter", true, theme)),
+        rect,
+    );
 }
 
 /// A centered popup: filter line, matching tickets with the selected one
@@ -633,6 +703,44 @@ mod tests {
             );
         }
         insta::assert_snapshot!(render(&mut s, 90, 20).join("\n"));
+    }
+
+    #[test]
+    fn filter_header_on_board_while_searching() {
+        let mut s = sample_state();
+        key(&mut s, '/');
+        key(&mut s, 'b');
+        key(&mut s, 'o');
+        let rows = render(&mut s, 100, 12);
+        assert!(rows[1].starts_with("/ bo"), "{:?}", rows[1]);
+        assert!(rows[1].contains("Enter keeps"));
+        insta::assert_snapshot!(rows.join("\n"));
+    }
+
+    #[test]
+    fn filter_header_on_list_with_filters() {
+        let mut s = sample_state();
+        crate::tui::state::update(
+            &mut s,
+            Event::Key(ratatui::crossterm::event::KeyEvent::from(
+                ratatui::crossterm::event::KeyCode::Tab,
+            )),
+        );
+        s.filter.status = Some(1);
+        s.filter.for_who = Some("agent".into());
+        s.filter.avail = Some(Avail::Blocked);
+        s.filter.query = "wire".into();
+        let rows = render(&mut s, 100, 12);
+        assert!(rows[1].contains("/ wire  status:ready  for:agent  blocked  (Esc clears)"));
+        insta::assert_snapshot!(rows.join("\n"));
+    }
+
+    #[test]
+    fn filter_popup_sample() {
+        let mut s = sample_state();
+        key(&mut s, 'f');
+        key(&mut s, 's');
+        insta::assert_snapshot!(render(&mut s, 80, 14).join("\n"));
     }
 
     #[test]
