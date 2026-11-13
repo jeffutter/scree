@@ -23,7 +23,7 @@ Flat under `src/`, one per concept. Commands are plain functions that take a `&m
 | `order` | `position` placement and sibling ordering |
 | `sweep` | closed-Worktree sweep |
 | `output` | JSON or text decision and rendering |
-| `tui` | `scree tui`: terminal lifecycle with panic-safe restore, event loop, pure `update`, effect runner, drawing |
+| `tui` | `scree tui` (see [tui.md](tui.md)): submodules `mod` (event loop), `state` (pure `update`), `effects` (effect runner), `view` (drawing, help table), `terminal` (panic-safe restore), `watch` (database change polling), `widgets`, `theme` |
 | `skill` | generated SKILL.md and `--check` |
 | `error` | thiserror type and exit codes |
 

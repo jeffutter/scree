@@ -339,6 +339,8 @@ pub struct State {
     pub search: Option<Prompt>,
     /// While true, the filter popup owns the keyboard.
     pub filter_menu: bool,
+    /// The key help popup is open; it swallows every key but its closers.
+    pub help: bool,
 }
 
 impl Default for State {
@@ -367,6 +369,7 @@ impl Default for State {
             descriptions: HashMap::new(),
             search: None,
             filter_menu: false,
+            help: false,
         }
     }
 }
@@ -1249,6 +1252,16 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     if state.confirm.is_some() {
         return on_confirm_key(state, k);
     }
+    if state.help {
+        if matches!(k.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+            state.help = false;
+        }
+        return vec![];
+    }
+    if k.code == KeyCode::Char('?') && !ctrl {
+        state.help = true;
+        return vec![];
+    }
     if state.detail.is_some() {
         return on_detail_key(state, k);
     }
@@ -1365,6 +1378,38 @@ mod tests {
             KeyModifiers::CONTROL,
             KeyEventKind::Press,
         )]);
+        assert!(s.should_quit);
+    }
+
+    #[test]
+    fn help_opens_closes_and_swallows_keys() {
+        let (s, fx) = drive(vec![press('?')]);
+        assert!(s.help && fx.is_empty());
+        let (s, _) = drive(vec![press('?'), press('j'), press('s'), press('d')]);
+        assert!(s.help && !s.should_quit);
+        for close in [
+            press('?'),
+            press('q'),
+            key(KeyCode::Esc, KeyModifiers::NONE, KeyEventKind::Press),
+        ] {
+            let (s, _) = drive(vec![press('?'), close]);
+            assert!(!s.help && !s.should_quit);
+        }
+    }
+
+    #[test]
+    fn help_is_not_opened_over_text_entry_and_ctrl_c_quits_it() {
+        let (s, _) = drive(vec![press('/'), press('?')]);
+        assert!(!s.help);
+        assert_eq!(s.filter.query, "?");
+        let (s, _) = drive(vec![
+            press('?'),
+            key(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Press,
+            ),
+        ]);
         assert!(s.should_quit);
     }
 

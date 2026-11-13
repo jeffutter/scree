@@ -85,6 +85,10 @@ Output is text on a terminal and JSON in a pipe or an agent session. Force one w
 
 Ids work from any directory. Outside a git repository, a write needs `--project PATH`, or it creates an unscoped `LOCAL` ticket.
 
+## Use the terminal UI
+
+Run `scree tui` in a terminal for a board, a list and a ticket detail view. Press `?` for every key; `q` quits. It refreshes when an agent changes tickets in another process. See [`docs/tui.md`](docs/tui.md).
+
 ## Cleanup
 
 When a worktree is removed, its done tickets are archived and its unfinished tickets are abandoned and then archived. This happens when a command touches the project, or on request with `scree sweep`. Set `SCREE_NO_SWEEP=1` to turn it off. There is no `delete`: a ticket is abandoned, never removed.
@@ -97,7 +101,7 @@ A project is identified by the path of its root checkout. If you move the reposi
 
 ## More documentation
 
-The design is written down in [`docs/`](docs/): the [CLI reference](docs/cli.md), the [data model](docs/data-model.md), the [architecture](docs/architecture.md), the [generated skill](docs/skill.md) and the [architecture decisions](docs/adr/). Contributors should read [`CLAUDE.md`](CLAUDE.md) for the workflow used in this repository.
+The design is written down in [`docs/`](docs/): the [CLI reference](docs/cli.md), the [terminal UI](docs/tui.md), the [data model](docs/data-model.md), the [architecture](docs/architecture.md), the [generated skill](docs/skill.md) and the [architecture decisions](docs/adr/). Contributors should read [`CLAUDE.md`](CLAUDE.md) for the workflow used in this repository.
 
 ## License
 

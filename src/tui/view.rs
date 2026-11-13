@@ -13,7 +13,7 @@ use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
 
-const HINTS: [(&str, &str); 13] = [
+const HINTS: [(&str, &str); 14] = [
     ("Enter", "open"),
     ("Tab", "board/list"),
     ("h/l", "column"),
@@ -26,12 +26,76 @@ const HINTS: [(&str, &str); 13] = [
     ("a", "archived"),
     ("s", "scope"),
     ("S-Up/Down", "reorder"),
+    ("?", "help"),
     ("q", "quit"),
+];
+
+/// Every bound key, by section. The help popup draws this table and
+/// docs/tui.md repeats it, so a new binding is added here first.
+const HELP: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Board and list",
+        &[
+            ("h/l, Left/Right", "previous/next column (board)"),
+            ("j/k, Down/Up", "next/previous row"),
+            ("PgUp/PgDn", "page up/down"),
+            ("Ctrl-u/Ctrl-d", "half page up/down"),
+            ("g/G, Home/End", "first/last row"),
+            ("Enter", "open ticket detail"),
+            ("Tab", "switch board/list"),
+            ("c", "hide/show closed columns"),
+            ("a", "show/hide archived"),
+            ("s", "cycle scope worktree/project/all"),
+            ("/", "search id, title, description"),
+            ("f", "filter popup"),
+            ("Esc", "clear search and filters"),
+            ("Shift-Up/Down", "move ticket before/after neighbour"),
+            ("r S R", "ready / start / release"),
+            ("d D", "done / done --force (confirm)"),
+            ("x o A", "abandon (confirm) / reopen / archive"),
+            ("e", "edit title"),
+            ("E P", "edit description / plan in editor"),
+            ("?", "this help"),
+            ("q, Ctrl-c", "quit"),
+        ],
+    ),
+    (
+        "Detail",
+        &[
+            ("j/k, PgUp/PgDn", "scroll"),
+            ("Ctrl-u/Ctrl-d", "half page"),
+            ("g/G", "top/bottom"),
+            ("[ ]", "select previous/next criterion or comment"),
+            ("Space, v", "check (evidence prompt) / uncheck"),
+            ("n", "add criterion"),
+            ("m M", "add comment in prompt / editor"),
+            ("X", "remove criterion or comment (confirm)"),
+            ("b B", "add / remove blocker"),
+            ("r S R d D x o A e E P", "as on the board"),
+            ("Esc, q, h, Left", "back to board/list"),
+            ("?", "this help"),
+            ("Ctrl-c", "quit"),
+        ],
+    ),
+    (
+        "Popups and prompts",
+        &[
+            ("Filter: s f b", "cycle status / for / blocked"),
+            ("Filter: x", "clear all filters"),
+            ("Filter: Esc, Enter", "close"),
+            ("Picker: type", "filter tickets"),
+            ("Picker: Up/Down, Ctrl-p/n", "move"),
+            ("Picker: Enter, Esc", "apply, cancel"),
+            ("Prompt: Enter, Esc", "save, cancel"),
+            ("Confirm: y, Enter", "confirm; any other key cancels"),
+            ("Help: Esc, ?, q", "close"),
+        ],
+    ),
 ];
 
 const HINTS_EDIT: [(&str, &str); 1] = [("e/E/P", "title/desc/plan")];
 
-const HINTS_DETAIL: [(&str, &str); 10] = [
+const HINTS_DETAIL: [(&str, &str); 11] = [
     ("Esc/q", "back"),
     ("j/k", "scroll"),
     ("PgUp/PgDn", "page"),
@@ -42,6 +106,7 @@ const HINTS_DETAIL: [(&str, &str); 10] = [
     ("m/M", "comment"),
     ("X", "remove"),
     ("b/B", "add/rm blocker"),
+    ("?", "help"),
 ];
 
 /// Greedy word wrap of `text` to `width` cells; every output line starts with
@@ -484,6 +549,43 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     if state.filter_menu {
         draw_filter_menu(frame, area, &state.filter, &state.theme);
     }
+    if state.help {
+        draw_help(frame, area, &state.theme);
+    }
+}
+
+/// A centered popup listing every key by section from `HELP`; lines past the
+/// popup height are cut.
+fn draw_help(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let key_w = HELP
+        .iter()
+        .flat_map(|(_, rows)| rows.iter())
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut text: Vec<Line> = vec![];
+    for (section, rows) in HELP {
+        if !text.is_empty() {
+            text.push(Line::from(""));
+        }
+        text.push(Line::from(format!("{section}:")));
+        for (k, m) in *rows {
+            text.push(Line::from(format!("  {k:<key_w$}  {m}")));
+        }
+    }
+    let w = ((key_w + 50) as u16).min(area.width);
+    let h = (text.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(text).block(widgets::bordered_pane("help (Esc closes)", true, theme)),
+        rect,
+    );
 }
 
 /// The filter header: "/ query" then each set filter, and how to clear.
@@ -736,6 +838,13 @@ mod tests {
     }
 
     #[test]
+    fn help_popup_sample() {
+        let mut s = sample_state();
+        s.help = true;
+        insta::assert_snapshot!(render(&mut s, 90, 60).join("\n"));
+    }
+
+    #[test]
     fn filter_popup_sample() {
         let mut s = sample_state();
         key(&mut s, 'f');
@@ -756,7 +865,7 @@ mod tests {
             who: "human/human".into(),
             ..State::default()
         };
-        let rows = render(&mut s, 200, 8);
+        let rows = render(&mut s, 260, 8);
         assert!(rows[0].contains("all Projects"));
         assert!(rows[0].contains("human/human"));
         assert!(rows[0].contains("0 tickets"));
@@ -772,7 +881,7 @@ mod tests {
             error: Some("boom".into()),
             ..State::default()
         };
-        let rows = render(&mut s, 200, 8);
+        let rows = render(&mut s, 260, 8);
         assert!(rows[6].starts_with("error: boom"));
         assert!(rows[7].starts_with("[Enter] open"));
     }
