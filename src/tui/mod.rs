@@ -39,13 +39,14 @@ pub fn run(
     conn: &mut Connection,
     db_path: &Path,
     cwd: &Path,
+    scope: crate::scope::Scope,
     project_root: Option<&Path>,
     identity: &Identity,
     env: &Env,
 ) -> Result<()> {
     let changes = watch::spawn(db_path)?;
     let mut state = State::starting_in(
-        crate::scope::detect(&project_root.map_or_else(|| cwd.to_path_buf(), |p| cwd.join(p))),
+        scope,
         format!("{}/{}", identity.role.as_str(), identity.author),
         theme::Theme::from_env(env),
     );

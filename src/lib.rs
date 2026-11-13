@@ -13,7 +13,7 @@ pub mod tui;
 
 use clap::CommandFactory;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cli::{Cli, Command, CommentCommand, CriteriaCommand, DepCommand, ListArgs, ProjectCommand};
 use error::{Error, Result};
@@ -93,6 +93,18 @@ fn apply_project_override(scope: &mut cli::ScopeArgs, project: Option<&Path>, cw
     }
 }
 
+/// The TUI's Scope and the Project override it loads with, resolved once with
+/// the same rule as every other command.
+fn tui_scope(project: Option<&Path>, cwd: &Path) -> (scope::Scope, Option<PathBuf>) {
+    let mut args = cli::ScopeArgs::default();
+    apply_project_override(&mut args, project, cwd);
+    let at = args
+        .project_root
+        .as_deref()
+        .map_or_else(|| cwd.to_path_buf(), |p| cwd.join(p));
+    (scope::detect(&at), args.project_root)
+}
+
 /// `cwd` is the caller's directory, injected so tests need not chdir.
 pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
     if let Some(Command::Tui) = cli.command {
@@ -104,13 +116,13 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         let path = db::resolve_path_from_env(cli.db)?;
         let mut conn = db::open(&path)?;
         sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
-        let mut scope = cli::ScopeArgs::default();
-        apply_project_override(&mut scope, cli.project.as_deref(), cwd);
+        let (tui_scope, project_root) = tui_scope(cli.project.as_deref(), cwd);
         tui::run(
             &mut conn,
             &path,
             cwd,
-            scope.project_root.as_deref(),
+            tui_scope,
+            project_root.as_deref(),
             &identity,
             env,
         )?;
@@ -372,4 +384,49 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
 
 pub fn help_text() -> String {
     Cli::command().render_help().to_string()
+}
+
+#[cfg(test)]
+mod tui_scope_tests {
+    use super::*;
+
+    fn repo(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn project_override_from_unrelated_cwd_uses_that_repos_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = repo(&tmp.path().join("a"));
+        let b = repo(&tmp.path().join("b"));
+        let plain = tmp.path().canonicalize().unwrap();
+
+        let (s, root) = tui_scope(Some(&b), &plain);
+        assert_eq!(s, scope::detect(&b));
+        assert_ne!(s, scope::detect(&plain));
+        assert_eq!(root.as_deref(), Some(b.as_path()));
+
+        // Relative override from another repo.
+        let (s, _) = tui_scope(Some(Path::new("../b")), &a);
+        assert_eq!(s, scope::detect(&b));
+
+        // Override naming the repo cwd is already in changes nothing.
+        let (s, root) = tui_scope(Some(&a), &a);
+        assert_eq!(s, scope::detect(&a));
+        assert!(root.is_none());
+
+        // No override: cwd scope.
+        let (s, root) = tui_scope(None, &a);
+        assert_eq!(s, scope::detect(&a));
+        assert!(root.is_none());
+    }
 }
