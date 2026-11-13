@@ -56,7 +56,15 @@ pub struct Comment {
     pub session: Option<String>,
 }
 
-/// The list shape: a ticket without description, plan, criteria or comments.
+/// How many acceptance criteria a ticket has and how many are checked.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CriteriaSummary {
+    pub checked: i64,
+    pub total: i64,
+}
+
+/// The list shape: a ticket without description, plan, criteria detail or
+/// comments. `criteria` is only the `{checked, total}` summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ticket {
     pub archived_at: Option<String>,
@@ -65,6 +73,8 @@ pub struct Ticket {
     pub blocked_by: Vec<Blocker>,
     pub claimed_by: Option<Claimer>,
     pub created_at: String,
+    #[serde(default)]
+    pub criteria: CriteriaSummary,
     pub done_at: Option<String>,
     #[serde(rename = "for")]
     pub for_who: String,
@@ -78,14 +88,44 @@ pub struct Ticket {
 }
 
 /// The `show` shape, also returned by every mutation.
+///
+/// Its `criteria` key is the full array, not the list shape's
+/// `{checked, total}` summary: the serializer below overwrites the summary
+/// key, and deserializing rebuilds the summary from the array.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "RawDetail")]
 pub struct TicketDetail {
-    #[serde(flatten)]
     pub ticket: Ticket,
     pub comments: Vec<Comment>,
     pub criteria: Vec<Criterion>,
     pub description: String,
     pub plan: String,
+}
+
+#[derive(Deserialize)]
+struct RawDetail {
+    #[serde(flatten)]
+    ticket: Ticket,
+    comments: Vec<Comment>,
+    criteria: Vec<Criterion>,
+    description: String,
+    plan: String,
+}
+
+impl From<RawDetail> for TicketDetail {
+    fn from(mut r: RawDetail) -> Self {
+        r.ticket.criteria = CriteriaSummary {
+            checked: r.criteria.iter().filter(|c| c.checked).count() as i64,
+            total: r.criteria.len() as i64,
+        };
+        TicketDetail {
+            ticket: r.ticket,
+            comments: r.comments,
+            criteria: r.criteria,
+            description: r.description,
+            plan: r.plan,
+        }
+    }
 }
 
 // Flattening would write the summary keys first, then the detail keys; the

@@ -220,6 +220,7 @@ mod tests {
             blocked_by: vec![],
             claimed_by: None,
             created_at: String::new(),
+            criteria: Default::default(),
             done_at: None,
             for_who: "agent".into(),
             id: id.into(),

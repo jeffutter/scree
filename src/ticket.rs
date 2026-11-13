@@ -10,7 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, Claimer, Comment, Criterion, ListResult, NextResult, Subtask, Ticket, TicketDetail,
+    Blocker, Claimer, Comment, CriteriaSummary, Criterion, ListResult, NextResult, Subtask, Ticket,
+    TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -1454,7 +1455,13 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         [id],
         |r| r.get(0),
     )?;
+    let (total, checked): (i64, i64) = conn.query_row(
+        "SELECT count(*), coalesce(sum(checked), 0) FROM acceptance_criteria WHERE ticket_id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     let ticket = Ticket {
+        criteria: CriteriaSummary { checked, total },
         id: row.id,
         title: row.title,
         parent: row.parent,

@@ -117,6 +117,41 @@ fn numbers_are_never_reused() {
 }
 
 #[test]
+fn list_and_next_carry_a_criteria_summary() {
+    let e = env();
+    let id = new_ticket(&e);
+    let bare = e.ok(&["--role", "human", "add", "bare", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["check", &format!("{id}#1"), "--evidence", "ok"]);
+    let summary = |v: &Value, want: &str| {
+        v["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == want)
+            .unwrap()["criteria"]
+            .clone()
+    };
+    for cmd in ["list", "next"] {
+        let v = e.ok(&[cmd]);
+        assert_eq!(
+            summary(&v, &id),
+            serde_json::json!({"checked": 1, "total": 2})
+        );
+        if cmd == "list" {
+            assert_eq!(
+                summary(&v, &bare),
+                serde_json::json!({"checked": 0, "total": 0})
+            );
+        }
+    }
+    let shown = e.ok(&["show", &id]);
+    assert_eq!(shown["criteria"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn check_and_uncheck() {
     let e = env();
     let id = new_ticket(&e);
