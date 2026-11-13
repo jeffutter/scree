@@ -699,3 +699,40 @@ fn positions_step_by_1000_per_worktree() {
     };
     assert_eq!((pos("r1"), pos("r2"), pos("w1")), (1000, 2000, 1000));
 }
+
+#[test]
+fn tickets_carry_project_key_and_root() {
+    let e = env();
+    let repo = e.repo("a", "alpha");
+    let wt = e.worktree(&repo, "feat");
+    e.ok(&repo, &["add", "root ticket"]);
+    e.ok(&wt, &["add", "wt ticket"]);
+    e.ok(&e.base, &["add", "local ticket"]);
+
+    let list = e.ok(&e.base, &["list", "--all-projects"]);
+    let by_title = |title: &str| -> Value {
+        list["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["title"] == title)
+            .unwrap()
+            .clone()
+    };
+    let root = by_title("root ticket");
+    let linked = by_title("wt ticket");
+    let local = by_title("local ticket");
+    let repo_root = repo.to_str().unwrap();
+    assert_eq!(root["project"]["key"], "ALP");
+    assert_eq!(root["project"]["root"], repo_root);
+    assert_eq!(root["worktree"], Value::Null);
+    assert_eq!(linked["project"]["key"], "ALP");
+    assert_eq!(linked["project"]["root"], repo_root);
+    assert_eq!(linked["worktree"], wt.to_str().unwrap());
+    assert_eq!(local["project"]["key"], "LOCAL");
+    assert_eq!(local["project"]["root"], Value::Null);
+
+    let shown = e.ok(&wt, &["show", linked["id"].as_str().unwrap()]);
+    assert_eq!(shown["project"]["key"], "ALP");
+    assert_eq!(shown["project"]["root"], repo_root);
+}

@@ -63,6 +63,14 @@ pub struct CriteriaSummary {
     pub total: i64,
 }
 
+/// The Project a ticket belongs to. `root` is the Project's canonical root
+/// checkout path, null for the unscoped LOCAL project.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectRef {
+    pub key: String,
+    pub root: Option<String>,
+}
+
 /// The list shape: a ticket without description, plan, criteria detail or
 /// comments. `criteria` is only the `{checked, total}` summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,6 +88,8 @@ pub struct Ticket {
     pub for_who: String,
     pub id: String,
     pub parent: Option<String>,
+    #[serde(default)]
+    pub project: ProjectRef,
     pub status: String,
     pub subtasks: Vec<Subtask>,
     pub title: String,

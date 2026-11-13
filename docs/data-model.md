@@ -111,6 +111,8 @@ In code, inside the same `BEGIN IMMEDIATE` transaction as the write, returning t
 
 No triggers: they hide logic from the Rust tests and are awkward to evolve under forward-only migrations.
 
+In JSON output every ticket carries `project: {key, root}` from its Project row (`root` is null for LOCAL). `worktree` is null for the root checkout, so root checkout versus linked worktree is unambiguous: null means the checkout at `project.root`, a path means that linked worktree.
+
 Blocked and Available are computed in queries, never stored. `move` rewrites `worktree_path` for the whole tree in one transaction; it never changes a ticket's Project or id.
 
 ## Sweep

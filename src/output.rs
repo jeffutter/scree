@@ -225,6 +225,7 @@ mod tests {
             for_who: "agent".into(),
             id: id.into(),
             parent: None,
+            project: Default::default(),
             status: status.into(),
             subtasks: vec![],
             title: title.into(),

@@ -10,8 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, Claimer, Comment, CriteriaSummary, Criterion, ListResult, NextResult, Subtask, Ticket,
-    TicketDetail,
+    Blocker, Claimer, Comment, CriteriaSummary, Criterion, ListResult, NextResult, ProjectRef,
+    Subtask, Ticket, TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -1369,6 +1369,8 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         status: String,
         for_who: String,
         worktree: Option<String>,
+        project_key: String,
+        project_root: Option<String>,
         author: Option<String>,
         session: Option<String>,
         created: String,
@@ -1381,7 +1383,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
     let row = conn.query_row(
         &format!(
             "SELECT {ID_EXPR}, p.key || '-' || pt.number, t.title, t.status, t.\"for\",
-                    t.worktree_path, t.claimed_by_author, t.claimed_by_session,
+                    t.worktree_path, p.key, p.root_path, t.claimed_by_author, t.claimed_by_session,
                     t.created_at, t.updated_at, t.done_at, t.archived_at,
                     t.description, t.plan
              FROM tickets t JOIN projects p ON p.id = t.project_id
@@ -1396,14 +1398,16 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
                 status: r.get(3)?,
                 for_who: r.get(4)?,
                 worktree: r.get(5)?,
-                author: r.get(6)?,
-                session: r.get(7)?,
-                created: r.get(8)?,
-                updated: r.get(9)?,
-                done: r.get(10)?,
-                archived: r.get(11)?,
-                description: r.get(12)?,
-                plan: r.get(13)?,
+                project_key: r.get(6)?,
+                project_root: r.get(7)?,
+                author: r.get(8)?,
+                session: r.get(9)?,
+                created: r.get(10)?,
+                updated: r.get(11)?,
+                done: r.get(12)?,
+                archived: r.get(13)?,
+                description: r.get(14)?,
+                plan: r.get(15)?,
             })
         },
     )?;
@@ -1465,6 +1469,10 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         id: row.id,
         title: row.title,
         parent: row.parent,
+        project: ProjectRef {
+            key: row.project_key,
+            root: row.project_root,
+        },
         status: row.status,
         for_who: row.for_who,
         blocked,
