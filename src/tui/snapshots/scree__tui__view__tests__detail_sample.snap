@@ -39,6 +39,6 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  human/bob 2026-11-13T05:40:00Z                                              |
 |    Looks good, please keep the long lines wrapping so nothing is clipped at  |
 |    the pane edge.                                                            |
-|                                                                              |
 +------------------------------------------------------------------------------+
-[Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom
+[Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom | [R] release
+[d] done | [D] force done | [x] abandon | [A] archive

@@ -104,7 +104,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         let path = db::resolve_path_from_env(cli.db)?;
         let mut conn = db::open(&path)?;
         sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
-        tui::run(&conn, cwd, &identity, env)?;
+        tui::run(&mut conn, cwd, &identity, env)?;
         return Ok(Outcome::Quiet);
     }
     let identity = identity::resolve(cli.role, cli.author, cli.session, env);

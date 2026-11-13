@@ -34,7 +34,7 @@ pub fn check_tty(env: &Env) -> Result<()> {
     }
 }
 
-pub fn run(conn: &Connection, cwd: &Path, identity: &Identity, env: &Env) -> Result<()> {
+pub fn run(conn: &mut Connection, cwd: &Path, identity: &Identity, env: &Env) -> Result<()> {
     let mut state = State::starting_in(
         crate::scope::detect(cwd),
         format!("{}/{}", identity.role.as_str(), identity.author),

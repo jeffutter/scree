@@ -4,9 +4,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
-use super::state::{Detail, ListEntry, STATUSES, State, View};
+use super::state::{Detail, ListEntry, STATUSES, State, View, allowed};
 use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
@@ -332,13 +332,29 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &State) {
 
 pub fn draw(frame: &mut Frame, state: &mut State) {
     let area = frame.area();
-    let hints: &[(&str, &str)] = if state.detail.is_some() {
+    let base: &[(&str, &str)] = if state.detail.is_some() {
         &HINTS_DETAIL
     } else {
         &HINTS
     };
-    let footer_h =
-        widgets::footer_height(hints, area.width, &state.theme) + u16::from(state.error.is_some());
+    // Actions valid for the selected ticket's status, as "[k] label" hints.
+    let offers = state
+        .acted_ticket()
+        .map(|(_, status, archived)| allowed(&status, archived))
+        .unwrap_or_default();
+    let mut hints: Vec<(&str, &str)> = base.to_vec();
+    // Insert before the trailing quit hint so it stays last on the row.
+    let at = if state.detail.is_some() {
+        hints.len()
+    } else {
+        hints.len() - 1
+    };
+    for (i, (k, label, _)) in offers.into_iter().enumerate() {
+        hints.insert(at + i, (k, label));
+    }
+    let hints: &[(&str, &str)] = &hints;
+    let status_line = state.error.is_some() || state.notice.is_some();
+    let footer_h = widgets::footer_height(hints, area.width, &state.theme) + u16::from(status_line);
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -361,15 +377,44 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
             View::List => draw_list(frame, body, state),
         }
     }
-    match &state.error {
-        Some(e) => {
-            let [err, hints_area] =
+    let message = match (&state.error, &state.notice) {
+        (Some(e), _) => Some(format!("error: {e}")),
+        (None, Some(n)) => Some(n.clone()),
+        (None, None) => None,
+    };
+    match message {
+        Some(m) => {
+            let [line, hints_area] =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(footer);
-            frame.render_widget(Paragraph::new(Line::from(format!("error: {e}"))), err);
+            frame.render_widget(Paragraph::new(Line::from(m)), line);
             widgets::render_footer(frame.buffer_mut(), hints_area, hints, &state.theme);
         }
         None => widgets::render_footer(frame.buffer_mut(), footer, hints, &state.theme),
     }
+    if let Some(c) = &state.confirm {
+        draw_confirm(frame, area, &c.prompt, &state.theme);
+    }
+}
+
+/// A centered modal asking y/n.
+fn draw_confirm(frame: &mut Frame, area: Rect, prompt: &str, theme: &Theme) {
+    let w = (prompt.chars().count() as u16 + 6).max(30).min(area.width);
+    let h = 4.min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    let text = vec![
+        Line::from(prompt.to_string()),
+        Line::from("[y] confirm | [n] cancel"),
+    ];
+    frame.render_widget(
+        Paragraph::new(text).block(widgets::bordered_pane("confirm", true, theme)),
+        rect,
+    );
 }
 
 #[cfg(test)]
@@ -567,5 +612,48 @@ mod tests {
     fn wrap_splits_long_words() {
         assert_eq!(wrap("abcdefgh", "", 3), ["abc", "def", "gh"]);
         assert_eq!(wrap("a b\nc", "> ", 5), ["> a b", "> c"]);
+    }
+
+    fn key(s: &mut State, c: char) {
+        crate::tui::state::update(
+            s,
+            Event::Key(ratatui::crossterm::event::KeyEvent::from(
+                ratatui::crossterm::event::KeyCode::Char(c),
+            )),
+        );
+    }
+
+    #[test]
+    fn footer_hints_follow_status() {
+        let mut s = sample_state();
+        let draft = render(&mut s, 200, 14).join("\n");
+        assert!(draft.contains("[r] ready"), "{draft}");
+        assert!(!draft.contains("[S] start"));
+        key(&mut s, 'l');
+        let ready = render(&mut s, 200, 14).join("\n");
+        assert!(ready.contains("[S] start") && !ready.contains("[r] ready"));
+        assert!(ready.contains("[A] archive"));
+    }
+
+    #[test]
+    fn notice_and_error_show_in_status_line() {
+        let mut s = sample_state();
+        crate::tui::state::update(&mut s, Event::ActionDone(Ok("SCR-9 -> ready".into())));
+        let rows = render(&mut s, 200, 14);
+        assert!(rows.iter().any(|r| r.starts_with("SCR-9 -> ready")));
+        crate::tui::state::update(&mut s, Event::ActionDone(Err("SCR-9 is blocked".into())));
+        let rows = render(&mut s, 200, 14);
+        assert!(
+            rows.iter()
+                .any(|r| r.starts_with("error: SCR-9 is blocked"))
+        );
+    }
+
+    #[test]
+    fn confirm_popup_sample() {
+        let mut s = sample_state();
+        key(&mut s, 'l');
+        key(&mut s, 'x');
+        insta::assert_snapshot!(render(&mut s, 90, 14).join("\n"));
     }
 }

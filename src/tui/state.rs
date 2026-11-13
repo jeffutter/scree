@@ -79,6 +79,62 @@ pub struct Detail {
     pub scroll: usize,
 }
 
+/// A lifecycle change a key asks for on the selected ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifecycle {
+    Ready,
+    Start,
+    Release,
+    Done {
+        force: bool,
+    },
+    Abandon,
+    Reopen,
+    /// `archived` is the state to move the ticket to.
+    Archive {
+        archived: bool,
+    },
+}
+
+/// One action offered for a ticket: key, footer label, what it does.
+pub type Offer = (&'static str, &'static str, Lifecycle);
+
+/// The single source of truth for which lifecycle keys apply to a ticket:
+/// the footer lists them and the key handler ignores the rest.
+pub fn allowed(status: &str, archived: bool) -> Vec<Offer> {
+    let open = matches!(status, "draft" | "ready" | "active");
+    let mut v = vec![];
+    match status {
+        "draft" => v.push(("r", "ready", Lifecycle::Ready)),
+        "ready" => v.push(("S", "start", Lifecycle::Start)),
+        "active" => v.push(("R", "release", Lifecycle::Release)),
+        _ => {}
+    }
+    if open {
+        v.push(("d", "done", Lifecycle::Done { force: false }));
+        v.push(("D", "force done", Lifecycle::Done { force: true }));
+        v.push(("x", "abandon", Lifecycle::Abandon));
+    } else {
+        v.push(("o", "reopen", Lifecycle::Reopen));
+    }
+    v.push((
+        "A",
+        if archived { "unarchive" } else { "archive" },
+        Lifecycle::Archive {
+            archived: !archived,
+        },
+    ));
+    v
+}
+
+/// A pending y/n question before a destructive action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirm {
+    pub id: String,
+    pub action: Lifecycle,
+    pub prompt: String,
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -103,6 +159,10 @@ pub struct State {
     pub page: usize,
     /// While Some, the detail view replaces the board or list.
     pub detail: Option<Detail>,
+    /// The last action's success message, shown in the status line.
+    pub notice: Option<String>,
+    /// While Some, a modal popup owns the keyboard.
+    pub confirm: Option<Confirm>,
 }
 
 impl Default for State {
@@ -123,6 +183,8 @@ impl Default for State {
             view: View::Board,
             page: 10,
             detail: None,
+            notice: None,
+            confirm: None,
         }
     }
 }
@@ -155,6 +217,18 @@ impl State {
             }
             (ScopeMode::Worktree, s) => s.clone(),
         }
+    }
+
+    /// The ticket lifecycle keys act on: the open detail's, otherwise the
+    /// board or list selection. Returns (id, status, archived).
+    pub fn acted_ticket(&self) -> Option<(String, String, bool)> {
+        if let Some(d) = &self.detail {
+            let t = &d.ticket.ticket;
+            return Some((t.id.clone(), t.status.clone(), t.archived_at.is_some()));
+        }
+        let id = self.selected_id.as_deref()?;
+        let t = self.tickets.iter().find(|t| t.id == id)?;
+        Some((t.id.clone(), t.status.clone(), t.archived_at.is_some()))
     }
 
     /// Tickets of one column, in list order.
@@ -314,6 +388,9 @@ pub enum Event {
     Resize(u16),
     Loaded(Result<Vec<Ticket>, String>),
     DetailLoaded(Result<Box<TicketDetail>, String>),
+    /// A lifecycle action finished: Ok is a success message, Err the library's
+    /// refusal text.
+    ActionDone(Result<String, String>),
 }
 
 /// Work `update` asks the runner to do; the runner feeds the result back as an Event.
@@ -322,6 +399,11 @@ pub enum Effect {
     Reload(LoadSpec),
     /// Fetch the full ticket with this id.
     LoadDetail(String),
+    /// Apply a lifecycle action to the ticket with this id.
+    Transition {
+        id: String,
+        action: Lifecycle,
+    },
 }
 
 pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
@@ -355,16 +437,79 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             state.error = Some(e);
             vec![]
         }
+        Event::ActionDone(Ok(msg)) => {
+            state.notice = Some(msg);
+            state.error = None;
+            let mut fx = vec![Effect::Reload(state.load_spec())];
+            if let Some(d) = &state.detail {
+                fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
+            }
+            fx
+        }
+        Event::ActionDone(Err(e)) => {
+            state.notice = None;
+            state.error = Some(e);
+            vec![]
+        }
+    }
+}
+
+/// Lifecycle keys, shared by board, list and detail. Returns None when the
+/// key is not a lifecycle key; Some(effects) (possibly empty) when it is, so
+/// a key that does not apply to the ticket's status is inert.
+fn lifecycle_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
+    const KEYS: [char; 7] = ['r', 'S', 'R', 'd', 'D', 'x', 'o'];
+    if !KEYS.contains(&c) && c != 'A' {
+        return None;
+    }
+    let Some((id, status, archived)) = state.acted_ticket() else {
+        return Some(vec![]);
+    };
+    let Some((_, label, action)) = allowed(&status, archived)
+        .into_iter()
+        .find(|(k, _, _)| k.starts_with(c))
+    else {
+        return Some(vec![]);
+    };
+    match action {
+        Lifecycle::Done { force: true } | Lifecycle::Abandon => {
+            state.confirm = Some(Confirm {
+                prompt: format!("{label} {id}?"),
+                id,
+                action,
+            });
+            Some(vec![])
+        }
+        _ => Some(vec![Effect::Transition { id, action }]),
+    }
+}
+
+/// Keys while a confirm popup is open: y/Enter confirm, anything else cancels.
+fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let Some(c) = state.confirm.take() else {
+        return vec![];
+    };
+    match k.code {
+        KeyCode::Char('y') | KeyCode::Enter => vec![Effect::Transition {
+            id: c.id,
+            action: c.action,
+        }],
+        _ => vec![],
     }
 }
 
 /// Keys while the detail view is open. q closes the view, not the app.
-fn on_detail_key(state: &mut State, k: KeyEvent) {
+fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let page = state.page;
     let half = (page / 2).max(1);
+    if let (KeyCode::Char(c), false) = (k.code, ctrl)
+        && let Some(fx) = lifecycle_key(state, c)
+    {
+        return fx;
+    }
     let Some(d) = state.detail.as_mut() else {
-        return;
+        return vec![];
     };
     match (k.code, ctrl) {
         (KeyCode::Char('c'), true) => state.should_quit = true,
@@ -379,14 +524,28 @@ fn on_detail_key(state: &mut State, k: KeyEvent) {
         (KeyCode::End | KeyCode::Char('G'), false) => d.scroll = usize::MAX,
         _ => {}
     }
+    vec![]
 }
 
 fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
-    if state.detail.is_some() {
-        on_detail_key(state, k);
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    if ctrl && k.code == KeyCode::Char('c') {
+        state.should_quit = true;
         return vec![];
     }
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    state.notice = None;
+    state.error = None;
+    if state.confirm.is_some() {
+        return on_confirm_key(state, k);
+    }
+    if state.detail.is_some() {
+        return on_detail_key(state, k);
+    }
+    if let (KeyCode::Char(c), false) = (k.code, ctrl)
+        && let Some(fx) = lifecycle_key(state, c)
+    {
+        return fx;
+    }
     let page = state.page;
     let half = (page / 2).max(1);
     match (k.code, ctrl) {
@@ -924,5 +1083,154 @@ mod tests {
         let mut s = opened();
         update(&mut s, Event::Loaded(Ok(sample())));
         assert!(s.detail.is_some());
+    }
+
+    fn tr(id: &str, action: Lifecycle) -> Effect {
+        Effect::Transition {
+            id: id.into(),
+            action,
+        }
+    }
+
+    /// Board selection on column `col` (0 = draft, 1 = ready, ...), row 0.
+    fn at_col(col: usize) -> State {
+        let mut s = loaded(vec![]);
+        for _ in 0..col {
+            update(&mut s, press('l'));
+        }
+        s
+    }
+
+    #[test]
+    fn lifecycle_keys_per_status_from_board() {
+        // (column, selected id, key, expected effect)
+        let cases = [
+            (0, "D1", 'r', tr("D1", Lifecycle::Ready)),
+            (1, "R1", 'S', tr("R1", Lifecycle::Start)),
+            (0, "D1", 'd', tr("D1", Lifecycle::Done { force: false })),
+            (3, "X1", 'o', tr("X1", Lifecycle::Reopen)),
+            (4, "A1", 'o', tr("A1", Lifecycle::Reopen)),
+            (
+                1,
+                "R1",
+                'A',
+                tr("R1", Lifecycle::Archive { archived: true }),
+            ),
+        ];
+        for (col, id, k, want) in cases {
+            let mut s = at_col(col);
+            assert_eq!(s.selected_id.as_deref(), Some(id));
+            assert_eq!(update(&mut s, press(k)), vec![want], "{k} on {id}");
+        }
+    }
+
+    #[test]
+    fn lifecycle_keys_inert_for_wrong_status() {
+        let cases = [
+            (0, 'S'),
+            (0, 'R'),
+            (0, 'o'),
+            (1, 'r'),
+            (1, 'R'),
+            (3, 'r'),
+            (3, 'S'),
+            (3, 'd'),
+            (3, 'x'),
+            (4, 'D'),
+        ];
+        for (col, k) in cases {
+            let mut s = at_col(col);
+            assert!(update(&mut s, press(k)).is_empty(), "{k} col {col}");
+            assert!(s.confirm.is_none() && s.error.is_none() && s.notice.is_none());
+        }
+    }
+
+    #[test]
+    fn lifecycle_keys_work_from_list_and_detail() {
+        let mut s = loaded(vec![code(KeyCode::Tab)]);
+        assert_eq!(s.view, View::List);
+        assert_eq!(update(&mut s, press('r')), vec![tr("D1", Lifecycle::Ready)]);
+        let mut s = opened();
+        // detail_of is a ready ticket
+        assert_eq!(update(&mut s, press('S')), vec![tr("D1", Lifecycle::Start)]);
+        assert!(update(&mut s, press('r')).is_empty());
+        let mut s = opened();
+        update(&mut s, press('R'));
+        assert!(s.detail.is_some(), "inert key leaves the detail open");
+    }
+
+    #[test]
+    fn archive_toggles_by_archived_at() {
+        let mut s = State::default();
+        let mut t = ticket("Z1", "done");
+        t.archived_at = Some("2026-01-01T00:00:00Z".into());
+        update(&mut s, Event::Loaded(Ok(vec![t])));
+        for _ in 0..3 {
+            update(&mut s, press('l'));
+        }
+        assert_eq!(
+            update(&mut s, press('A')),
+            vec![tr("Z1", Lifecycle::Archive { archived: false })]
+        );
+    }
+
+    #[test]
+    fn force_done_and_abandon_need_confirmation() {
+        for (k, action) in [
+            ('D', Lifecycle::Done { force: true }),
+            ('x', Lifecycle::Abandon),
+        ] {
+            for confirm_key in [press('y'), code(KeyCode::Enter)] {
+                let mut s = at_col(1);
+                assert!(update(&mut s, press(k)).is_empty());
+                assert!(s.confirm.is_some());
+                assert_eq!(update(&mut s, confirm_key), vec![tr("R1", action)]);
+                assert!(s.confirm.is_none());
+            }
+            for cancel in [press('n'), code(KeyCode::Esc), press('j')] {
+                let mut s = at_col(1);
+                update(&mut s, press(k));
+                assert!(update(&mut s, cancel).is_empty());
+                assert!(s.confirm.is_none());
+                assert_eq!(s.selected_id.as_deref(), Some("R1"));
+            }
+        }
+    }
+
+    #[test]
+    fn ctrl_c_quits_through_confirm() {
+        let mut s = at_col(1);
+        update(&mut s, press('x'));
+        update(&mut s, ctrl('c'));
+        assert!(s.should_quit);
+    }
+
+    #[test]
+    fn action_error_sets_status_and_keeps_running() {
+        let mut s = at_col(1);
+        let fx = update(&mut s, Event::ActionDone(Err("R1 is blocked".into())));
+        assert!(fx.is_empty());
+        assert_eq!(s.error.as_deref(), Some("R1 is blocked"));
+        assert!(!s.should_quit);
+        // Next key clears it and still works.
+        assert_eq!(update(&mut s, press('S')), vec![tr("R1", Lifecycle::Start)]);
+        assert!(s.error.is_none());
+    }
+
+    #[test]
+    fn action_ok_reloads_and_refreshes_detail() {
+        let mut s = at_col(1);
+        let fx = update(&mut s, Event::ActionDone(Ok("R1 -> active".into())));
+        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(s.notice.as_deref(), Some("R1 -> active"));
+        let mut s = opened();
+        let fx = update(&mut s, Event::ActionDone(Ok("ok".into())));
+        assert_eq!(
+            fx,
+            vec![
+                Effect::Reload(s.load_spec()),
+                Effect::LoadDetail("D1".into())
+            ]
+        );
     }
 }
