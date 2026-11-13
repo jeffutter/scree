@@ -13,11 +13,11 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |   |  j/k, Down/Up               next/previous row                                 |    |
 |   |  PgUp/PgDn                  page up/down                                      |    |
 |   |  Ctrl-u/Ctrl-d              half page up/down                                 |    |
-+---|  g/G, Home/End              first/last row                                    |----+
-+rea|  Enter                      open ticket detail                                |----+
-|o S|  Tab                        switch board/list                                 |    |
-|! S|  c                          hide/show closed columns                          |    |
-|o S|  a                          show/hide archived                                |    |
+|   |  g/G, Home/End              first/last row                                    |    |
+|   |  Enter                      open ticket detail                                |    |
+|   |  Tab                        switch board/list                                 |    |
+|   |  c                          hide/show closed columns                          |    |
+|   |  a                          show/hide archived                                |    |
 |   |  s                          cycle scope worktree/project/all                  |    |
 |   |  /                          search id, title, description                     |    |
 |   |  f                          filter popup                                      |    |
@@ -25,9 +25,9 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |   |  Shift-Up/Down              move ticket before/after neighbour                |    |
 |   |  r S R                      ready / start / release                           |    |
 |   |  d D                        done / done --force (confirm)                     |    |
-+---|  x o A                      abandon (confirm) / reopen / archive              |----+
-+act|  e                          edit title                                        |----+
-|* S|  E P                        edit description / plan in editor                 |    |
+|   |  x o A                      abandon (confirm) / reopen / archive              |    |
+|   |  e                          edit title                                        |    |
+|   |  E P                        edit description / plan in editor                 |    |
 |   |  ?                          this help                                         |    |
 |   |  q, Ctrl-c                  quit                                              |    |
 |   |                                                                               |    |
@@ -36,10 +36,10 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |   |  Ctrl-u/Ctrl-d              half page                                         |    |
 |   |  g/G                        top/bottom                                        |    |
 |   |  [ ]                        select previous/next criterion or comment         |    |
-+---|  Space, v                   check (evidence prompt) / uncheck                 |----+
-+don|  n                          add criterion                                     |----+
-|+ S|  m M                        add comment in prompt / editor                    |    |
-|+ S|  X                          remove criterion or comment (confirm)             |    |
+|   |  Space, v                   check (evidence prompt) / uncheck                 |    |
+|   |  n                          add criterion                                     |    |
+|   |  m M                        add comment in prompt / editor                    |    |
+|   |  X                          remove criterion or comment (confirm)             |    |
 |   |  b B                        add / remove blocker                              |    |
 |   |  r S R d D x o A e E P      as on the board                                   |    |
 |   |  Esc, q, h, Left            back to board/list                                |    |
@@ -47,18 +47,18 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |   |  Ctrl-c                     quit                                              |    |
 |   |                                                                               |    |
 |   |Popups and prompts:                                                            |    |
-|   |  Filter: s f b              cycle status / for / blocked                      |    |
-+---|  Filter: x                  clear all filters                                 |----+
-+aba|  Filter: Esc, Enter         close                                             |----+
-|x S|  Picker: type               filter tickets                                    |    |
-|   |  Picker: Up/Down, Ctrl-p/n  move                                              |    |
-|   |  Picker: Enter, Esc         apply, cancel                                     |    |
-|   |  Prompt: Enter, Esc         save, cancel                                      |    |
-|   |  Confirm: y, Enter          confirm; any other key cancels                    |    |
-|   |  Help: Esc, ?, q            close                                             |    |
-|   +-------------------------------------------------------------------------------+    |
-|                                                                                        |
-|                                                                                        |
++---|  Filter: s f b              cycle status / for / blocked                      |----+
++rea|  Filter: x                  clear all filters                                 |----+
+|o S|  Filter: Esc, Enter         close                                             |    |
++---|  Picker: type               filter tickets                                    |----+
++act|  Picker: Up/Down, Ctrl-p/n  move                                              |----+
+|* S|  Picker: Enter, Esc         apply, cancel                                     |    |
++---|  Prompt: Enter, Esc         save, cancel                                      |----+
++don|  Confirm: y, Enter          confirm; any other key cancels                    |----+
+|+ S|  Help: Esc, ?, q            close                                             |    |
++---+-------------------------------------------------------------------------------+----+
++abandoned (1)---------------------------------------------------------------------------+
+|x SCR-1 Typed tickets                                                                   |
 +----------------------------------------------------------------------------------------+
 [Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page
 [g/G] first/last | [/] search | [f] filter | [c] hide closed | [a] archived | [s] scope

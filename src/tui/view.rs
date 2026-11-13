@@ -430,6 +430,13 @@ const MIN_FILL_W: u16 = 20;
 /// plus one blank row.
 const COLLAPSED_H: u16 = 3;
 
+/// Tallest an unfocused populated column grows in the stacked layout.
+const STACKED_OTHER_MAX_H: u16 = 3;
+
+/// Rows the focused column keeps in the stacked layout before the others
+/// grow past their border rows.
+const STACKED_FOCUS_MIN_H: u16 = 5;
+
 /// Whether the board must stack its columns vertically: the columns do not
 /// fit side by side at their readable width (2 border cells + `MIN_FILL_W`
 /// per expanded column, `COLLAPSED_W` per collapsed one).
@@ -454,11 +461,31 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let n_collapsed = collapsed.iter().filter(|&&x| x).count();
     let n_fill = cols.len() - n_collapsed;
     let stacked = stack_columns(area.width, n_fill, n_collapsed);
-    let constraints: Vec<Constraint> = collapsed
+    // Height each unfocused populated column may take when stacked: what is
+    // left after the focused column keeps STACKED_FOCUS_MIN_H, shared out,
+    // but never below the 2 border rows.
+    let n_other = cols
         .iter()
-        .map(|&e| match (e, stacked) {
+        .zip(&collapsed)
+        .filter(|&(&c, &e)| !e && c != state.col)
+        .count();
+    let reserved = COLLAPSED_H * u16::try_from(n_collapsed).unwrap_or(0) + STACKED_FOCUS_MIN_H;
+    let other_h = (area.height.saturating_sub(reserved)
+        / u16::try_from(n_other.max(1)).unwrap_or(1))
+    .clamp(2, STACKED_OTHER_MAX_H);
+    let constraints: Vec<Constraint> = cols
+        .iter()
+        .zip(&collapsed)
+        .map(|(&c, &e)| match (e, stacked) {
             (true, true) => Constraint::Length(COLLAPSED_H),
             (true, false) => Constraint::Length(COLLAPSED_W),
+            // Stacked, the focused column takes the spare height and the
+            // other populated ones shrink to a few rows, so the selected
+            // row stays visible on short terminals.
+            (false, true) if c != state.col => {
+                let rows = u16::try_from(state.column(c).len()).unwrap_or(u16::MAX);
+                Constraint::Length(rows.saturating_add(2).clamp(2, other_h))
+            }
             (false, _) => Constraint::Fill(1),
         })
         .collect();
@@ -1087,6 +1114,37 @@ mod tests {
         crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
         s.col = STATUSES.iter().position(|&x| x == "ready").unwrap();
         s
+    }
+
+    fn key_event(c: ratatui::crossterm::event::KeyCode) -> Event {
+        Event::Key(ratatui::crossterm::event::KeyEvent::from(c))
+    }
+
+    #[test]
+    fn stacked_short_terminal_shows_focused_selected_row() {
+        let mut s = sample_state();
+        let out = render(&mut s, 90, 14);
+        let ticket = &s.column(s.col)[s.rows[s.col]];
+        let id = ticket.id.clone();
+        assert!(out.iter().any(|l| l.contains(&id)), "{}", out.join("\n"));
+    }
+
+    #[test]
+    fn stacked_short_terminal_shows_selected_row_after_focus_change() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut s = sample_state();
+        render(&mut s, 90, 14);
+        for _ in 0..2 {
+            crate::tui::state::update(&mut s, key_event(KeyCode::Right));
+            let out = render(&mut s, 90, 14);
+            let id = s.column(s.col)[s.rows[s.col]].id.clone();
+            assert!(
+                out.iter().any(|l| l.contains(&id)),
+                "col {}: {}",
+                s.col,
+                out.join("\n")
+            );
+        }
     }
 
     #[test]
