@@ -1,19 +1,18 @@
 ---
 source: src/tui/view.rs
-assertion_line: 738
 expression: "render(&mut s, 80, 14).join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  1 tickets
 /   status:draft  (Esc clears)
-+draft (1)-----++ready (0)-----++active (0)----++done (0)------++abandoned (0)-+
-|- SCR-9 Sketc~||   +filter--------------------------------+   ||              |
-|              ||   |[s] status:  draft                    |   ||              |
-|              ||   |[f] for:     any                      |   ||              |
-|              ||   |[b] blocked: any                      |   ||              |
-|              ||   |[x] clear | Esc/Enter close           |   ||              |
-|              ||   |                                      |   ||              |
-|              ||   +--------------------------------------+   ||              |
-|              ||              ||              ||              ||              |
-+--------------++--------------++--------------++--------------++--------------+
++draft (1)-------------------------------------------------++rea++act++don++aba+
+|- SCR-9 Sketch the +filter--------------------------------+|   ||   ||   ||   |
+|                   |[s] status:  draft                    ||   ||   ||   ||   |
+|                   |[f] for:     any                      ||   ||   ||   ||   |
+|                   |[b] blocked: any                      ||   ||   ||   ||   |
+|                   |[x] clear | Esc/Enter close           ||   ||   ||   ||   |
+|                   |                                      ||   ||   ||   ||   |
+|                   +--------------------------------------+|   ||   ||   ||   |
+|                                                          ||   ||   ||   ||   |
++----------------------------------------------------------++---++---++---++---+
 [Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page
 [g/G] first/last | [/] search | [f] filter | [c] hide closed | [a] archived

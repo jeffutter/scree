@@ -1,0 +1,16 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 110, 12).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  9 tickets
++draft (1)-----------++ready (3)-----------++active (1)----------++done (2)------------++abandoned (2)-------+
+|- SCR-9 Sketch the ~||o SCR-8 Rev~ [human]||* SCR-5 Board view  ||+ SCR-3 Theme and h~||x SCR-1 Typed ticke~|
+|                    ||! SCR-7 W~ [blocked]||                    ||+ SCR-2 TUI scaffold||x SCR-20 Dropped id~|
+|                    ||o SCR-6 Add keyboar~||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
++--------------------++--------------------++--------------------++--------------------++--------------------+
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [/] search
+[f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder | [?] help | [r] ready

@@ -1,0 +1,16 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 110, 12).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  5 tickets
++dra++ready (3)-------------------------------------++act++done (2)-------------------------------------++aba+
+|   ||o SCR-8 Review the release workflow w~ [human]||   ||+ SCR-3 Theme and header                     ||   |
+|   ||! SCR-7 Wire the search box [blocked]         ||   ||+ SCR-2 TUI scaffold                         ||   |
+|   ||o SCR-6 Add keyboard help                     ||   ||                                             ||   |
+|   ||                                              ||   ||                                             ||   |
+|   ||                                              ||   ||                                             ||   |
+|   ||                                              ||   ||                                             ||   |
+|   ||                                              ||   ||                                             ||   |
++---++----------------------------------------------++---++---------------------------------------------++---+
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [/] search
+[f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder | [?] help | [q] quit

@@ -1,0 +1,12 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 110, 8).join(\"\\n\")"
+---
+scree  |  all Projects  |    |  0 tickets
++draft---------------++ready---------------++active--------------++done----------------++abandoned-----------+
+|                    ||                    ||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
+|                    ||                    ||                    ||                    ||                    |
++--------------------++--------------------++--------------------++--------------------++--------------------+
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [/] search
+[f] filter | [c] hide closed | [a] archived | [s] scope | [S-Up/Down] reorder | [?] help | [q] quit

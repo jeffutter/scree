@@ -415,19 +415,46 @@ fn row_line(t: &Ticket, width: usize, theme: &Theme) -> Line<'static> {
     ])
 }
 
+/// Width of a collapsed (empty) board column: 2 border cells + 3 title chars.
+const COLLAPSED_W: u16 = 5;
+
 fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let cols = state.visible_columns();
-    let areas =
-        Layout::horizontal(vec![Constraint::Ratio(1, cols.len() as u32); cols.len()]).split(area);
+    // Empty columns collapse to a narrow strip (derived from the data at
+    // draw time, so a column expands as soon as it gains a ticket). When
+    // every column is empty, or the strips would not fit, share the width
+    // equally so full titles stay readable.
+    let collapsed: Vec<bool> = cols.iter().map(|&c| state.column(c).is_empty()).collect();
+    let n_collapsed = collapsed.iter().filter(|&&x| x).count();
+    let use_strips = n_collapsed > 0
+        && n_collapsed < cols.len()
+        && n_collapsed * usize::from(COLLAPSED_W) < usize::from(area.width);
+    let constraints: Vec<Constraint> = collapsed
+        .iter()
+        .map(|&e| {
+            if use_strips && e {
+                Constraint::Length(COLLAPSED_W)
+            } else {
+                Constraint::Fill(1)
+            }
+        })
+        .collect();
+    let areas = Layout::horizontal(constraints).split(area);
     let mut offsets = state.offsets;
     for (&c, &pane) in cols.iter().zip(areas.iter()) {
         let tickets = state.column(c);
         let active = c == state.col;
-        let block = widgets::bordered_pane(
-            &format!("{} ({})", STATUSES[c], tickets.len()),
-            active,
-            &state.theme,
-        );
+        let title = if tickets.is_empty() {
+            let name = STATUSES[c];
+            if pane.width.saturating_sub(2) as usize >= name.chars().count() {
+                name.to_string()
+            } else {
+                name.chars().take(usize::from(COLLAPSED_W - 2)).collect()
+            }
+        } else {
+            format!("{} ({})", STATUSES[c], tickets.len())
+        };
+        let block = widgets::bordered_pane(&title, active, &state.theme);
         let width = usize::from(pane.width.saturating_sub(2));
         let items: Vec<ListItem> = tickets
             .iter()
@@ -970,6 +997,68 @@ mod tests {
         insta::assert_snapshot!(render(&mut s, 90, 12).join("\n"));
     }
 
+    fn press(s: &mut State, code: ratatui::crossterm::event::KeyCode) {
+        crate::tui::state::update(
+            s,
+            Event::Key(ratatui::crossterm::event::KeyEvent::from(code)),
+        );
+    }
+
+    #[test]
+    fn board_some_empty_columns() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut s = sample_state();
+        let t: Vec<_> = s
+            .tickets
+            .iter()
+            .filter(|t| t.status == "ready" || t.status == "done")
+            .cloned()
+            .collect();
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        // Move to an empty column (draft/active/abandoned are collapsed).
+        press(&mut s, KeyCode::Left);
+        insta::assert_snapshot!(render(&mut s, 110, 12).join("\n"));
+    }
+
+    #[test]
+    fn board_all_populated() {
+        let mut s = sample_state();
+        let mut t = s.tickets.clone();
+        t.push(ticket(
+            "SCR-20",
+            "abandoned",
+            "Dropped idea",
+            "agent",
+            false,
+        ));
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        insta::assert_snapshot!(render(&mut s, 110, 12).join("\n"));
+    }
+
+    #[test]
+    fn board_all_empty() {
+        let mut s = State {
+            theme: Theme::new(false, false),
+            ..State::default()
+        };
+        insta::assert_snapshot!(render(&mut s, 110, 8).join("\n"));
+    }
+
+    #[test]
+    fn column_expands_and_collapses_with_tickets() {
+        let mut s = sample_state();
+        assert!(render(&mut s, 110, 12)[1].contains("abandoned (1)"));
+        let mut t = s.tickets.clone();
+        t.retain(|t| t.status != "abandoned");
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        let collapsed = render(&mut s, 110, 12)[1].clone();
+        assert!(!collapsed.contains("abandoned"), "{collapsed}");
+        let mut t = s.tickets.clone();
+        t.push(ticket("SCR-30", "abandoned", "Back again", "agent", false));
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        assert!(render(&mut s, 110, 12)[1].contains("abandoned (1)"));
+    }
+
     #[test]
     fn empty_board_has_five_columns() {
         let mut s = State {
@@ -981,8 +1070,9 @@ mod tests {
         assert!(rows[0].contains("human/human"));
         assert!(rows[0].contains("0 tickets"));
         for st in STATUSES {
-            assert!(rows[1].contains(&format!("{st} (0)")), "{st}");
+            assert!(rows[1].contains(st), "{st}");
         }
+        assert!(!rows[1].contains("(0)"));
         assert!(rows[7].starts_with("[Enter] open"));
     }
 
