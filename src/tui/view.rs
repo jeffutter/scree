@@ -119,6 +119,16 @@ fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
         .max(1);
     let mut out = vec![];
     for para in text.split('\n') {
+        // Tabs become spaces; CR and other control chars would reach the
+        // terminal raw (zero cell width), so drop them.
+        let para: String = para
+            .chars()
+            .flat_map(|c| match c {
+                '\t' => vec![' '; 4],
+                c if c.is_control() => vec![],
+                c => vec![c],
+            })
+            .collect();
         // Leading indentation is content: keep it on the first line.
         let lead_n = para.chars().take_while(|&c| c == ' ').count().min(room - 1);
         let mut line = " ".repeat(lead_n);
@@ -140,15 +150,16 @@ fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
             if w == 0 {
                 continue;
             }
-            if used > 0 {
-                out.push(format!("{indent}{line}"));
+            // Indentation alone is not content: never flush an indent-only line.
+            if has_content(&line) {
+                out.push(format!("{indent}{}", line.trim_end_matches(' ')));
                 line.clear();
                 used = 0;
             }
             started = true;
             for c in word.chars() {
-                if used > 0 && used + cell(c) > room {
-                    out.push(format!("{indent}{line}"));
+                if has_content(&line) && used + cell(c) > room {
+                    out.push(format!("{indent}{}", line.trim_end_matches(' ')));
                     line.clear();
                     used = 0;
                 }
@@ -156,9 +167,13 @@ fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
                 used += cell(c);
             }
         }
-        out.push(format!("{indent}{line}"));
+        out.push(format!("{indent}{}", line.trim_end_matches(' ')));
     }
     out
+}
+
+fn has_content(line: &str) -> bool {
+    line.chars().any(|c| c != ' ')
 }
 
 fn who(c: &Claimer) -> String {
@@ -1048,6 +1063,25 @@ mod tests {
     #[test]
     fn wrap_keeps_indentation_and_inner_spaces() {
         assert_eq!(wrap("    code  x", "", 40), ["    code  x"]);
+    }
+
+    #[test]
+    fn wrap_drops_tabs_and_cr() {
+        let out = wrap("a\tb\r", "", 40);
+        assert!(out.iter().all(|l| !l.contains(['\t', '\r'])), "{out:?}");
+    }
+
+    #[test]
+    fn wrap_long_word_after_indent_has_no_blank_line() {
+        let out = wrap("    aaaaaaaaaaaaaaaaaaaa", "", 10);
+        assert!(out.iter().all(|l| !l.trim().is_empty()), "{out:?}");
+    }
+
+    #[test]
+    fn wrap_has_no_trailing_spaces() {
+        let out = wrap("aaaa  bbbb", "", 9);
+        assert!(out.iter().all(|l| !l.ends_with(' ')), "{out:?}");
+        assert_eq!(out, ["aaaa", "bbbb"]);
     }
 
     #[test]
