@@ -751,7 +751,13 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             }
             state.error = None;
             state.reselect();
-            vec![]
+            // Every reload (db change, action, scope switch) refreshes an
+            // open detail, so it never shows stale status or comments.
+            state
+                .detail
+                .iter()
+                .map(|d| Effect::LoadDetail(d.ticket.ticket.id.clone()))
+                .collect()
         }
         Event::Loaded(Err(e)) => {
             state.error = Some(e);
@@ -793,18 +799,12 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             if state.wants_descriptions() {
                 fx.push(Effect::LoadDescriptions);
             }
-            if let Some(d) = &state.detail {
-                fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
-            }
             fx
         }
         Event::DbChanged => {
             let mut fx = vec![Effect::Reload(state.load_spec())];
             if state.wants_descriptions() {
                 fx.push(Effect::LoadDescriptions);
-            }
-            if let Some(d) = &state.detail {
-                fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
             }
             fx
         }
@@ -1309,7 +1309,9 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         (KeyCode::Home | KeyCode::Char('g'), false) => state.move_row(|_, _| 0),
         (KeyCode::End | KeyCode::Char('G'), false) => state.move_row(|_, len| len - 1),
         (KeyCode::Enter, false) => {
-            if let Some(id) = state.selected_id.clone() {
+            if let Some(id) = state.selected_id.clone()
+                && state.tickets.iter().any(|t| t.id == id && state.matches(t))
+            {
                 return vec![Effect::LoadDetail(id)];
             }
         }
@@ -1705,13 +1707,8 @@ mod tests {
         assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
         let mut s = loaded(vec![Event::DetailLoaded(Ok(Box::new(detail_of("D1"))))]);
         let fx = update(&mut s, Event::DbChanged);
-        assert_eq!(
-            fx,
-            vec![
-                Effect::Reload(s.load_spec()),
-                Effect::LoadDetail("D1".into())
-            ]
-        );
+        // The detail refresh rides on the Loaded event the reload produces.
+        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
     }
 
     #[test]
@@ -1918,8 +1915,25 @@ mod tests {
     #[test]
     fn reload_keeps_detail_open() {
         let mut s = opened();
-        update(&mut s, Event::Loaded(Ok(sample())));
+        let fx = update(&mut s, Event::Loaded(Ok(sample())));
         assert!(s.detail.is_some());
+        assert_eq!(fx, vec![Effect::LoadDetail("D1".into())]);
+    }
+
+    #[test]
+    fn refreshed_detail_keeps_scroll() {
+        let mut s = opened();
+        s.detail.as_mut().unwrap().scroll = 7;
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(detail_of("D1")))));
+        assert_eq!(s.detail.as_ref().unwrap().scroll, 7);
+    }
+
+    #[test]
+    fn enter_on_hidden_selection_does_nothing() {
+        let mut s = loaded(vec![]);
+        s.selected_id = Some("GONE".into());
+        let fx = update(&mut s, code(KeyCode::Enter));
+        assert!(fx.is_empty());
     }
 
     fn tr(id: &str, action: Lifecycle) -> Effect {
@@ -2062,13 +2076,8 @@ mod tests {
         assert_eq!(s.notice.as_deref(), Some("R1 -> active"));
         let mut s = opened();
         let fx = update(&mut s, Event::ActionDone(Ok("ok".into())));
-        assert_eq!(
-            fx,
-            vec![
-                Effect::Reload(s.load_spec()),
-                Effect::LoadDetail("D1".into())
-            ]
-        );
+        // The detail refresh rides on the Loaded event the reload produces.
+        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
     }
 
     fn type_str(s: &mut State, text: &str) {
