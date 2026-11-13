@@ -89,6 +89,10 @@ Ids work from any directory. Outside a git repository, a write needs `--project 
 
 Run `scree tui` in a terminal for a board, a list and a ticket detail view. Press `?` for every key; `q` quits. It refreshes when an agent changes tickets in another process. See [`docs/tui.md`](docs/tui.md).
 
+## Herdr
+
+[`herdr/`](herdr/README.md) holds a [Herdr](https://herdr.dev) mod: a side panel of the focused space's tickets and a full-window board of every project. The flake exports it as `packages.<system>.herdr-mod`.
+
 ## Cleanup
 
 When a worktree is removed, its done tickets are archived and its unfinished tickets are abandoned and then archived. This happens when a command touches the project, or on request with `scree sweep`. Set `SCREE_NO_SWEEP=1` to turn it off. There is no `delete`: a ticket is abandoned, never removed.

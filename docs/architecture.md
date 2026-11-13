@@ -42,12 +42,13 @@ Runner: cargo-nextest.
 
 ## Flake
 
-Inputs: nixpkgs-unstable, flake-utils, rust-overlay, crane. One rust-overlay toolchain is shared by crane, clippy, rustfmt and the dev shell. Cairn's Pele and htmx embeds and its Herdr mod are not carried over.
+Inputs: nixpkgs-unstable, flake-utils, rust-overlay, crane. One rust-overlay toolchain is shared by crane, clippy, rustfmt and the dev shell. Cairn's Pele and htmx embeds are not carried over.
 
 - On Linux, `RUSTFLAGS` links with clang and mold, as Cairn does. `clang` is a native build input everywhere. macOS adds `libiconv` to build inputs.
 - `packages.default`: the binary, built with `doCheck = false` because nextest runs as a check.
 - `packages.skill`: a directory holding `SKILL.md`, produced by `scree skill` and verified by `scree skill --check`, so another flake can link it as a skill directory.
-- `checks`: `build`, `clippy` (`--all-targets -- -D warnings`), `fmt`, `nextest` (with `git` in `nativeCheckInputs`).
+- `packages.herdr-mod`: the Herdr mod from `herdr/scree/mods/scree`, laid out as a Herdr home's `mods/` folder with its `scree` binary pinned to this flake's package. The build runs the mod's node test first. See [`herdr/README.md`](../herdr/README.md).
+- `checks`: `build`, `herdr-mod`, `clippy` (`--all-targets -- -D warnings`), `fmt`, `nextest` (with `git` in `nativeCheckInputs`).
 - `devShells.default`: toolchain, cargo-nextest, cargo-release, cargo-watch, clang, sqlite, and mold on Linux.
 - `formatter`: nixpkgs-fmt.
 

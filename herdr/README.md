@@ -1,0 +1,60 @@
+# Scree for Herdr
+
+A [Herdr](https://herdr.dev) mod that shows scree tickets inside the window. One mod, two views chosen by the layout block's `props.view`:
+
+- **panel**: a side panel of the focused space's project, grouped Active, Ready, Draft and Done, with criteria progress bars and a ticket detail view.
+- **board**: a full-window board of every Project and Worktree, with Draft, Ready, Active and Done columns and one swimlane per project.
+
+![Scree for Herdr](scree/preview.png)
+
+[`scree/`](scree/) is the shareable folder: `mods/scree/`, the [`RECIPE.md`](scree/RECIPE.md) a build is written from, and `preview.png`.
+
+## What it needs
+
+- `scree` (this repo's binary). The mod only reads: it runs `scree --json list` (open tickets, done tickets, or `--all-projects` for the board) and `scree --json show ID` in the space's folder, so scree's project scoping decides which tickets show. It refuses any write subcommand. "tui" opens `scree tui` in a new pane.
+- `mod.json` sets `"focusable": true`.
+- A layout with the two blocks. For the panel, add a child to the stack `panel-body` inside the column `panel`; for the board, add a sibling of `work-body` in the stack `work-area`:
+
+  ```json
+  { "id": "scree", "type": "block", "content": { "mod": "scree", "props": { "view": "panel" } } }
+  { "id": "scree-board", "type": "block", "content": { "mod": "scree", "props": { "view": "board" } } }
+  ```
+
+  Then tab-bar buttons that show them:
+
+  ```js
+  // Scree panel button
+  run("layout.select", { stack: "panel-body", child: "scree" });
+  run("layout.show", { id: "panel" });
+  // Board button (toggles back to the normal work area)
+  run("layout.select", { stack: "work-area", child: "scree-board" }); // or child "work-body" to leave
+  ```
+
+  Herdr's shipped layouts and the `tabs` mod are read-only, so clone them (`herdr-app do layout.clone`, `herdr-app do mod.clone`) and edit the clones. The `tabs` mod's `panelButton("changes", ...)` line is the one to copy for a Scree button.
+
+## Install by hand
+
+Copy `scree/mods/scree/` to `~/.config/herdr-app/mods/scree/` and run `herdr-app check ~/.config/herdr-app/mods/scree`. The mod looks for `scree` on `PATH`.
+
+## Install with nix
+
+The flake exports `packages.<system>.herdr-mod`: the mod laid out as a Herdr home's `mods/` folder, with its scree binary pinned to the same flake's `scree` package.
+
+```nix
+# inputs.scree.url = "github:jeffutter/scree";
+home.file.".config/herdr-app/mods/scree" = {
+  source = "${inputs.scree.packages.${pkgs.system}.herdr-mod}/mods/scree";
+  recursive = true; # Herdr writes jsconfig.json and .d.ts files into mod folders
+};
+```
+
+Link the folder per file (`recursive = true`) so Herdr can write its own files beside the mod's. `nix build .#herdr-mod` also runs the mod's node test (`scree.test.mjs`).
+
+## Use
+
+- Click the Scree button for the panel. Section headers fold; "This worktree" / "All worktrees" switches scope; the chips filter by All, Agent, Human and Blocked only. Click a row for the ticket detail, "Back" returns.
+- Click the Board button for the board. Click a project header to fold it, a card to open its detail, "+N more" to expand a long cell.
+- "tui" (panel header) and "Open in scree tui" (detail) open `scree tui` in a new pane on the right, for a space on this machine.
+- The mod polls every 3 s; no server is involved.
+
+To run the node test by hand: `node herdr/scree/mods/scree/scree.test.mjs`.
