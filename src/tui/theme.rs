@@ -52,7 +52,6 @@ impl Theme {
         }
     }
 
-    #[allow(dead_code)] // used by the ticket views that follow
     /// Icon and style for a ticket status. Blocked wins over everything; a
     /// ready ticket that is available (not blocked) is shown distinctly.
     pub fn status_style(
@@ -87,7 +86,6 @@ impl Theme {
         }
     }
 
-    #[allow(dead_code)] // used by the ticket views that follow
     /// Selected row: inverse video, meaningful with or without color.
     pub fn selected_style(&self) -> Style {
         Style::new().add_modifier(Modifier::REVERSED)

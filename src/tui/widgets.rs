@@ -86,7 +86,6 @@ pub fn render_header(
     Paragraph::new(line).render(area, buf);
 }
 
-#[allow(dead_code)] // used by the ticket views that follow
 /// A bordered pane: yellow border when active, gray otherwise.
 pub fn bordered_pane(title: &str, active: bool, theme: &Theme) -> Block<'static> {
     let mut block = Block::new()

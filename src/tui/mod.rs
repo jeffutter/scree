@@ -35,17 +35,17 @@ pub fn check_tty(env: &Env) -> Result<()> {
 }
 
 pub fn run(conn: &Connection, cwd: &Path, identity: &Identity, env: &Env) -> Result<()> {
-    let mut state = State {
-        who: format!("{}/{}", identity.role.as_str(), identity.author),
-        scope: crate::scope::detect(cwd),
-        theme: theme::Theme::from_env(env),
-        ..State::default()
-    };
+    let mut state = State::starting_in(
+        crate::scope::detect(cwd),
+        format!("{}/{}", identity.role.as_str(), identity.author),
+        theme::Theme::from_env(env),
+    );
     let _guard = terminal::Guard::enter()?;
     let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     term.clear()?;
 
-    let mut pending = vec![Effect::Reload];
+    update(&mut state, Event::Resize(term.size()?.height));
+    let mut pending = vec![Effect::Reload(state.load_spec())];
     while !state.should_quit {
         while let Some(effect) = pending.pop() {
             let ev = effects::run_effect(conn, cwd, identity, effect);
@@ -55,7 +55,7 @@ pub fn run(conn: &Connection, cwd: &Path, identity: &Identity, env: &Env) -> Res
         if event::poll(Duration::from_millis(250))? {
             let ev = match event::read()? {
                 event::Event::Key(k) => Event::Key(k),
-                event::Event::Resize(..) => Event::Resize,
+                event::Event::Resize(_, h) => Event::Resize(h),
                 _ => continue,
             };
             pending.extend(update(&mut state, ev));

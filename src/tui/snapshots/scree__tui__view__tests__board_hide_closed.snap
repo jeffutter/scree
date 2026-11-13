@@ -1,0 +1,16 @@
+---
+source: src/tui/view.rs
+expression: "render(&s, 90, 12).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  5 tickets
++draft (1)-------------------++ready (3)-------------------++active (1)------------------+
+|- SCR-9 Sketch the detail v~||o SCR-8 Review the ~ [human]||* SCR-5 Board view          |
+|                            ||! SCR-7 Wire the ~ [blocked]||                            |
+|                            ||o SCR-6 Add keyboard help   ||                            |
+|                            ||                            ||                            |
+|                            ||                            ||                            |
+|                            ||                            ||                            |
+|                            ||                            ||                            |
++----------------------------++----------------------------++----------------------------+
+[h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [c] hide closed
+[a] archived | [s] scope | [q] quit
