@@ -115,11 +115,16 @@ function detailModel(show) {
 // Board columns, left to right.
 const BOARD_COLUMNS = ["draft", "ready", "active", "done"];
 
-// The board's single call: every Project and Worktree (`--all-projects` already means both; it
-// conflicts with `--all-worktrees`). The default limit is 50, so pass a large one. Done is
+// The board's two calls: every Project and Worktree (`--all-projects` already means both; it
+// conflicts with `--all-worktrees`). The default limit is 50, so pass a large one. Open and done
+// are separate so accumulated done tickets cannot crowd open ones out of the limit. Done is
 // ordered by position, so boardModel cuts it to the last days client-side.
 function boardListArgs() {
-  return ["--json", "list", "--all-projects", ...BOARD_COLUMNS.flatMap((s) => ["--status", s]), "--limit", "1000"];
+  const open = BOARD_COLUMNS.filter((s) => s !== "done");
+  return {
+    open: ["--json", "list", "--all-projects", ...open.flatMap((s) => ["--status", s]), "--limit", "1000"],
+    done: ["--json", "list", "--all-projects", "--status", "done", "--limit", "1000"],
+  };
 }
 
 function worktreeLabel(path) {
@@ -263,9 +268,11 @@ export default class Scree extends View {
     cx.spawn(async (cx) => {
       try {
         if (this.mode === "board") {
-          // One call on the focused space's machine; all-projects needs no repo, so a missing cwd is fine.
-          const all = JSON.parse(await this.scree(boardListArgs(), loc));
-          if (this.key() === context) { this.board = all.tickets ?? []; this.error = null; this.loaded = true; }
+          // Two calls on the focused space's machine; all-projects needs no repo, so a missing cwd is fine.
+          const bargs = boardListArgs();
+          const open = JSON.parse(await this.scree(bargs.open, loc));
+          const done = JSON.parse(await this.scree(bargs.done, loc));
+          if (this.key() === context) { this.board = [...(open.tickets ?? []), ...(done.tickets ?? [])]; this.error = null; this.loaded = true; }
         } else {
           const open = JSON.parse(await this.scree(args.open, loc));
           const done = JSON.parse(await this.scree(args.done, loc));

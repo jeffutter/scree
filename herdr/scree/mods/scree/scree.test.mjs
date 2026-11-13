@@ -90,8 +90,10 @@ for (const w of ["add", "edit", "check", "start", "done", "release", "abandon", 
 }
 assert(!isWriteCommand([]));
 // Board.
-assert.deepEqual(boardListArgs(), ["--json", "list", "--all-projects", "--status", "draft", "--status", "ready", "--status", "active", "--status", "done", "--limit", "1000"]);
-assert(!isWriteCommand(boardListArgs()));
+assert.deepEqual(boardListArgs().open, ["--json", "list", "--all-projects", "--status", "draft", "--status", "ready", "--status", "active", "--limit", "1000"]);
+assert.deepEqual(boardListArgs().done, ["--json", "list", "--all-projects", "--status", "done", "--limit", "1000"]);
+assert(!boardListArgs().open.includes("done"), "open board call must not include --status done");
+assert(!isWriteCommand(boardListArgs().open) && !isWriteCommand(boardListArgs().done));
 assert.equal(machineLabel(null), "this computer");
 assert.equal(machineLabel("box"), "box");
 assert.equal(worktreeLabel(null), "root");
