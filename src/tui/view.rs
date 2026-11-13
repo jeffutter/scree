@@ -6,12 +6,14 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
-use super::state::{Detail, DetailSel, ListEntry, STATUSES, State, View, allowed};
+use super::state::{
+    Detail, DetailSel, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
+};
 use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
 
-const HINTS: [(&str, &str); 10] = [
+const HINTS: [(&str, &str); 11] = [
     ("Enter", "open"),
     ("Tab", "board/list"),
     ("h/l", "column"),
@@ -21,12 +23,13 @@ const HINTS: [(&str, &str); 10] = [
     ("c", "hide closed"),
     ("a", "archived"),
     ("s", "scope"),
+    ("S-Up/Down", "reorder"),
     ("q", "quit"),
 ];
 
 const HINTS_EDIT: [(&str, &str); 1] = [("e/E/P", "title/desc/plan")];
 
-const HINTS_DETAIL: [(&str, &str); 9] = [
+const HINTS_DETAIL: [(&str, &str); 10] = [
     ("Esc/q", "back"),
     ("j/k", "scroll"),
     ("PgUp/PgDn", "page"),
@@ -36,6 +39,7 @@ const HINTS_DETAIL: [(&str, &str); 9] = [
     ("n", "criterion"),
     ("m/M", "comment"),
     ("X", "remove"),
+    ("b/B", "add/rm blocker"),
 ];
 
 /// Greedy word wrap of `text` to `width` cells; every output line starts with
@@ -461,6 +465,53 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     if let Some(c) = &state.confirm {
         draw_confirm(frame, area, &c.prompt, &state.theme);
     }
+    if let Some(p) = &state.picker {
+        draw_picker(frame, area, p, &state.theme);
+    }
+}
+
+/// A centered popup: filter line, matching tickets with the selected one
+/// highlighted, and a hints line.
+fn draw_picker(frame: &mut Frame, area: Rect, p: &Picker, theme: &Theme) {
+    let w = 60.min(area.width);
+    let h = 14.min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, rect);
+    let title = match p.mode {
+        PickerMode::Add => format!("{} blocked by", p.id),
+        PickerMode::Remove => format!("{} no longer blocked by", p.id),
+    };
+    let block = widgets::bordered_pane(&title, true, theme);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let [filter, list, hint] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    frame.render_widget(Paragraph::new(format!("filter: {}", p.filter)), filter);
+    let width = usize::from(list.width);
+    let items: Vec<ListItem> = p
+        .visible()
+        .into_iter()
+        .map(|(id, title)| {
+            let line = format!("{id} {title}");
+            ListItem::new(truncate(&line, width, theme))
+        })
+        .collect();
+    let mut ls = ListState::default().with_selected(Some(p.sel));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(Style::default().reversed()),
+        list,
+        &mut ls,
+    );
+    frame.render_widget(Paragraph::new("Enter select | Esc cancel"), hint);
 }
 
 /// A centered modal asking y/n.
@@ -751,5 +802,13 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("bob")), "{rows:?}");
         assert!(rows.iter().any(|r| r.contains("pane edge")), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains("> [x]")));
+    }
+
+    #[test]
+    fn picker_popup_sample() {
+        let mut s = detail_state();
+        key(&mut s, 'b');
+        key(&mut s, 'r');
+        insta::assert_snapshot!(render(&mut s, 90, 24).join("\n"));
     }
 }

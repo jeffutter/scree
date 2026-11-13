@@ -241,6 +241,37 @@ pub struct PromptState {
     pub prompt: Prompt,
 }
 
+/// Whether the dependency picker adds or removes a blocker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerMode {
+    Add,
+    Remove,
+}
+
+/// An open filterable ticket list choosing a blocker for `id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picker {
+    pub id: String,
+    pub mode: PickerMode,
+    /// Case-insensitive substring filter over "id title".
+    pub filter: String,
+    /// Every candidate as (id, title), before filtering.
+    pub candidates: Vec<(String, String)>,
+    /// Index into `visible()`.
+    pub sel: usize,
+}
+
+impl Picker {
+    /// The candidates matching the filter, in order.
+    pub fn visible(&self) -> Vec<&(String, String)> {
+        let f = self.filter.to_lowercase();
+        self.candidates
+            .iter()
+            .filter(|(id, title)| format!("{id} {title}").to_lowercase().contains(&f))
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -271,6 +302,8 @@ pub struct State {
     pub confirm: Option<Confirm>,
     /// While Some, the footer prompt owns the keyboard.
     pub prompt: Option<PromptState>,
+    /// While Some, the dependency picker owns the keyboard.
+    pub picker: Option<Picker>,
 }
 
 impl Default for State {
@@ -294,6 +327,7 @@ impl Default for State {
             notice: None,
             confirm: None,
             prompt: None,
+            picker: None,
         }
     }
 }
@@ -562,6 +596,20 @@ pub enum Effect {
         id: String,
         comment_id: i64,
     },
+    /// Move `id` just before (`before`) or after `anchor` among its siblings.
+    Reorder {
+        id: String,
+        anchor: String,
+        before: bool,
+    },
+    AddDep {
+        id: String,
+        blocker: String,
+    },
+    RemoveDep {
+        id: String,
+        blocker: String,
+    },
 }
 
 pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
@@ -809,6 +857,132 @@ fn on_prompt_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// Shift-Up/Down on the board or list: move the selected ticket before its
+/// previous or after its next neighbour. Inert at the edge of a column or
+/// group; done and abandoned tickets are refused here with a message.
+fn reorder_key(state: &mut State, up: bool) -> Vec<Effect> {
+    let Some((id, status, _)) = state.acted_ticket() else {
+        return vec![];
+    };
+    if matches!(status.as_str(), "done" | "abandoned") {
+        state.error = Some(format!("cannot reorder a ticket that is {status}"));
+        return vec![];
+    }
+    let ids: Vec<&str> = match state.view {
+        View::Board => state
+            .column(state.col)
+            .into_iter()
+            .map(|t| t.id.as_str())
+            .collect(),
+        View::List => state
+            .list_order()
+            .into_iter()
+            .filter_map(|e| match e {
+                ListEntry::Ticket { idx, .. } if state.tickets[idx].status == status => {
+                    Some(state.tickets[idx].id.as_str())
+                }
+                _ => None,
+            })
+            .collect(),
+    };
+    let Some(at) = ids.iter().position(|i| *i == id) else {
+        return vec![];
+    };
+    let neighbour = if up { at.checked_sub(1) } else { Some(at + 1) }.and_then(|n| ids.get(n));
+    match neighbour {
+        Some(n) => vec![Effect::Reorder {
+            id,
+            anchor: (*n).to_string(),
+            before: up,
+        }],
+        None => vec![],
+    }
+}
+
+/// `b` / `B` in the detail view: open the picker to add or remove a blocker.
+/// Add lists every loaded ticket except itself and its current blockers (not
+/// pre-filtered by Project, so the library's cross-Project refusal shows).
+fn picker_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
+    let mode = match c {
+        'b' => PickerMode::Add,
+        'B' => PickerMode::Remove,
+        _ => return None,
+    };
+    let Some(d) = &state.detail else {
+        return Some(vec![]);
+    };
+    let t = &d.ticket.ticket;
+    let candidates: Vec<(String, String)> = match mode {
+        PickerMode::Add => state
+            .tickets
+            .iter()
+            .filter(|o| o.id != t.id && !t.blocked_by.iter().any(|b| b.id == o.id))
+            .map(|o| (o.id.clone(), o.title.clone()))
+            .collect(),
+        PickerMode::Remove => t
+            .blocked_by
+            .iter()
+            .map(|b| (b.id.clone(), b.title.clone()))
+            .collect(),
+    };
+    if candidates.is_empty() {
+        state.error = Some(
+            match mode {
+                PickerMode::Add => "no tickets to add as a blocker",
+                PickerMode::Remove => "this ticket has no blockers to remove",
+            }
+            .into(),
+        );
+        return Some(vec![]);
+    }
+    state.picker = Some(Picker {
+        id: t.id.clone(),
+        mode,
+        filter: String::new(),
+        candidates,
+        sel: 0,
+    });
+    Some(vec![])
+}
+
+/// Keys while the picker is open: typing filters, Up/Down (Ctrl-n/p) move,
+/// Enter applies, Esc cancels.
+fn on_picker_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let Some(p) = state.picker.as_mut() else {
+        return vec![];
+    };
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    let n = p.visible().len();
+    match (k.code, ctrl) {
+        (KeyCode::Esc, _) => state.picker = None,
+        (KeyCode::Up, _) | (KeyCode::Char('p'), true) => p.sel = p.sel.saturating_sub(1),
+        (KeyCode::Down, _) | (KeyCode::Char('n'), true) => {
+            p.sel = (p.sel + 1).min(n.saturating_sub(1));
+        }
+        (KeyCode::Backspace, _) => {
+            p.filter.pop();
+            p.sel = 0;
+        }
+        (KeyCode::Char(c), false) => {
+            p.filter.push(c);
+            p.sel = 0;
+        }
+        (KeyCode::Enter, _) => {
+            let chosen = p.visible().get(p.sel).map(|(id, _)| id.clone());
+            if let Some(blocker) = chosen {
+                let p = state.picker.take().expect("picker is open");
+                let id = p.id;
+                return vec![match p.mode {
+                    PickerMode::Add => Effect::AddDep { id, blocker },
+                    PickerMode::Remove => Effect::RemoveDep { id, blocker },
+                }];
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
 /// Keys while a confirm popup is open: y/Enter confirm, anything else cancels.
 fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     let Some(c) = state.confirm.take() else {
@@ -838,6 +1012,7 @@ fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         && let Some(fx) = lifecycle_key(state, c)
             .or_else(|| edit_key(state, c))
             .or_else(|| criteria_key(state, c))
+            .or_else(|| picker_key(state, c))
     {
         return fx;
     }
@@ -871,11 +1046,19 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     if state.prompt.is_some() {
         return on_prompt_key(state, k);
     }
+    if state.picker.is_some() {
+        return on_picker_key(state, k);
+    }
     if state.confirm.is_some() {
         return on_confirm_key(state, k);
     }
     if state.detail.is_some() {
         return on_detail_key(state, k);
+    }
+    if k.modifiers.contains(KeyModifiers::SHIFT)
+        && let KeyCode::Up | KeyCode::Down = k.code
+    {
+        return reorder_key(state, k.code == KeyCode::Up);
     }
     if let (KeyCode::Char(c), false) = (k.code, ctrl)
         && let Some(fx) = lifecycle_key(state, c).or_else(|| edit_key(state, c))
@@ -1862,5 +2045,154 @@ mod tests {
         update(&mut s, Event::DetailLoaded(Ok(Box::new(detail_of("D2")))));
         assert_eq!(sel(&s), None);
         assert_eq!(s.detail.as_ref().unwrap().scroll, 0);
+    }
+
+    fn shift(c: KeyCode) -> Event {
+        key(c, KeyModifiers::SHIFT, KeyEventKind::Press)
+    }
+
+    fn reorder(id: &str, anchor: &str, before: bool) -> Effect {
+        Effect::Reorder {
+            id: id.into(),
+            anchor: anchor.into(),
+            before,
+        }
+    }
+
+    #[test]
+    fn shift_up_down_reorder_in_board() {
+        let mut s = at_col(1);
+        update(&mut s, press('j'));
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Up)),
+            vec![reorder("R2", "R1", true)]
+        );
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Down)),
+            vec![reorder("R2", "R3", false)]
+        );
+    }
+
+    #[test]
+    fn shift_up_down_reorder_in_list() {
+        let mut s = at_col(1);
+        update(&mut s, code(KeyCode::Tab));
+        update(&mut s, press('j'));
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Up)),
+            vec![reorder("R2", "R1", true)]
+        );
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Down)),
+            vec![reorder("R2", "R3", false)]
+        );
+    }
+
+    #[test]
+    fn shift_reorder_is_inert_at_edges() {
+        let mut s = at_col(1);
+        assert!(update(&mut s, shift(KeyCode::Up)).is_empty());
+        for _ in 0..2 {
+            update(&mut s, press('j'));
+        }
+        assert!(update(&mut s, shift(KeyCode::Down)).is_empty());
+        assert!(s.error.is_none());
+        // the list does not step across a status header
+        update(&mut s, code(KeyCode::Tab));
+        assert!(update(&mut s, shift(KeyCode::Down)).is_empty());
+    }
+
+    #[test]
+    fn shift_reorder_refuses_closed_tickets_with_a_message() {
+        for (col, status) in [(3, "done"), (4, "abandoned")] {
+            let mut s = at_col(col);
+            assert!(update(&mut s, shift(KeyCode::Down)).is_empty());
+            assert_eq!(
+                s.error.as_deref(),
+                Some(format!("cannot reorder a ticket that is {status}").as_str())
+            );
+        }
+    }
+
+    fn blocker_detail() -> State {
+        let mut d = rich_detail();
+        d.ticket.blocked_by = serde_json::from_value(serde_json::json!([
+            {"id": "R1", "status": "ready", "title": "t R1", "worktree": null}
+        ]))
+        .unwrap();
+        loaded(vec![Event::DetailLoaded(Ok(Box::new(d)))])
+    }
+
+    #[test]
+    fn b_opens_add_picker_without_self_or_current_blockers() {
+        let mut s = blocker_detail();
+        update(&mut s, press('b'));
+        let p = s.picker.as_ref().expect("picker open");
+        assert_eq!(p.mode, PickerMode::Add);
+        let ids: Vec<&str> = p.candidates.iter().map(|(i, _)| i.as_str()).collect();
+        assert_eq!(ids, ["R2", "R3", "X1", "X2", "A1"]);
+    }
+
+    #[test]
+    fn capital_b_lists_only_blockers_and_enter_removes() {
+        let mut s = blocker_detail();
+        update(&mut s, press('B'));
+        let p = s.picker.as_ref().expect("picker open");
+        assert_eq!(p.mode, PickerMode::Remove);
+        assert_eq!(p.candidates.len(), 1);
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::RemoveDep {
+                id: "D1".into(),
+                blocker: "R1".into()
+            }]
+        );
+        assert!(s.picker.is_none());
+    }
+
+    #[test]
+    fn capital_b_without_blockers_says_so() {
+        let mut s = rich();
+        update(&mut s, press('B'));
+        assert!(s.picker.is_none());
+        assert!(s.error.is_some());
+    }
+
+    #[test]
+    fn picker_filters_moves_selects_and_cancels() {
+        let mut s = blocker_detail();
+        update(&mut s, press('b'));
+        type_str(&mut s, "r3");
+        assert_eq!(s.picker.as_ref().unwrap().visible().len(), 1);
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::AddDep {
+                id: "D1".into(),
+                blocker: "R3".into()
+            }]
+        );
+        update(&mut s, press('b'));
+        update(&mut s, code(KeyCode::Down));
+        update(&mut s, code(KeyCode::Down));
+        assert_eq!(s.picker.as_ref().unwrap().sel, 2);
+        update(&mut s, code(KeyCode::Up));
+        assert_eq!(s.picker.as_ref().unwrap().sel, 1);
+        // a filter matching nothing makes Enter inert
+        type_str(&mut s, "zzz");
+        assert!(update(&mut s, code(KeyCode::Enter)).is_empty());
+        assert!(s.picker.is_some());
+        update(&mut s, code(KeyCode::Esc));
+        assert!(s.picker.is_none());
+        assert!(s.detail.is_some());
+    }
+
+    #[test]
+    fn ctrl_c_quits_through_picker() {
+        let mut s = blocker_detail();
+        update(&mut s, press('b'));
+        update(&mut s, ctrl('c'));
+        assert!(s.should_quit);
     }
 }

@@ -108,6 +108,28 @@ pub fn run_effect(conn: &mut Connection, cwd: &Path, identity: &Identity, effect
                 .map(|_| format!("comment {comment_id} deleted"))
                 .map_err(|e| e.to_string()),
         ),
+        Effect::Reorder { id, anchor, before } => {
+            let place = if before {
+                ticket::Place::Before(&anchor)
+            } else {
+                ticket::Place::After(&anchor)
+            };
+            Event::ActionDone(
+                ticket::reorder(conn, &id, place)
+                    .map(|_| format!("{id} moved"))
+                    .map_err(|e| e.to_string()),
+            )
+        }
+        Effect::AddDep { id, blocker } => Event::ActionDone(
+            ticket::dep_add(conn, &id, &blocker)
+                .map(|_| format!("{id} blocked by {blocker}"))
+                .map_err(|e| e.to_string()),
+        ),
+        Effect::RemoveDep { id, blocker } => Event::ActionDone(
+            ticket::dep_rm(conn, &id, &blocker)
+                .map(|_| format!("{id} no longer blocked by {blocker}"))
+                .map_err(|e| e.to_string()),
+        ),
         // Only the run loop holds the terminal; it intercepts this before here.
         Effect::EditExternal { .. } => {
             Event::ActionDone(Err("external edit needs the terminal".into()))
@@ -767,5 +789,124 @@ mod tests {
         });
         assert_eq!(r.unwrap(), "no comment added");
         assert_eq!(ticket::show(&conn, &id).unwrap().comments.len(), 1);
+    }
+
+    fn add_ticket(conn: &mut Connection, title: &str, key: Option<&str>) -> String {
+        ticket::add(
+            conn,
+            &Scope::Unscoped,
+            &NewTicket {
+                title,
+                description: "",
+                plan: "",
+                criteria: &[],
+                for_who: ForWho::Agent,
+                status: NewStatus::Ready,
+                key,
+                parent: None,
+                blocked_by: &[],
+            },
+        )
+        .unwrap()
+        .ticket
+        .id
+    }
+
+    fn done_msg(e: Event) -> Result<String, String> {
+        let Event::ActionDone(r) = e else {
+            panic!("expected ActionDone");
+        };
+        r
+    }
+
+    fn order(conn: &Connection, dir: &Path) -> Vec<String> {
+        let spec = LoadSpec {
+            mode: ScopeMode::AllProjects,
+            show_archived: false,
+        };
+        let args = list_args(spec);
+        ticket::list(conn, dir, &args, &agent())
+            .unwrap()
+            .tickets
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    }
+
+    #[test]
+    fn reorder_persists_and_refuses_closed_tickets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let a = add_ticket(&mut conn, "a", None);
+        let b = add_ticket(&mut conn, "b", None);
+        assert_eq!(order(&conn, dir.path()), [a.clone(), b.clone()]);
+        let fx = Effect::Reorder {
+            id: b.clone(),
+            anchor: a.clone(),
+            before: true,
+        };
+        assert_eq!(
+            done_msg(run_effect(&mut conn, dir.path(), &agent(), fx)),
+            Ok(format!("{b} moved"))
+        );
+        assert_eq!(order(&conn, dir.path()), [b.clone(), a.clone()]);
+        conn.execute("UPDATE tickets SET status = 'done'", [])
+            .unwrap();
+        let fx = Effect::Reorder {
+            id: b,
+            anchor: a,
+            before: false,
+        };
+        let r = done_msg(run_effect(&mut conn, dir.path(), &agent(), fx));
+        assert!(r.unwrap_err().contains("cannot reorder"));
+    }
+
+    #[test]
+    fn dep_add_rm_round_trip_and_refusals_are_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let a = add_ticket(&mut conn, "a", None);
+        let b = add_ticket(&mut conn, "b", None);
+        let c = add_ticket(&mut conn, "c", None);
+        // Move c into another Project the way a second checkout would.
+        conn.execute(
+            "INSERT INTO projects (key, name, created_at) VALUES ('ZZ', 'z', 'now')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE tickets SET project_id = (SELECT id FROM projects WHERE key = 'ZZ') WHERE id = (SELECT id FROM tickets ORDER BY id DESC LIMIT 1)",
+            [],
+        )
+        .unwrap();
+        let run = |conn: &mut Connection, fx| done_msg(run_effect(conn, dir.path(), &agent(), fx));
+        let add = |id: &str, blocker: &str| Effect::AddDep {
+            id: id.into(),
+            blocker: blocker.into(),
+        };
+        assert_eq!(
+            run(&mut conn, add(&a, &b)),
+            Ok(format!("{a} blocked by {b}"))
+        );
+        assert_eq!(ticket::show(&conn, &a).unwrap().ticket.blocked_by.len(), 1);
+        // cycle, self edge and cross-Project come back as messages
+        assert!(run(&mut conn, add(&b, &a)).unwrap_err().contains("cycle"));
+        assert!(run(&mut conn, add(&a, &a)).is_err());
+        assert!(run(&mut conn, add(&a, &c)).is_err());
+        let rm = Effect::RemoveDep {
+            id: a.clone(),
+            blocker: b.clone(),
+        };
+        assert_eq!(
+            run(&mut conn, rm),
+            Ok(format!("{a} no longer blocked by {b}"))
+        );
+        assert!(
+            ticket::show(&conn, &a)
+                .unwrap()
+                .ticket
+                .blocked_by
+                .is_empty()
+        );
     }
 }

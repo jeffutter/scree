@@ -1,0 +1,28 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 90, 24).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  8 tickets
++SCR-6-----------------------------------------------------------------------------------+
+|TUI detail view                                                                         |
+|! SCR-6  active                                                                         |
+|for: agent                                                                              |
+|claimed by: je+SCR-6 blocked by------------------------------------------+              |
+|worktree: feat|filter: r                                                 |              |
+|parent: none  |SCR-9 Sketch the detail view                              |              |
+|created: 2026-|SCR-8 Review the release workflow wording                 |              |
+|updated: 2026-|SCR-7 Wire the search box                                 |              |
+|done: none    |SCR-3 Theme and header                                    |              |
+|              |SCR-2 TUI scaffold                                        |              |
+|Blocked by    |SCR-1 Typed tickets                                       |              |
+|  * SCR-5 [act|                                                          |              |
+|              |                                                          |              |
+|Subtasks      |                                                          |              |
+|  o SCR-12 [re|                                                          |              |
+|              |Enter select | Esc cancel                                 |              |
+|Description   +----------------------------------------------------------+              |
+|  Enter opens the detail view.                                                          |
+|  Esc closes it.                                                                        |
++----------------------------------------------------------------------------------------+
+[Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom | [[/]] select
+[Space] check | [n] criterion | [m/M] comment | [X] remove | [b/B] add/rm blocker
