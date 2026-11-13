@@ -83,7 +83,7 @@ Multi-line text (description, plan, comment body, abandon reason, evidence) is a
 
 ### Interactive UI
 
-`tui`: opens a terminal UI on the alternate screen; `q` or Ctrl-C quits. `Enter` opens the selected ticket in a full-pane detail view (every field, blocked-by, subtasks, criteria with evidence, comments; plain text); `j`/`k`, PgUp/PgDn, Ctrl-u/Ctrl-d and `g`/`G` scroll it, and Esc, `q`, `h` or Left close it. It runs as Role human with author `human` unless `--role`, `--author` or their `SCREE_*` variables say otherwise, and runs the automatic sweep once at startup. Needs stdin and stdout to be terminals; otherwise it exits 2 with a usage error before touching the database or the terminal. Bare `scree` is unchanged.
+`tui`: opens a terminal UI on the alternate screen; `q` or Ctrl-C quits. `Enter` opens the selected ticket in a full-pane detail view (every field, blocked-by, subtasks, criteria with evidence, comments; plain text); `j`/`k`, PgUp/PgDn, Ctrl-u/Ctrl-d and `g`/`G` scroll it, and Esc, `q`, `h` or Left close it. Lifecycle keys act on the selected ticket from the board, list and detail, and only when valid for its status: `r` ready, `S` start, `R` release, `d` done, `D` done --force, `x` abandon, `o` reopen, `A` archive/unarchive. `D` and `x` ask for `y` to confirm (abandon uses the fixed reason "abandoned from tui"). Refusals appear in the status line. It runs as Role human with author `human` unless `--role`, `--author` or their `SCREE_*` variables say otherwise, and runs the automatic sweep once at startup. Needs stdin and stdout to be terminals; otherwise it exits 2 with a usage error before touching the database or the terminal. Bare `scree` is unchanged.
 
 ### No arguments
 
