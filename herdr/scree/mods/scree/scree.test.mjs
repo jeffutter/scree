@@ -135,4 +135,13 @@ assert.equal(cellVisible(many.slice(0, CELL_LIMIT), false).hidden, 0);
 const dn = [1, 3, 2].map((d) => ({ id: `D-${d}`, status: "done", done_at: new Date(NOW - d * 3600000).toISOString(), project: { key: "Q", root: "/q" } }));
 assert.deepEqual(boardModel(dn, { now: NOW })[0].lanes[0].cells.done.map((x) => x.id), ["D-1", "D-2", "D-3"]);
 
+// Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
+// inside the try), so an open detail updates on poll.
+{
+  const body = src.slice(src.indexOf("  refresh(cx) {"), src.indexOf("  async fetchDetail("));
+  const tryBody = body.slice(body.indexOf("try {"), body.indexOf("} finally"));
+  assert(body.includes("await this.fetchDetail(this.detail.id"), "refresh fetches the open detail");
+  assert(!/\breturn\b/.test(tryBody), "no return inside refresh()'s try block");
+}
+
 console.log("ok");

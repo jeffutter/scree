@@ -265,18 +265,17 @@ export default class Scree extends View {
         if (this.mode === "board") {
           // One call on the focused space's machine; all-projects needs no repo, so a missing cwd is fine.
           const all = JSON.parse(await this.scree(boardListArgs(), loc));
-          if (this.key() !== context) return;
-          this.board = all.tickets ?? []; this.error = null; this.loaded = true;
-          return;
+          if (this.key() === context) { this.board = all.tickets ?? []; this.error = null; this.loaded = true; }
+        } else {
+          const open = JSON.parse(await this.scree(args.open, loc));
+          const done = JSON.parse(await this.scree(args.done, loc));
+          if (this.key() === context) { this.open = open.tickets ?? []; this.done = done.tickets ?? []; this.error = null; this.loaded = true; }
         }
-        const open = JSON.parse(await this.scree(args.open, loc));
-        const done = JSON.parse(await this.scree(args.done, loc));
-        if (this.key() !== context) return;
-        this.open = open.tickets ?? []; this.done = done.tickets ?? []; this.error = null; this.loaded = true;
       } catch (e) {
         if (this.key() === context) { this.error = { kind: e.kind ?? "error", message: String(e.message ?? e) }; this.loaded = true; }
       } finally { this.loading = false; cx.notify(); }
       // Keep an open detail current (new evidence and comments) on every poll.
+      // No branch above returns early, so this runs in board mode too.
       if (this.detail && this.key() === context) await this.fetchDetail(this.detail.id, loc, context, cx);
     });
   }
