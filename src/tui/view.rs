@@ -380,10 +380,11 @@ fn row_line(t: &Ticket, width: usize, theme: &Theme) -> Line<'static> {
     ])
 }
 
-fn draw_board(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let cols = state.visible_columns();
     let areas =
         Layout::horizontal(vec![Constraint::Ratio(1, cols.len() as u32); cols.len()]).split(area);
+    let mut offsets = state.offsets;
     for (&c, &pane) in cols.iter().zip(areas.iter()) {
         let tickets = state.column(c);
         let active = c == state.col;
@@ -403,15 +404,17 @@ fn draw_board(frame: &mut Frame, area: Rect, state: &State) {
         } else {
             list = list.highlight_style(Style::new());
         }
-        let mut ls = ListState::default();
+        let mut ls = ListState::default().with_offset(offsets[c]);
         if !tickets.is_empty() {
             ls.select(Some(state.rows[c]));
         }
         frame.render_stateful_widget(list, pane, &mut ls);
+        offsets[c] = ls.offset();
     }
+    state.offsets = offsets;
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_list(frame: &mut Frame, area: Rect, state: &mut State) {
     let order = state.list_order();
     let block = widgets::bordered_pane(
         &format!("list ({})", state.visible_count()),
@@ -445,9 +448,10 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &State) {
     let list = List::new(items)
         .block(block)
         .highlight_style(state.theme.selected_style());
-    let mut ls = ListState::default();
+    let mut ls = ListState::default().with_offset(state.list_offset);
     ls.select(state.list_selected());
     frame.render_stateful_widget(list, area, &mut ls);
+    state.list_offset = ls.offset();
 }
 
 pub fn draw(frame: &mut Frame, state: &mut State) {
@@ -956,6 +960,41 @@ mod tests {
                 ratatui::crossterm::event::KeyCode::Char(c),
             )),
         );
+    }
+
+    #[test]
+    fn board_scroll_offset_survives_frames() {
+        let mut s = State {
+            theme: Theme::new(false, false),
+            ..State::default()
+        };
+        let tickets = (0..20)
+            .map(|i| {
+                ticket(
+                    &format!("SCR-{i}"),
+                    "ready",
+                    &format!("item{i:02}"),
+                    "agent",
+                    false,
+                )
+            })
+            .collect();
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(tickets)));
+        s.col = 1;
+        let first = |rows: &[String]| {
+            rows.iter()
+                .find_map(|r| r.find("item").map(|i| r[i..i + 6].to_string()))
+                .unwrap()
+        };
+        for _ in 0..12 {
+            key(&mut s, 'j');
+            render(&mut s, 120, 10);
+        }
+        let before = first(&render(&mut s, 120, 10));
+        key(&mut s, 'k');
+        let after = first(&render(&mut s, 120, 10));
+        assert_eq!(before, after);
+        assert_ne!(before, "item00");
     }
 
     #[test]

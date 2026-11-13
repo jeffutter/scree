@@ -315,6 +315,10 @@ pub struct State {
     /// Selected column (index into STATUSES) and the selected row of each.
     pub col: usize,
     pub rows: [usize; 5],
+    /// First visible row of each board column and of the list, kept across
+    /// frames so the viewport only scrolls when the selection leaves it.
+    pub offsets: [usize; 5],
+    pub list_offset: usize,
     /// Survives reloads: the selection is found again by id.
     pub selected_id: Option<String>,
     pub hide_closed: bool,
@@ -355,6 +359,8 @@ impl Default for State {
             error: None,
             col: 0,
             rows: [0; 5],
+            offsets: [0; 5],
+            list_offset: 0,
             selected_id: None,
             hide_closed: false,
             show_archived: false,
