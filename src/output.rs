@@ -4,23 +4,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::identity::{Env, Role};
-
-/// The `{"tickets": [...]}` shape returned by `list` and `next`.
-#[derive(Debug, Serialize)]
-pub struct ListResult {
-    pub tickets: Vec<serde_json::Value>,
-}
-
-/// The `next` result: the list plus what was held back.
-#[derive(Debug, Serialize)]
-pub struct NextResult {
-    #[serde(flatten)]
-    pub list: ListResult,
-    pub human_pending: i64,
-    /// Present only when `tickets` is empty.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocked_pending: Option<i64>,
-}
+use crate::model::{ListResult, TicketDetail};
 
 pub fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Other(e.to_string()))
@@ -58,63 +42,46 @@ pub fn use_color(env: &Env) -> bool {
 }
 
 /// One line per ticket: `SCR-12  active  Title [blocked] [human]`, columns
-/// aligned, and a `[blocked by ...]` line under a blocked ticket. Reads
-/// fields from the JSON value and tolerates missing ones.
+/// aligned, and a `[blocked by ...]` line under a blocked ticket.
 pub fn render_text_list(list: &ListResult, color: bool) -> String {
-    let field = |t: &serde_json::Value, k: &str| match t.get(k) {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(serde_json::Value::Number(n)) => n.to_string(),
-        _ => String::new(),
-    };
-    let id_w = list
-        .tickets
-        .iter()
-        .map(|t| field(t, "id").len())
-        .max()
-        .unwrap_or(0);
+    let id_w = list.tickets.iter().map(|t| t.id.len()).max().unwrap_or(0);
     let st_w = list
         .tickets
         .iter()
-        .map(|t| field(t, "status").len())
+        .map(|t| t.status.len())
         .max()
         .unwrap_or(0);
 
     let mut out = String::new();
     for t in &list.tickets {
-        let status = field(t, "status");
-        let mut line = format!(
-            "{:<id_w$}  {:<st_w$}  {}",
-            field(t, "id"),
-            status,
-            field(t, "title")
-        );
-        let blocked = t.get("blocked").and_then(|b| b.as_bool()).unwrap_or(false);
-        if blocked {
+        let mut line = format!("{:<id_w$}  {:<st_w$}  {}", t.id, t.status, t.title);
+        if t.blocked {
             line.push_str(" [blocked]");
         }
-        if t.get("for").and_then(|f| f.as_str()) == Some("human") {
+        if t.for_who == "human" {
             line.push_str(" [human]");
         }
-        let dim = color && (status == "done" || status == "abandoned");
+        let dim = color && (t.status == "done" || t.status == "abandoned");
         if dim {
             let _ = writeln!(out, "\x1b[2m{}\x1b[0m", line.trim_end());
         } else {
             let _ = writeln!(out, "{}", line.trim_end());
         }
-        if blocked && let Some(bs) = t.get("blocked_by").and_then(|b| b.as_array()) {
-            let names: Vec<String> = bs
+        if t.blocked {
+            let names: Vec<String> = t
+                .blocked_by
                 .iter()
                 .map(|b| {
-                    let mut s = field(b, "id");
+                    let mut s = b.id.clone();
                     // The JSON carries the full path; text names the directory.
-                    let full = field(b, "worktree");
-                    let wt = std::path::Path::new(&full)
+                    let full = b.worktree.as_deref().unwrap_or("");
+                    let wt = std::path::Path::new(full)
                         .file_name()
-                        .map_or(full.clone(), |n| n.to_string_lossy().into_owned());
+                        .map_or(full.to_string(), |n| n.to_string_lossy().into_owned());
                     if !wt.is_empty() {
                         let _ = write!(s, " in {wt}");
                     }
-                    if field(b, "status") == "abandoned" {
+                    if b.status == "abandoned" {
                         s.push_str(" (abandoned)");
                     }
                     s
@@ -129,96 +96,69 @@ pub fn render_text_list(list: &ListResult, color: bool) -> String {
 }
 
 /// The `show` view: header, description, plan, checklist, blockers,
-/// subtasks and comments. Reads fields from the JSON and tolerates gaps.
-pub fn render_text_ticket(t: &serde_json::Value) -> String {
-    let s = |v: &serde_json::Value, k: &str| {
-        v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
-    };
+/// subtasks and comments.
+pub fn render_text_ticket(d: &TicketDetail) -> String {
+    let t = &d.ticket;
     let mut out = String::new();
-    let mut head = format!("{}  {}  {}", s(t, "id"), s(t, "status"), s(t, "title"));
-    if t.get("blocked").and_then(|b| b.as_bool()).unwrap_or(false) {
+    let mut head = format!("{}  {}  {}", t.id, t.status, t.title);
+    if t.blocked {
         head.push_str(" [blocked]");
     }
-    if s(t, "for") == "human" {
+    if t.for_who == "human" {
         head.push_str(" [human]");
     }
     let _ = writeln!(out, "{head}");
-    let _ = writeln!(out, "for: {}", s(t, "for"));
+    let _ = writeln!(out, "for: {}", t.for_who);
     // LOCAL tickets belong to no repository, so they have no worktree to name.
-    if !s(t, "id").starts_with("LOCAL-") {
-        let wt = s(t, "worktree");
+    if !t.id.starts_with("LOCAL-") {
+        let wt = t.worktree.as_deref().unwrap_or("");
         let _ = writeln!(
             out,
             "worktree: {}",
-            if wt.is_empty() {
-                "(root checkout)"
-            } else {
-                &wt
-            }
+            if wt.is_empty() { "(root checkout)" } else { wt }
         );
     }
-    if let Some(c) = t.get("claimed_by").filter(|c| !c.is_null()) {
-        let _ = writeln!(out, "claimed by: {} ({})", s(c, "author"), s(c, "session"));
+    if let Some(c) = &t.claimed_by {
+        let _ = writeln!(
+            out,
+            "claimed by: {} ({})",
+            c.author,
+            c.session.as_deref().unwrap_or("")
+        );
     }
-    let _ = writeln!(
-        out,
-        "created: {}  updated: {}",
-        s(t, "created_at"),
-        s(t, "updated_at")
-    );
-    for (label, key) in [("Description", "description"), ("Plan", "plan")] {
-        let body = s(t, key);
+    let _ = writeln!(out, "created: {}  updated: {}", t.created_at, t.updated_at);
+    for (label, body) in [("Description", &d.description), ("Plan", &d.plan)] {
         if !body.is_empty() {
             let _ = write!(out, "\n{label}:\n{body}\n");
         }
     }
-    if let Some(cs) = t
-        .get("criteria")
-        .and_then(|c| c.as_array())
-        .filter(|c| !c.is_empty())
-    {
+    if !d.criteria.is_empty() {
         let _ = writeln!(out, "\nAcceptance criteria:");
-        for c in cs {
-            let mark = if c.get("checked").and_then(|b| b.as_bool()).unwrap_or(false) {
-                "x"
-            } else {
-                " "
-            };
-            let n = c.get("number").and_then(|n| n.as_i64()).unwrap_or(0);
-            let _ = write!(out, "[{mark}] #{n} {}", s(c, "text"));
-            let ev = s(c, "evidence");
-            if !ev.is_empty() {
+        for c in &d.criteria {
+            let mark = if c.checked { "x" } else { " " };
+            let _ = write!(out, "[{mark}] #{} {}", c.number, c.text);
+            if let Some(ev) = c.evidence.as_deref().filter(|e| !e.is_empty()) {
                 let _ = write!(out, " ({ev})");
             }
             let _ = writeln!(out);
         }
     }
-    for (label, key) in [("Blocked by", "blocked_by"), ("Subtasks", "subtasks")] {
-        if let Some(xs) = t
-            .get(key)
-            .and_then(|c| c.as_array())
-            .filter(|c| !c.is_empty())
-        {
-            let _ = writeln!(out, "\n{label}:");
-            for x in xs {
-                let _ = writeln!(out, "{}  {}  {}", s(x, "id"), s(x, "status"), s(x, "title"));
-            }
+    if !t.blocked_by.is_empty() {
+        let _ = writeln!(out, "\nBlocked by:");
+        for x in &t.blocked_by {
+            let _ = writeln!(out, "{}  {}  {}", x.id, x.status, x.title);
         }
     }
-    if let Some(cs) = t
-        .get("comments")
-        .and_then(|c| c.as_array())
-        .filter(|c| !c.is_empty())
-    {
+    if !t.subtasks.is_empty() {
+        let _ = writeln!(out, "\nSubtasks:");
+        for x in &t.subtasks {
+            let _ = writeln!(out, "{}  {}  {}", x.id, x.status, x.title);
+        }
+    }
+    if !d.comments.is_empty() {
         let _ = writeln!(out, "\nComments:");
-        for c in cs {
-            let _ = writeln!(
-                out,
-                "{} {}: {}",
-                s(c, "created_at"),
-                s(c, "author"),
-                s(c, "body")
-            );
+        for c in &d.comments {
+            let _ = writeln!(out, "{} {}: {}", c.created_at, c.author, c.body);
         }
     }
     out.trim_end_matches('\n').to_string()
@@ -227,7 +167,7 @@ pub fn render_text_ticket(t: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::model::{Blocker, Ticket};
 
     fn env(vars: &[(&str, &str)], stdout_tty: bool) -> Env {
         Env {
@@ -272,15 +212,46 @@ mod tests {
         assert!(use_color(&env(&[("NO_COLOR", "")], true)));
     }
 
+    fn ticket(id: &str, status: &str, title: &str) -> Ticket {
+        Ticket {
+            archived_at: None,
+            available: false,
+            blocked: false,
+            blocked_by: vec![],
+            claimed_by: None,
+            created_at: String::new(),
+            done_at: None,
+            for_who: "agent".into(),
+            id: id.into(),
+            parent: None,
+            status: status.into(),
+            subtasks: vec![],
+            title: title.into(),
+            updated_at: String::new(),
+            worktree: None,
+        }
+    }
+
+    fn blocker(id: &str, status: &str, worktree: Option<&str>) -> Blocker {
+        Blocker {
+            id: id.into(),
+            status: status.into(),
+            title: String::new(),
+            worktree: worktree.map(Into::into),
+        }
+    }
+
     fn sample() -> ListResult {
+        let mut first = ticket("SCR-2", "active", "First");
+        first.for_who = "human".into();
+        let mut second = ticket("SCR-12", "ready", "Second");
+        second.blocked = true;
+        second.blocked_by = vec![
+            blocker("SCR-9", "ready", Some("/w/feat-b")),
+            blocker("SCR-8", "abandoned", None),
+        ];
         ListResult {
-            tickets: vec![
-                json!({"id": "SCR-2", "status": "active", "title": "First", "for": "human"}),
-                json!({"id": "SCR-12", "status": "ready", "title": "Second", "blocked": true,
-                    "blocked_by": [{"id": "SCR-9", "status": "ready", "worktree": "feat-b"},
-                                   {"id": "SCR-8", "status": "abandoned"}]}),
-                json!({"id": "SCR-1", "status": "done", "title": "Old"}),
-            ],
+            tickets: vec![first, second, ticket("SCR-1", "done", "Old")],
         }
     }
 
@@ -304,11 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn text_tolerates_skeleton_shape() {
-        let l = ListResult {
-            tickets: vec![json!({"id": 7})],
-        };
-        assert_eq!(render_text_list(&l, false), "7");
+    fn text_empty_list() {
         assert_eq!(render_text_list(&ListResult { tickets: vec![] }, false), "");
     }
 }

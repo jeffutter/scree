@@ -2,6 +2,7 @@ pub mod cli;
 pub mod db;
 pub mod error;
 pub mod identity;
+pub mod model;
 pub mod output;
 pub mod project;
 pub mod scope;
@@ -54,7 +55,7 @@ fn check_single_stdin(description: Option<&str>, plan: Option<&str>) -> Result<(
 
 fn emit(
     format: Format,
-    json: &serde_json::Value,
+    json: &impl serde::Serialize,
     text: impl FnOnce() -> String,
 ) -> Result<Outcome> {
     match format {

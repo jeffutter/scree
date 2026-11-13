@@ -4,13 +4,14 @@ use std::path::Path;
 
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
-use serde_json::{Value, json};
 
 use crate::cli::{ForWho, ListArgs, NewStatus, NextArgs, ScopeArgs};
 use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
-use crate::output::{ListResult, NextResult};
+use crate::model::{
+    Blocker, Claimer, Comment, Criterion, ListResult, NextResult, Subtask, Ticket, TicketDetail,
+};
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
 
@@ -117,7 +118,7 @@ pub struct NewTicket<'a> {
 /// that Project. Numbers come from a counter (the Project's, or the
 /// parent's for subtasks) inside the same write transaction and are never
 /// handed out twice.
-pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value> {
+pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<TicketDetail> {
     if t.title.trim().is_empty() {
         return Err(Error::Usage("title must not be empty".into()));
     }
@@ -232,7 +233,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Value>
                 params![id, n, n * 1000, text],
             )?;
         }
-        build(tx, id, true)
+        build(tx, id)
     })
 }
 
@@ -305,7 +306,7 @@ fn waits_for(tx: &Connection, from: i64, target: i64) -> Result<bool> {
 /// `id` becomes blocked by `blocker`. Refused (exit 4) for a self edge, a
 /// different Project, or a cycle. Worktrees of one Project may be mixed.
 /// Adding an existing edge changes nothing.
-pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> {
+pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
         if row == b {
@@ -318,12 +319,12 @@ pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> 
             )));
         }
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
 /// Remove the edge; removing one that does not exist is a no-op.
-pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> {
+pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
         if tx.execute(
@@ -333,19 +334,19 @@ pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<Value> {
         {
             touch(tx, row)?;
         }
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
-pub fn show(conn: &Connection, id: &str) -> Result<Value> {
-    build(conn, resolve(conn, id)?, true)
+pub fn show(conn: &Connection, id: &str) -> Result<TicketDetail> {
+    build(conn, resolve(conn, id)?)
 }
 
 /// Archive or unarchive a ticket, whatever its status (archived is separate
 /// from status). Archiving a parent archives its subtasks; unarchiving a
 /// parent restores them. A subtask of an archived parent cannot be
 /// unarchived alone (Refused). Repeating the request is a no-op.
-pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<Value> {
+pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<TicketDetail> {
     let row = resolve(conn, id)?;
     db::write(conn, |tx| {
         if !archived {
@@ -373,7 +374,7 @@ pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<Value>
             ),
             params![row, i64::from(archived)],
         )?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -416,7 +417,7 @@ pub fn transition(
     id: &str,
     action: Action,
     who: &Identity,
-) -> Result<Value> {
+) -> Result<TicketDetail> {
     if let Action::Abandon { reason } = &action
         && reason.trim().is_empty()
     {
@@ -594,7 +595,7 @@ pub fn transition(
                 )?;
             }
         }
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -636,7 +637,7 @@ fn touch(tx: &Connection, row: i64) -> Result<()> {
 /// Append a criterion. The ticket's counter only grows, so a removed
 /// number is never handed out again. Allowed on closed tickets: criteria
 /// and comments are notes.
-pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<Value> {
+pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<TicketDetail> {
     if text.trim().is_empty() {
         return Err(Error::Usage("criterion text must not be empty".into()));
     }
@@ -655,7 +656,7 @@ pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<Value
             params![row, n, text.trim()],
         )?;
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -665,7 +666,7 @@ fn on_criterion(
     conn: &mut Connection,
     target: &str,
     f: impl FnOnce(&Connection, i64, i64) -> Result<usize>,
-) -> Result<Value> {
+) -> Result<TicketDetail> {
     let (id, n) = parse_criterion_ref(target)?;
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
@@ -673,11 +674,11 @@ fn on_criterion(
             return Err(Error::NotFound(format!("no criterion {target}")));
         }
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
-pub fn criteria_rm(conn: &mut Connection, target: &str) -> Result<Value> {
+pub fn criteria_rm(conn: &mut Connection, target: &str) -> Result<TicketDetail> {
     on_criterion(conn, target, |tx, row, n| {
         Ok(tx.execute(
             "DELETE FROM acceptance_criteria WHERE ticket_id = ?1 AND number = ?2",
@@ -692,7 +693,7 @@ pub fn check(
     target: &str,
     evidence: Option<&str>,
     who: &Identity,
-) -> Result<Value> {
+) -> Result<TicketDetail> {
     on_criterion(conn, target, |tx, row, n| {
         Ok(tx.execute(
             &format!(
@@ -705,7 +706,7 @@ pub fn check(
     })
 }
 
-pub fn uncheck(conn: &mut Connection, target: &str) -> Result<Value> {
+pub fn uncheck(conn: &mut Connection, target: &str) -> Result<TicketDetail> {
     on_criterion(conn, target, |tx, row, n| {
         Ok(tx.execute(
             "UPDATE acceptance_criteria SET checked = 0, evidence = NULL,
@@ -716,7 +717,12 @@ pub fn uncheck(conn: &mut Connection, target: &str) -> Result<Value> {
     })
 }
 
-pub fn comment_add(conn: &mut Connection, id: &str, body: &str, who: &Identity) -> Result<Value> {
+pub fn comment_add(
+    conn: &mut Connection,
+    id: &str,
+    body: &str,
+    who: &Identity,
+) -> Result<TicketDetail> {
     if body.trim().is_empty() {
         return Err(Error::Usage("comment body must not be empty".into()));
     }
@@ -730,12 +736,12 @@ pub fn comment_add(conn: &mut Connection, id: &str, body: &str, who: &Identity) 
             params![row, who.author, who.session, who.role.as_str(), body],
         )?;
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
 /// Any caller may delete any comment, including ones scree wrote.
-pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<Value> {
+pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
         let n = tx.execute(
@@ -746,7 +752,7 @@ pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<Va
             return Err(Error::NotFound(format!("no comment {comment_id} on {id}")));
         }
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -769,7 +775,12 @@ fn appended(old: &str, new: &str) -> String {
     }
 }
 
-pub fn edit(conn: &mut Connection, id: &str, f: &EditFields, who: &Identity) -> Result<Value> {
+pub fn edit(
+    conn: &mut Connection,
+    id: &str,
+    f: &EditFields,
+    who: &Identity,
+) -> Result<TicketDetail> {
     if f.title.is_none() && f.description.is_none() && f.plan.is_none() && f.for_who.is_none() {
         return Err(Error::Usage(
             "nothing to edit; pass --title, --description, --plan or --for".into(),
@@ -827,7 +838,7 @@ pub fn edit(conn: &mut Connection, id: &str, f: &EditFields, who: &Identity) -> 
                 release,
             ],
         )?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -975,7 +986,7 @@ pub fn list(
     let ids = select_ids(conn, &conds, args, a.limit.unwrap_or(50))?;
     let tickets = ids
         .into_iter()
-        .map(|id| build(conn, id, false))
+        .map(|id| build_summary(conn, id))
         .collect::<Result<Vec<_>>>()?;
     Ok(ListResult { tickets })
 }
@@ -1036,7 +1047,7 @@ pub fn next(conn: &Connection, cwd: &Path, a: &NextArgs, who: &Identity) -> Resu
     };
     let tickets = select_ids(conn, &conds, args, a.limit.unwrap_or(1))?
         .into_iter()
-        .map(|id| build(conn, id, false))
+        .map(|id| build_summary(conn, id))
         .collect::<Result<Vec<_>>>()?;
     let human_pending = if for_who == ForWho::Agent
         && let Some((c, ar)) = pool_conds(conn, cwd, &a.scope, ForWho::Human, false)?
@@ -1069,7 +1080,7 @@ pub fn start_next(
     scope: &ScopeArgs,
     for_who: Option<ForWho>,
     who: &Identity,
-) -> Result<Value> {
+) -> Result<TicketDetail> {
     let for_who = for_who.unwrap_or_else(|| role_default(who));
     if who.role == crate::identity::Role::Agent && for_who == ForWho::Human {
         return Err(Error::Refused(
@@ -1080,12 +1091,9 @@ pub fn start_next(
         let none = || Error::NotFound("no Available ticket".into());
         let (conds, args) = pool_conds(tx, cwd, scope, for_who, false)?.ok_or_else(none)?;
         let row = *select_ids(tx, &conds, args, 1)?.first().ok_or_else(none)?;
-        let id = build(tx, row, false)?["id"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let id = build_summary(tx, row)?.id;
         claim(tx, row, &id, who)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -1114,7 +1122,7 @@ fn slot_position(others: &[i64], at: usize) -> Option<i64> {
 /// Worktree). Done and abandoned siblings keep their positions and count as
 /// neighbours. Refused (exit 4) when a subtask's new place would close a
 /// dependency cycle. The whole move, including a renumber, is one transaction.
-pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
+pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
         let (project, parent, worktree, status): (i64, Option<i64>, Option<String>, String) = tx
@@ -1198,7 +1206,7 @@ pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<Value> {
             }
         }
         touch(tx, row)?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
@@ -1213,7 +1221,7 @@ pub enum MoveTarget<'a> {
 /// Move a top-level ticket and its subtasks to another Worktree of its own
 /// Project, placing the tree last there. Done and abandoned trees may move:
 /// it rewrites a label on history and changes nothing else.
-pub fn move_tree(conn: &mut Connection, id: &str, target: MoveTarget) -> Result<Value> {
+pub fn move_tree(conn: &mut Connection, id: &str, target: MoveTarget) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
         let (project_id, parent): (i64, Option<i64>) = tx.query_row(
@@ -1278,13 +1286,68 @@ pub fn move_tree(conn: &mut Connection, id: &str, target: MoveTarget) -> Result<
             ),
             params![row, worktree],
         )?;
-        build(tx, row, true)
+        build(tx, row)
     })
 }
 
-/// The Ticket JSON shape from `docs/cli.md`; `detail` adds description,
-/// plan, criteria and comments (the `show` shape).
-fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
+/// The summary shape used by `list` and `next`.
+fn build_summary(conn: &Connection, id: i64) -> Result<Ticket> {
+    Ok(load(conn, id)?.0)
+}
+
+/// The full shape used by `show` and every mutation: the summary plus
+/// description, plan, criteria and comments.
+fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
+    let (ticket, description, plan) = load(conn, id)?;
+    let criteria = conn
+        .prepare(
+            "SELECT number, text, checked, evidence, checked_by_author,
+                    checked_by_session, checked_at
+             FROM acceptance_criteria WHERE ticket_id = ?1 ORDER BY position, number",
+        )?
+        .query_map([id], |r| {
+            let by = r.get::<_, Option<String>>(4)?;
+            let session = r.get::<_, Option<String>>(5)?;
+            let number = r.get::<_, i64>(0)?;
+            Ok(Criterion {
+                number,
+                ref_: format!("{}#{number}", ticket.id),
+                text: r.get(1)?,
+                checked: r.get::<_, i64>(2)? != 0,
+                evidence: r.get(3)?,
+                checked_by: by.map(|author| Claimer { author, session }),
+                checked_at: r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    let comments = conn
+        .prepare(
+            "SELECT id, author, session, role, body, created_at
+             FROM comments WHERE ticket_id = ?1 ORDER BY id",
+        )?
+        .query_map([id], |r| {
+            Ok(Comment {
+                id: r.get(0)?,
+                author: r.get(1)?,
+                session: r.get(2)?,
+                role: r.get(3)?,
+                body: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(TicketDetail {
+        ticket,
+        comments,
+        criteria,
+        description,
+        plan,
+    })
+}
+
+/// Read one ticket row with its blockers and subtasks; also returns the
+/// description and plan so `build` needs no second row query.
+fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
     struct Row {
         id: String,
         parent: Option<String>,
@@ -1332,7 +1395,7 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
     )?;
 
     // Blockers: unfinished dependencies, then unsettled subtasks.
-    let blocked_by: Vec<Value> = conn
+    let blocked_by: Vec<Blocker> = conn
         .prepare(&format!(
             "SELECT * FROM (
                SELECT {ID_EXPR}, t.title, t.status, t.worktree_path, 0 AS k, t.id AS o1, 0 AS o2
@@ -1348,13 +1411,15 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
              ) ORDER BY k, o1, o2"
         ))?
         .query_map([id], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                "status": r.get::<_, String>(2)?, "worktree": r.get::<_, Option<String>>(3)?,
-            }))
+            Ok(Blocker {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+                worktree: r.get(3)?,
+            })
         })?
         .collect::<std::result::Result<_, _>>()?;
-    let subtasks: Vec<Value> = conn
+    let subtasks: Vec<Subtask> = conn
         .prepare(
             "SELECT p.key || '-' || t.number || '.' || c.number, c.title, c.status
              FROM tickets c JOIN tickets t ON t.id = c.parent_id
@@ -1362,10 +1427,11 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
              WHERE c.parent_id = ?1 ORDER BY c.position, c.number",
         )?
         .query_map([id], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                "status": r.get::<_, String>(2)?,
-            }))
+            Ok(Subtask {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+            })
         })?
         .collect::<std::result::Result<_, _>>()?;
 
@@ -1375,57 +1441,27 @@ fn build(conn: &Connection, id: i64, detail: bool) -> Result<Value> {
         [id],
         |r| r.get(0),
     )?;
-    let mut out = json!({
-        "id": row.id, "title": row.title, "parent": row.parent, "status": row.status,
-        "for": row.for_who, "blocked": blocked, "available": available,
-        "blocked_by": blocked_by, "subtasks": subtasks,
-        "claimed_by": row.author.map(|a| {
-            json!({"author": a, "session": row.session.filter(|s| !s.is_empty())})
+    let ticket = Ticket {
+        id: row.id,
+        title: row.title,
+        parent: row.parent,
+        status: row.status,
+        for_who: row.for_who,
+        blocked,
+        available,
+        blocked_by,
+        subtasks,
+        claimed_by: row.author.map(|author| Claimer {
+            author,
+            session: row.session.filter(|s| !s.is_empty()),
         }),
-        "worktree": row.worktree, "created_at": row.created, "updated_at": row.updated,
-        "done_at": row.done, "archived_at": row.archived,
-    });
-    if detail {
-        let criteria: Vec<Value> = conn
-            .prepare(
-                "SELECT number, text, checked, evidence, checked_by_author,
-                        checked_by_session, checked_at
-                 FROM acceptance_criteria WHERE ticket_id = ?1 ORDER BY position, number",
-            )?
-            .query_map([id], |r| {
-                let by = r.get::<_, Option<String>>(4)?;
-                let session = r.get::<_, Option<String>>(5)?;
-                let number = r.get::<_, i64>(0)?;
-                Ok(json!({
-                    "number": number, "ref": format!("{}#{number}", row.id), "text": r.get::<_, String>(1)?,
-                    "checked": r.get::<_, i64>(2)? != 0,
-                    "evidence": r.get::<_, Option<String>>(3)?,
-                    "checked_by": by.map(|a| json!({"author": a, "session": session})),
-                    "checked_at": r.get::<_, Option<String>>(6)?,
-                }))
-            })?
-            .collect::<std::result::Result<_, _>>()?;
-        let comments: Vec<Value> = conn
-            .prepare(
-                "SELECT id, author, session, role, body, created_at
-                 FROM comments WHERE ticket_id = ?1 ORDER BY id",
-            )?
-            .query_map([id], |r| {
-                Ok(json!({
-                    "id": r.get::<_, i64>(0)?, "author": r.get::<_, String>(1)?,
-                    "session": r.get::<_, Option<String>>(2)?,
-                    "role": r.get::<_, Option<String>>(3)?,
-                    "body": r.get::<_, String>(4)?, "created_at": r.get::<_, String>(5)?,
-                }))
-            })?
-            .collect::<std::result::Result<_, _>>()?;
-        let obj = out.as_object_mut().expect("object");
-        obj.insert("description".into(), row.description.into());
-        obj.insert("plan".into(), row.plan.into());
-        obj.insert("criteria".into(), criteria.into());
-        obj.insert("comments".into(), comments.into());
-    }
-    Ok(out)
+        worktree: row.worktree,
+        created_at: row.created,
+        updated_at: row.updated,
+        done_at: row.done,
+        archived_at: row.archived,
+    };
+    Ok((ticket, row.description, row.plan))
 }
 
 #[cfg(test)]
