@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Scree is a local ticket tracker for humans and coding agents: one Rust binary, one sqlite file, no server. Vocabulary (Ticket, Available, Position, Project, Worktree, Role...) is defined in `GLOSSARY.md`; use those terms. Design docs live in `docs/` (`cli.md`, `data-model.md`, `architecture.md`, `tui.md`, `skill.md`, `adr/`). Scree's own tickets use the `SCR-` prefix; this repo's development work is tracked in Backlog.md (see AGENTS.md above), not in scree.
+Scree is a local ticket tracker for humans and coding agents: one Rust binary, one sqlite file, no server. Vocabulary (Ticket, Available, Position, Project, Worktree, Role...) is defined in `GLOSSARY.md`; use those terms. Design docs live in `docs/` (`cli.md`, `data-model.md`, `architecture.md`, `tui.md`, `skill.md`, `adr/`). Scree's own tickets use the `SCR-` prefix.
 
 ## Commands
 
