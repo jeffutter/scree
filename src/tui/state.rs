@@ -4,7 +4,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::theme::Theme;
-use crate::model::Ticket;
+use crate::model::{Ticket, TicketDetail};
 use crate::scope::Scope;
 
 /// Board columns, left to right.
@@ -70,6 +70,15 @@ pub enum ListEntry {
     Ticket { idx: usize, depth: usize },
 }
 
+/// The open detail view: the full ticket and how far it is scrolled. `scroll`
+/// may overshoot (G sets it to usize::MAX); the view clamps it when it knows
+/// the wrapped height.
+#[derive(Debug, Clone)]
+pub struct Detail {
+    pub ticket: TicketDetail,
+    pub scroll: usize,
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -92,6 +101,8 @@ pub struct State {
     pub view: View,
     /// Rows a PgUp/PgDn moves; set from the terminal height.
     pub page: usize,
+    /// While Some, the detail view replaces the board or list.
+    pub detail: Option<Detail>,
 }
 
 impl Default for State {
@@ -111,6 +122,7 @@ impl Default for State {
             show_archived: false,
             view: View::Board,
             page: 10,
+            detail: None,
         }
     }
 }
@@ -301,12 +313,15 @@ pub enum Event {
     /// The terminal's new height in rows.
     Resize(u16),
     Loaded(Result<Vec<Ticket>, String>),
+    DetailLoaded(Result<Box<TicketDetail>, String>),
 }
 
 /// Work `update` asks the runner to do; the runner feeds the result back as an Event.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
     Reload(LoadSpec),
+    /// Fetch the full ticket with this id.
+    LoadDetail(String),
 }
 
 pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
@@ -328,10 +343,49 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             state.error = Some(e);
             vec![]
         }
+        Event::DetailLoaded(Ok(ticket)) => {
+            state.error = None;
+            state.detail = Some(Detail {
+                ticket: *ticket,
+                scroll: 0,
+            });
+            vec![]
+        }
+        Event::DetailLoaded(Err(e)) => {
+            state.error = Some(e);
+            vec![]
+        }
+    }
+}
+
+/// Keys while the detail view is open. q closes the view, not the app.
+fn on_detail_key(state: &mut State, k: KeyEvent) {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    let page = state.page;
+    let half = (page / 2).max(1);
+    let Some(d) = state.detail.as_mut() else {
+        return;
+    };
+    match (k.code, ctrl) {
+        (KeyCode::Char('c'), true) => state.should_quit = true,
+        (KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Left, false) => state.detail = None,
+        (KeyCode::Up | KeyCode::Char('k'), false) => d.scroll = d.scroll.saturating_sub(1),
+        (KeyCode::Down | KeyCode::Char('j'), false) => d.scroll = d.scroll.saturating_add(1),
+        (KeyCode::PageUp, _) => d.scroll = d.scroll.saturating_sub(page),
+        (KeyCode::PageDown, _) => d.scroll = d.scroll.saturating_add(page),
+        (KeyCode::Char('u'), true) => d.scroll = d.scroll.saturating_sub(half),
+        (KeyCode::Char('d'), true) => d.scroll = d.scroll.saturating_add(half),
+        (KeyCode::Home | KeyCode::Char('g'), false) => d.scroll = 0,
+        (KeyCode::End | KeyCode::Char('G'), false) => d.scroll = usize::MAX,
+        _ => {}
     }
 }
 
 fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    if state.detail.is_some() {
+        on_detail_key(state, k);
+        return vec![];
+    }
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let page = state.page;
     let half = (page / 2).max(1);
@@ -347,6 +401,11 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         (KeyCode::Char('d'), true) => state.move_row(|r, _| r + half),
         (KeyCode::Home | KeyCode::Char('g'), false) => state.move_row(|_, _| 0),
         (KeyCode::End | KeyCode::Char('G'), false) => state.move_row(|_, len| len - 1),
+        (KeyCode::Enter, false) => {
+            if let Some(id) = state.selected_id.clone() {
+                return vec![Effect::LoadDetail(id)];
+            }
+        }
         (KeyCode::Tab | KeyCode::BackTab, _) => {
             state.view = match state.view {
                 View::Board => View::List,
@@ -419,11 +478,7 @@ mod tests {
 
     #[test]
     fn other_keys_do_nothing() {
-        let (s, fx) = drive(vec![
-            press('x'),
-            key(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Press),
-            Event::Resize(30),
-        ]);
+        let (s, fx) = drive(vec![press('x'), Event::Resize(30)]);
         assert!(!s.should_quit);
         assert!(fx.is_empty());
     }
@@ -779,5 +834,95 @@ mod tests {
         assert!(ids.contains(&"#active".to_string()));
         update(&mut s, press('c'));
         assert!(list_ids(&s).contains(&"#abandoned".to_string()));
+    }
+
+    fn detail_of(id: &str) -> TicketDetail {
+        serde_json::from_value(serde_json::json!({
+            "archived_at": null, "available": false, "blocked": false, "blocked_by": [],
+            "claimed_by": null, "created_at": "", "done_at": null, "for": "agent",
+            "id": id, "parent": null, "status": "ready", "subtasks": [],
+            "title": "t", "updated_at": "", "worktree": null,
+            "comments": [], "criteria": [], "description": "", "plan": ""
+        }))
+        .unwrap()
+    }
+
+    fn opened() -> State {
+        loaded(vec![Event::DetailLoaded(Ok(Box::new(detail_of("D1"))))])
+    }
+
+    #[test]
+    fn enter_requests_detail_of_selection() {
+        let mut s = loaded(vec![press('l'), press('j')]);
+        let fx = update(&mut s, code(KeyCode::Enter));
+        assert_eq!(fx, vec![Effect::LoadDetail("R2".into())]);
+    }
+
+    #[test]
+    fn enter_with_no_tickets_does_nothing() {
+        let (s, fx) = drive(vec![code(KeyCode::Enter)]);
+        assert!(fx.is_empty() && s.detail.is_none());
+    }
+
+    #[test]
+    fn detail_loaded_opens_and_error_does_not() {
+        assert!(opened().detail.is_some());
+        let s = loaded(vec![Event::DetailLoaded(Err("gone".into()))]);
+        assert!(s.detail.is_none());
+        assert_eq!(s.error.as_deref(), Some("gone"));
+    }
+
+    #[test]
+    fn esc_q_h_left_close_detail_without_quitting() {
+        for e in [
+            code(KeyCode::Esc),
+            press('q'),
+            press('h'),
+            code(KeyCode::Left),
+        ] {
+            let mut s = opened();
+            update(&mut s, e);
+            assert!(s.detail.is_none());
+            assert!(!s.should_quit);
+        }
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_detail() {
+        let mut s = opened();
+        update(&mut s, ctrl('c'));
+        assert!(s.should_quit);
+    }
+
+    #[test]
+    fn detail_scroll_keys() {
+        let mut s = opened();
+        s.page = 10;
+        let scroll = |s: &State| s.detail.as_ref().unwrap().scroll;
+        update(&mut s, press('k'));
+        assert_eq!(scroll(&s), 0);
+        update(&mut s, press('j'));
+        update(&mut s, code(KeyCode::Down));
+        assert_eq!(scroll(&s), 2);
+        update(&mut s, code(KeyCode::PageDown));
+        assert_eq!(scroll(&s), 12);
+        update(&mut s, code(KeyCode::PageUp));
+        update(&mut s, code(KeyCode::Up));
+        assert_eq!(scroll(&s), 1);
+        update(&mut s, ctrl('d'));
+        assert_eq!(scroll(&s), 6);
+        update(&mut s, ctrl('u'));
+        assert_eq!(scroll(&s), 1);
+        update(&mut s, press('G'));
+        assert_eq!(scroll(&s), usize::MAX);
+        update(&mut s, press('g'));
+        assert_eq!(scroll(&s), 0);
+    }
+
+    #[test]
+    fn reload_keeps_detail_open() {
+        let mut s = opened();
+        update(&mut s, Event::Loaded(Ok(sample())));
+        assert!(s.detail.is_some());
     }
 }

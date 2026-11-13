@@ -49,6 +49,11 @@ pub fn run_effect(conn: &Connection, cwd: &Path, identity: &Identity, effect: Ef
                 .map(|r| r.tickets)
                 .map_err(|e| e.to_string()),
         ),
+        Effect::LoadDetail(id) => Event::DetailLoaded(
+            ticket::show(conn, &id)
+                .map(Box::new)
+                .map_err(|e| e.to_string()),
+        ),
     }
 }
 
@@ -117,5 +122,52 @@ mod tests {
         for st in ["ready", "done", "abandoned"] {
             assert!(ts.iter().any(|t| t.status == st), "{st}");
         }
+    }
+
+    #[test]
+    fn load_detail_returns_criteria_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let t = ticket::add(
+            &mut conn,
+            &Scope::Unscoped,
+            &NewTicket {
+                title: "x",
+                description: "desc",
+                plan: "",
+                criteria: &["c1".to_string()],
+                for_who: ForWho::Agent,
+                status: NewStatus::Ready,
+                key: None,
+                parent: None,
+                blocked_by: &[],
+            },
+        )
+        .unwrap();
+        let who = Identity {
+            role: Role::Agent,
+            author: "a".into(),
+            session: None,
+        };
+        ticket::comment_add(&mut conn, &t.ticket.id, "hello", &who).unwrap();
+        let Event::DetailLoaded(Ok(d)) = run_effect(
+            &conn,
+            dir.path(),
+            &who,
+            Effect::LoadDetail(t.ticket.id.clone()),
+        ) else {
+            panic!("detail failed");
+        };
+        assert_eq!(d.description, "desc");
+        assert_eq!(d.criteria.len(), 1);
+        assert_eq!(d.comments.len(), 1);
+        let Event::DetailLoaded(Err(_)) = run_effect(
+            &conn,
+            dir.path(),
+            &who,
+            Effect::LoadDetail("NOPE-99".into()),
+        ) else {
+            panic!("expected error");
+        };
     }
 }

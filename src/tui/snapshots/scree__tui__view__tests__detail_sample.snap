@@ -1,0 +1,44 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 80, 40).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  8 tickets
++SCR-6-------------------------------------------------------------------------+
+|TUI detail view                                                               |
+|! SCR-6  active                                                               |
+|for: agent                                                                    |
+|claimed by: jeff (s1)                                                         |
+|worktree: feat-detail                                                         |
+|parent: none                                                                  |
+|created: 2026-11-13T05:00:00Z                                                 |
+|updated: 2026-11-13T06:00:00Z                                                 |
+|done: none                                                                    |
+|                                                                              |
+|Blocked by                                                                    |
+|  * SCR-5 [active] Board view                                                 |
+|                                                                              |
+|Subtasks                                                                      |
+|  o SCR-12 [ready] Scroll keys                                                |
+|                                                                              |
+|Description                                                                   |
+|  Enter opens the detail view.                                                |
+|  Esc closes it.                                                              |
+|                                                                              |
+|Plan                                                                          |
+|  Add a full pane screen.                                                     |
+|                                                                              |
+|Criteria                                                                      |
+|  [x] 1. Renders every field                                                  |
+|      evidence: cargo test passed                                             |
+|      checked by jeff at 2026-11-13T05:50:00Z                                 |
+|  [ ] 2. Scrolls                                                              |
+|                                                                              |
+|Comments                                                                      |
+|  agent/jeff (s1) 2026-11-13T05:30:00Z                                        |
+|    Started work on the detail pane.                                          |
+|  human/bob 2026-11-13T05:40:00Z                                              |
+|    Looks good, please keep the long lines wrapping so nothing is clipped at  |
+|    the pane edge.                                                            |
+|                                                                              |
++------------------------------------------------------------------------------+
+[Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom

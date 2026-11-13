@@ -1,6 +1,6 @@
 ---
 source: src/tui/view.rs
-expression: "render(&s, 110, 14).join(\"\\n\")"
+expression: "render(&mut s, 110, 14).join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  8 tickets
 +draft (1)-----------++ready (3)-----------++active (1)----------++done (2)------------++abandoned (1)-------+
@@ -14,5 +14,5 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |                    ||                    ||                    ||                    ||                    |
 |                    ||                    ||                    ||                    ||                    |
 +--------------------++--------------------++--------------------++--------------------++--------------------+
-[Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last | [c] hide closed
-[a] archived | [s] scope | [q] quit
+[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page | [g/G] first/last
+[c] hide closed | [a] archived | [s] scope | [q] quit

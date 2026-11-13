@@ -51,7 +51,7 @@ pub fn run(conn: &Connection, cwd: &Path, identity: &Identity, env: &Env) -> Res
             let ev = effects::run_effect(conn, cwd, identity, effect);
             pending.extend(update(&mut state, ev));
         }
-        term.draw(|f| view::draw(f, &state))?;
+        term.draw(|f| view::draw(f, &mut state))?;
         if event::poll(Duration::from_millis(250))? {
             let ev = match event::read()? {
                 event::Event::Key(k) => Event::Key(k),
