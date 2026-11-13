@@ -119,14 +119,25 @@ fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
         .max(1);
     let mut out = vec![];
     for para in text.split('\n') {
-        let mut line = String::new();
-        let mut used = 0;
-        for word in para.split_whitespace() {
+        // Leading indentation is content: keep it on the first line.
+        let lead_n = para.chars().take_while(|&c| c == ' ').count().min(room - 1);
+        let mut line = " ".repeat(lead_n);
+        let mut used = lead_n;
+        let mut started = false;
+        // Splitting on single spaces keeps runs of spaces as empty tokens.
+        for word in para.trim_start_matches(' ').split(' ') {
             let w: usize = word.chars().map(cell).sum();
-            if used > 0 && used + 1 + w <= room {
-                line.push(' ');
+            let sep = usize::from(started);
+            if used + sep + w <= room {
+                if started {
+                    line.push(' ');
+                }
                 line.push_str(word);
-                used += 1 + w;
+                used += sep + w;
+                started = true;
+                continue;
+            }
+            if w == 0 {
                 continue;
             }
             if used > 0 {
@@ -134,8 +145,9 @@ fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
                 line.clear();
                 used = 0;
             }
+            started = true;
             for c in word.chars() {
-                if used + cell(c) > room {
+                if used > 0 && used + cell(c) > room {
                     out.push(format!("{indent}{line}"));
                     line.clear();
                     used = 0;
@@ -170,6 +182,21 @@ fn mark_selected(lines: &mut [Line<'static>], theme: &Theme) {
     }
 }
 
+/// One list item in the detail view: "  " + `prefix` + title, with title
+/// continuation lines aligned under the first title character.
+fn item_lines(prefix: String, style: Style, title: &str, width: usize) -> Vec<Line<'static>> {
+    let indent = " ".repeat(2 + Span::raw(prefix.clone()).width());
+    let mut it = wrap(title, &indent, width).into_iter();
+    let first = it.next().unwrap_or_default();
+    let mut lines = vec![Line::from(vec![
+        Span::raw("  "),
+        Span::styled(prefix, style),
+        Span::raw(first[indent.len()..].to_string()),
+    ])];
+    lines.extend(it.map(Line::from));
+    lines
+}
+
 /// Every field of the ticket as plain wrapped lines, in reading order, and
 /// the line range of the selected item.
 fn detail_lines(
@@ -193,14 +220,7 @@ fn detail_lines(
     let item = |out: &mut Vec<Line<'static>>, status: &str, id: &str, title: &str| {
         let (icon, style) = theme.status_style(status, false, false);
         let prefix = format!("{icon} {id} [{status}] ");
-        let mut it = wrap(title, "    ", width.saturating_sub(prefix.len())).into_iter();
-        let first = it.next().unwrap_or_default();
-        out.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(prefix, style),
-            Span::raw(first.trim_start().to_string()),
-        ]));
-        out.extend(it.map(Line::from));
+        out.extend(item_lines(prefix, style, title, width));
     };
 
     plain(&mut out, &t.title, "");
@@ -979,6 +999,32 @@ mod tests {
     fn wrap_splits_long_words() {
         assert_eq!(wrap("abcdefgh", "", 3), ["abc", "def", "gh"]);
         assert_eq!(wrap("a b\nc", "> ", 5), ["> a b", "> c"]);
+    }
+
+    #[test]
+    fn wrap_keeps_indentation_and_inner_spaces() {
+        assert_eq!(wrap("    code  x", "", 40), ["    code  x"]);
+    }
+
+    #[test]
+    fn wrap_wide_char_in_narrow_width_has_no_blank_lines() {
+        let out = wrap("\u{4e2d}\u{6587}", "", 1);
+        assert!(out.iter().all(|l| !l.is_empty()), "{out:?}");
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn item_lines_use_cell_width_of_prefix() {
+        // "\u{25cf}" is multibyte (3 bytes) but 1 cell wide.
+        let lines = item_lines(
+            "\u{25cf} SCR-1 [x] ".to_string(),
+            Style::default(),
+            "aaaa bbbb",
+            22,
+        );
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        // prefix is 12 cells, so 2+12 leaves 8 cells: "aaaa bbbb" must wrap.
+        assert_eq!(text, ["  \u{25cf} SCR-1 [x] aaaa", "              bbbb"]);
     }
 
     fn key(s: &mut State, c: char) {
