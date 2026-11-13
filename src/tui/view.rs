@@ -498,6 +498,9 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         Constraint::Length(footer_h),
     ])
     .areas(area);
+    // Paging moves by exactly the rows the body pane shows (minus borders),
+    // whatever the footer wrapped to or whether a status line is present.
+    state.page = usize::from(body.height.saturating_sub(2)).max(1);
     widgets::render_header(
         frame.buffer_mut(),
         header,
@@ -768,6 +771,31 @@ mod tests {
         ];
         crate::tui::state::update(&mut s, Event::Loaded(Ok(tickets)));
         s
+    }
+
+    #[test]
+    fn page_size_tracks_wrapped_footer_and_error_line() {
+        let mut s = sample_state();
+        render(&mut s, 600, 30);
+        let wide = s.page;
+
+        let rows = render(&mut s, 90, 30);
+        let narrow = s.page;
+        assert!(narrow < wide, "narrow {narrow} wide {wide}");
+        // Rows between the pane's top and bottom borders in the rendered frame.
+        let bottom = rows
+            .iter()
+            .rposition(|r| r.starts_with("\u{2514}") || r.starts_with('+'))
+            .unwrap();
+        let top = rows
+            .iter()
+            .position(|r| r.starts_with("\u{250c}") || r.starts_with('+'))
+            .unwrap();
+        assert_eq!(narrow, bottom - top - 1);
+
+        s.error = Some("boom".into());
+        render(&mut s, 90, 30);
+        assert_eq!(s.page, narrow - 1);
     }
 
     #[test]
