@@ -43,6 +43,28 @@ impl Drop for Guard {
     }
 }
 
+/// The TUI stepped aside so a child process can use the terminal. Dropping
+/// it re-enters raw mode and the alternate screen, so every path, including
+/// an early return after a failed editor, restores the TUI.
+pub struct Suspended(());
+
+impl Suspended {
+    pub fn new() -> io::Result<Suspended> {
+        disable_raw_mode()?;
+        // Constructed first so Drop still resumes if leaving the screen fails.
+        let s = Suspended(());
+        write_restore(&mut io::stdout())?;
+        Ok(s)
+    }
+}
+
+impl Drop for Suspended {
+    fn drop(&mut self) {
+        let _ = enable_raw_mode();
+        let _ = execute!(io::stdout(), EnterAlternateScreen);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

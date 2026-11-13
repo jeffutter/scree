@@ -4,6 +4,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::theme::Theme;
+use super::widgets::{Prompt, PromptOutcome};
 use crate::model::{Ticket, TicketDetail};
 use crate::scope::Scope;
 
@@ -135,6 +136,30 @@ pub struct Confirm {
     pub prompt: String,
 }
 
+/// A ticket text field the prompt or $EDITOR edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextField {
+    Description,
+    Plan,
+}
+
+/// What an open prompt will edit when submitted. Title only for now; a later
+/// evidence or comment prompt adds a variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptField {
+    Title,
+}
+
+/// An open one-line prompt and the ticket it edits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptState {
+    pub id: String,
+    pub field: PromptField,
+    /// The text the prompt was seeded with, to detect "unchanged".
+    pub seed: String,
+    pub prompt: Prompt,
+}
+
 #[derive(Debug)]
 pub struct State {
     pub should_quit: bool,
@@ -163,6 +188,8 @@ pub struct State {
     pub notice: Option<String>,
     /// While Some, a modal popup owns the keyboard.
     pub confirm: Option<Confirm>,
+    /// While Some, the footer prompt owns the keyboard.
+    pub prompt: Option<PromptState>,
 }
 
 impl Default for State {
@@ -185,6 +212,7 @@ impl Default for State {
             detail: None,
             notice: None,
             confirm: None,
+            prompt: None,
         }
     }
 }
@@ -229,6 +257,18 @@ impl State {
         let id = self.selected_id.as_deref()?;
         let t = self.tickets.iter().find(|t| t.id == id)?;
         Some((t.id.clone(), t.status.clone(), t.archived_at.is_some()))
+    }
+
+    /// Title of the ticket the keys act on (same lookup as `acted_ticket`).
+    fn acted_title(&self) -> Option<String> {
+        if let Some(d) = &self.detail {
+            return Some(d.ticket.ticket.title.clone());
+        }
+        let id = self.selected_id.as_deref()?;
+        self.tickets
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.title.clone())
     }
 
     /// Tickets of one column, in list order.
@@ -404,6 +444,17 @@ pub enum Effect {
         id: String,
         action: Lifecycle,
     },
+    /// Set a ticket's title.
+    EditTitle {
+        id: String,
+        title: String,
+    },
+    /// Edit a text field in $EDITOR. The runner owns the terminal, so it
+    /// handles this itself and reads the current text fresh.
+    EditExternal {
+        id: String,
+        field: TextField,
+    },
 }
 
 pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
@@ -484,6 +535,67 @@ fn lifecycle_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
     }
 }
 
+/// Edit keys, shared by board, list and detail: `e` title prompt, `E`
+/// description and `P` plan in $EDITOR. Inert without a selected ticket.
+fn edit_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
+    if !matches!(c, 'e' | 'E' | 'P') {
+        return None;
+    }
+    let (Some((id, _, _)), Some(title)) = (state.acted_ticket(), state.acted_title()) else {
+        return Some(vec![]);
+    };
+    Some(match c {
+        'e' => {
+            state.prompt = Some(PromptState {
+                id,
+                field: PromptField::Title,
+                prompt: Prompt::new("title", &title),
+                seed: title,
+            });
+            vec![]
+        }
+        'E' => vec![Effect::EditExternal {
+            id,
+            field: TextField::Description,
+        }],
+        _ => vec![Effect::EditExternal {
+            id,
+            field: TextField::Plan,
+        }],
+    })
+}
+
+/// Keys while the prompt is open. Enter submits: an unchanged title makes no
+/// effect (no write); an empty one closes the prompt with an error.
+fn on_prompt_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let Some(p) = state.prompt.as_mut() else {
+        return vec![];
+    };
+    match p.prompt.handle_key(k) {
+        PromptOutcome::Pending => vec![],
+        PromptOutcome::Cancel => {
+            state.prompt = None;
+            vec![]
+        }
+        PromptOutcome::Submit(text) => {
+            let Some(p) = state.prompt.take() else {
+                return vec![];
+            };
+            match p.field {
+                PromptField::Title if text.trim().is_empty() => {
+                    state.error = Some("title must not be empty".into());
+                    vec![]
+                }
+                PromptField::Title if text.trim() == p.seed.trim() => vec![],
+                PromptField::Title => vec![Effect::EditTitle {
+                    id: p.id,
+                    title: text,
+                }],
+            }
+        }
+    }
+}
+
 /// Keys while a confirm popup is open: y/Enter confirm, anything else cancels.
 fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     let Some(c) = state.confirm.take() else {
@@ -504,7 +616,7 @@ fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     let page = state.page;
     let half = (page / 2).max(1);
     if let (KeyCode::Char(c), false) = (k.code, ctrl)
-        && let Some(fx) = lifecycle_key(state, c)
+        && let Some(fx) = lifecycle_key(state, c).or_else(|| edit_key(state, c))
     {
         return fx;
     }
@@ -535,6 +647,9 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     }
     state.notice = None;
     state.error = None;
+    if state.prompt.is_some() {
+        return on_prompt_key(state, k);
+    }
     if state.confirm.is_some() {
         return on_confirm_key(state, k);
     }
@@ -542,7 +657,7 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         return on_detail_key(state, k);
     }
     if let (KeyCode::Char(c), false) = (k.code, ctrl)
-        && let Some(fx) = lifecycle_key(state, c)
+        && let Some(fx) = lifecycle_key(state, c).or_else(|| edit_key(state, c))
     {
         return fx;
     }
@@ -1232,5 +1347,98 @@ mod tests {
                 Effect::LoadDetail("D1".into())
             ]
         );
+    }
+
+    fn type_str(s: &mut State, text: &str) {
+        for c in text.chars() {
+            update(s, press(c));
+        }
+    }
+
+    #[test]
+    fn e_opens_prompt_seeded_with_title_in_board_and_detail() {
+        let mut s = at_col(1);
+        assert!(update(&mut s, press('e')).is_empty());
+        let p = s.prompt.as_ref().unwrap();
+        assert_eq!((p.id.as_str(), p.prompt.text.as_str()), ("R1", "title R1"));
+        let mut s = opened();
+        update(&mut s, press('e'));
+        assert_eq!(s.prompt.as_ref().unwrap().id, "D1");
+    }
+
+    #[test]
+    fn prompt_captures_keys_and_enter_emits_edit_title() {
+        let mut s = at_col(1);
+        update(&mut s, press('e'));
+        // 'q' and 'S' are text, not quit or start.
+        type_str(&mut s, "qS");
+        assert!(!s.should_quit);
+        let fx = update(&mut s, code(KeyCode::Enter));
+        assert_eq!(
+            fx,
+            vec![Effect::EditTitle {
+                id: "R1".into(),
+                title: "title R1qS".into()
+            }]
+        );
+        assert!(s.prompt.is_none());
+    }
+
+    #[test]
+    fn prompt_esc_cancels_without_effect() {
+        let mut s = at_col(1);
+        update(&mut s, press('e'));
+        type_str(&mut s, "zz");
+        assert!(update(&mut s, code(KeyCode::Esc)).is_empty());
+        assert!(s.prompt.is_none() && s.error.is_none());
+    }
+
+    #[test]
+    fn unchanged_title_makes_no_effect_and_empty_title_errors() {
+        let mut s = at_col(1);
+        update(&mut s, press('e'));
+        assert!(update(&mut s, code(KeyCode::Enter)).is_empty());
+        assert!(s.prompt.is_none() && s.error.is_none());
+        update(&mut s, press('e'));
+        for _ in 0..20 {
+            update(&mut s, code(KeyCode::Backspace));
+        }
+        assert!(update(&mut s, code(KeyCode::Enter)).is_empty());
+        assert!(s.prompt.is_none());
+        assert_eq!(s.error.as_deref(), Some("title must not be empty"));
+    }
+
+    #[test]
+    fn ctrl_c_quits_through_prompt() {
+        let mut s = at_col(1);
+        update(&mut s, press('e'));
+        update(&mut s, ctrl('c'));
+        assert!(s.should_quit);
+    }
+
+    #[test]
+    fn capital_e_and_p_ask_for_external_edit() {
+        let mut s = at_col(1);
+        assert_eq!(
+            update(&mut s, press('E')),
+            vec![Effect::EditExternal {
+                id: "R1".into(),
+                field: TextField::Description
+            }]
+        );
+        let mut s = opened();
+        assert_eq!(
+            update(&mut s, press('P')),
+            vec![Effect::EditExternal {
+                id: "D1".into(),
+                field: TextField::Plan
+            }]
+        );
+    }
+
+    #[test]
+    fn edit_keys_are_inert_without_a_ticket() {
+        let (s, fx) = drive(vec![press('e'), press('E'), press('P')]);
+        assert!(fx.is_empty() && s.prompt.is_none());
     }
 }

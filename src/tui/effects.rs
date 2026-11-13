@@ -1,10 +1,12 @@
 //! Runs an Effect against the ticket library and returns the resulting Event.
 
+use std::io::Write;
 use std::path::Path;
+use std::process::Command;
 
 use rusqlite::Connection;
 
-use super::state::{Effect, Event, Lifecycle, LoadSpec, ScopeMode};
+use super::state::{Effect, Event, Lifecycle, LoadSpec, ScopeMode, TextField};
 use crate::cli::{ListArgs, ScopeArgs, Status};
 use crate::identity::Identity;
 use crate::ticket;
@@ -57,7 +59,122 @@ pub fn run_effect(conn: &mut Connection, cwd: &Path, identity: &Identity, effect
         Effect::Transition { id, action } => {
             Event::ActionDone(transition(conn, &id, action, identity))
         }
+        Effect::EditTitle { id, title } => {
+            Event::ActionDone(edit_title(conn, &id, &title, identity))
+        }
+        // Only the run loop holds the terminal; it intercepts this before here.
+        Effect::EditExternal { .. } => {
+            Event::ActionDone(Err("external edit needs the terminal".into()))
+        }
     }
+}
+
+/// Set a ticket's title through ticket::edit (empty titles are refused there).
+fn edit_title(
+    conn: &mut Connection,
+    id: &str,
+    title: &str,
+    identity: &Identity,
+) -> Result<String, String> {
+    let f = ticket::EditFields {
+        title: Some(title),
+        description: None,
+        plan: None,
+        append: false,
+        for_who: None,
+    };
+    ticket::edit(conn, id, &f, identity)
+        .map(|_| format!("{id} title updated"))
+        .map_err(|e| e.to_string())
+}
+
+/// The editor command: $VISUAL, else $EDITOR, else vi.
+pub fn editor_command() -> String {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "vi".into())
+}
+
+/// Run `cmd` (split on whitespace, no shell, so `code -w` works) on `path`
+/// and wait. Spawn failure and a non-zero exit are errors.
+pub fn run_editor(cmd: &str, path: &Path) -> Result<(), String> {
+    let mut parts = cmd.split_whitespace();
+    let prog = parts.next().ok_or("editor command is empty")?;
+    let status = Command::new(prog)
+        .args(parts)
+        .arg(path)
+        .status()
+        .map_err(|e| format!("editor failed: cannot run {prog}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("editor failed: {prog} exited with {status}"))
+    }
+}
+
+/// Write `edited` to the field unless it equals `seed`. Editors add a trailing
+/// newline the seed lacked; one such newline is not a change.
+pub fn apply_external(
+    conn: &mut Connection,
+    id: &str,
+    field: TextField,
+    seed: &str,
+    edited: &str,
+    identity: &Identity,
+) -> Result<String, String> {
+    let edited = if seed.ends_with('\n') {
+        edited
+    } else {
+        edited.strip_suffix('\n').unwrap_or(edited)
+    };
+    let name = match field {
+        TextField::Description => "description",
+        TextField::Plan => "plan",
+    };
+    if edited == seed {
+        return Ok(format!("{id} {name} unchanged"));
+    }
+    let f = ticket::EditFields {
+        title: None,
+        description: (field == TextField::Description).then_some(edited),
+        plan: (field == TextField::Plan).then_some(edited),
+        append: false,
+        for_who: None,
+    };
+    ticket::edit(conn, id, &f, identity)
+        .map(|_| format!("{id} {name} updated"))
+        .map_err(|e| e.to_string())
+}
+
+/// Edit a text field externally: seed a temp file with the current text, let
+/// `run` open it (the caller suspends the terminal inside `run`), read it
+/// back and apply only a real change. Any failure leaves the ticket as is.
+pub fn external_edit(
+    conn: &mut Connection,
+    id: &str,
+    field: TextField,
+    identity: &Identity,
+    run: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<String, String> {
+    let detail = ticket::show(conn, id).map_err(|e| e.to_string())?;
+    let seed = match field {
+        TextField::Description => detail.description,
+        TextField::Plan => detail.plan,
+    };
+    let mut file = tempfile::Builder::new()
+        .prefix("scree-")
+        .suffix(".md")
+        .tempfile()
+        .map_err(|e| format!("cannot create temp file: {e}"))?;
+    file.write_all(seed.as_bytes())
+        .and_then(|_| file.flush())
+        .map_err(|e| format!("cannot write temp file: {e}"))?;
+    run(file.path())?;
+    let edited = std::fs::read_to_string(file.path())
+        .map_err(|e| format!("cannot read edited file: {e}"))?;
+    apply_external(conn, id, field, &seed, &edited, identity)
 }
 
 /// Apply one lifecycle action. Every library error (Refused, Conflict,
@@ -341,5 +458,122 @@ mod tests {
         // not found
         assert!(act(&mut conn, "NOPE-99", Lifecycle::Ready).is_err());
         assert!(act(&mut conn, "NOPE-99", Lifecycle::Archive { archived: true }).is_err());
+    }
+
+    fn add_titled(conn: &mut Connection, desc: &str, plan: &str) -> String {
+        ticket::add(
+            conn,
+            &Scope::Unscoped,
+            &NewTicket {
+                title: "old",
+                description: desc,
+                plan,
+                criteria: &[],
+                for_who: ForWho::Agent,
+                status: NewStatus::Ready,
+                key: None,
+                parent: None,
+                blocked_by: &[],
+            },
+        )
+        .unwrap()
+        .ticket
+        .id
+    }
+
+    #[test]
+    fn title_edit_end_to_end_and_empty_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add_titled(&mut conn, "", "");
+        let eff = Effect::EditTitle {
+            id: id.clone(),
+            title: "  new title ".into(),
+        };
+        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), &agent(), eff) else {
+            panic!()
+        };
+        assert_eq!(r.unwrap(), format!("{id} title updated"));
+        assert_eq!(ticket::show(&conn, &id).unwrap().ticket.title, "new title");
+        let eff = Effect::EditTitle {
+            id: id.clone(),
+            title: "  ".into(),
+        };
+        let Event::ActionDone(r) = run_effect(&mut conn, Path::new("/"), &agent(), eff) else {
+            panic!()
+        };
+        assert!(r.unwrap_err().contains("empty"));
+        assert_eq!(ticket::show(&conn, &id).unwrap().ticket.title, "new title");
+    }
+
+    #[test]
+    fn external_edit_round_trips_description_and_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add_titled(&mut conn, "d0", "p0");
+        // run_editor splits on whitespace, so use a script file for quoting.
+        let script = dir.path().join("ed.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf '\\nadded' >> \"$1\"\n").unwrap();
+        let cmd = format!("sh {}", script.display());
+        let r = external_edit(&mut conn, &id, TextField::Description, &agent(), |p| {
+            run_editor(&cmd, p)
+        });
+        assert_eq!(r.unwrap(), format!("{id} description updated"));
+        let d = ticket::show(&conn, &id).unwrap();
+        assert_eq!(
+            (d.description.as_str(), d.plan.as_str()),
+            ("d0\nadded", "p0")
+        );
+        external_edit(&mut conn, &id, TextField::Plan, &agent(), |p| {
+            run_editor(&cmd, p)
+        })
+        .unwrap();
+        let d = ticket::show(&conn, &id).unwrap();
+        assert_eq!(
+            (d.description.as_str(), d.plan.as_str()),
+            ("d0\nadded", "p0\nadded")
+        );
+    }
+
+    #[test]
+    fn unchanged_file_makes_no_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add_titled(&mut conn, "keep", "");
+        conn.execute("UPDATE tickets SET updated_at = 'T0'", [])
+            .unwrap();
+        let r = external_edit(&mut conn, &id, TextField::Description, &agent(), |p| {
+            run_editor("true", p)
+        });
+        assert!(r.unwrap().contains("unchanged"));
+        // An editor that only adds a trailing newline is not a change either.
+        let nl = dir.path().join("nl.sh");
+        std::fs::write(&nl, "#!/bin/sh\nprintf '\\n' >> \"$1\"\n").unwrap();
+        let cmd = format!("sh {}", nl.display());
+        external_edit(&mut conn, &id, TextField::Description, &agent(), |p| {
+            run_editor(&cmd, p)
+        })
+        .unwrap();
+        let updated: String = conn
+            .query_row("SELECT updated_at FROM tickets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(updated, "T0");
+        assert_eq!(ticket::show(&conn, &id).unwrap().description, "keep");
+    }
+
+    #[test]
+    fn editor_failure_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let id = add_titled(&mut conn, "keep", "");
+        for cmd in ["false", "definitely-not-an-editor-xyz", "  "] {
+            let r = external_edit(&mut conn, &id, TextField::Description, &agent(), |p| {
+                run_editor(cmd, p)
+            });
+            assert!(r.is_err(), "{cmd}");
+        }
+        let e = run_editor("false", Path::new("/")).unwrap_err();
+        assert!(e.starts_with("editor failed"), "{e}");
+        assert_eq!(ticket::show(&conn, &id).unwrap().description, "keep");
     }
 }

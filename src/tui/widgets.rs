@@ -2,6 +2,7 @@
 //! data and a Theme, so each is snapshot-tested through a TestBackend.
 
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -49,6 +50,86 @@ pub fn footer_height(hints: &[(&str, &str)], width: u16, theme: &Theme) -> u16 {
 
 pub fn render_footer(buf: &mut Buffer, area: Rect, hints: &[(&str, &str)], theme: &Theme) {
     Paragraph::new(hint_lines(hints, area.width, theme)).render(area, buf);
+}
+
+/// What a key did to a Prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptOutcome {
+    Pending,
+    Submit(String),
+    Cancel,
+}
+
+/// A one-line text input. `cursor` counts chars, not bytes, so multibyte
+/// text edits correctly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub label: String,
+    pub text: String,
+    pub cursor: usize,
+}
+
+impl Prompt {
+    /// A prompt seeded with `text`, cursor at the end.
+    pub fn new(label: &str, text: &str) -> Self {
+        Prompt {
+            label: label.to_string(),
+            cursor: text.chars().count(),
+            text: text.to_string(),
+        }
+    }
+
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(char_idx)
+            .map_or(self.text.len(), |(i, _)| i)
+    }
+
+    pub fn handle_key(&mut self, k: KeyEvent) -> PromptOutcome {
+        if k.kind == KeyEventKind::Release {
+            return PromptOutcome::Pending;
+        }
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = k.modifiers.contains(KeyModifiers::ALT);
+        let len = self.text.chars().count();
+        match k.code {
+            KeyCode::Enter => return PromptOutcome::Submit(self.text.clone()),
+            KeyCode::Esc => return PromptOutcome::Cancel,
+            KeyCode::Char('a') if ctrl => self.cursor = 0,
+            KeyCode::Char('e') if ctrl => self.cursor = len,
+            KeyCode::Char(c) if !ctrl && !alt => {
+                let at = self.byte_at(self.cursor);
+                self.text.insert(at, c);
+                self.cursor += 1;
+            }
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                let at = self.byte_at(self.cursor);
+                self.text.remove(at);
+            }
+            KeyCode::Delete if self.cursor < len => {
+                let at = self.byte_at(self.cursor);
+                self.text.remove(at);
+            }
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(len),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = len,
+            _ => {}
+        }
+        PromptOutcome::Pending
+    }
+
+    /// The line to draw: "label: text".
+    pub fn line(&self) -> String {
+        format!("{}: {}", self.label, self.text)
+    }
+
+    /// Column of the cursor within `line()`.
+    pub fn cursor_col(&self) -> usize {
+        self.label.chars().count() + 2 + self.cursor
+    }
 }
 
 /// "Worktree <name>", "Project <dir>" or "all Projects".
@@ -113,6 +194,73 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
+
+    fn pk(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn prompt_inserts_mid_string_and_moves() {
+        let mut p = Prompt::new("title", "ac");
+        p.handle_key(pk(KeyCode::Left));
+        p.handle_key(pk(KeyCode::Char('b')));
+        assert_eq!((p.text.as_str(), p.cursor), ("abc", 2));
+        p.handle_key(pk(KeyCode::Home));
+        assert_eq!(p.cursor, 0);
+        p.handle_key(pk(KeyCode::End));
+        assert_eq!(p.cursor, 3);
+        p.handle_key(pk(KeyCode::Right));
+        assert_eq!(p.cursor, 3);
+        p.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(p.cursor, 0);
+        p.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(p.cursor, 3);
+    }
+
+    #[test]
+    fn prompt_backspace_and_delete() {
+        let mut p = Prompt::new("t", "abc");
+        p.handle_key(pk(KeyCode::Backspace));
+        assert_eq!((p.text.as_str(), p.cursor), ("ab", 2));
+        p.handle_key(pk(KeyCode::Home));
+        p.handle_key(pk(KeyCode::Backspace));
+        assert_eq!((p.text.as_str(), p.cursor), ("ab", 0));
+        p.handle_key(pk(KeyCode::Delete));
+        assert_eq!(p.text, "b");
+        p.handle_key(pk(KeyCode::End));
+        p.handle_key(pk(KeyCode::Delete));
+        assert_eq!(p.text, "b");
+    }
+
+    #[test]
+    fn prompt_handles_multibyte() {
+        let mut p = Prompt::new("t", "aé");
+        p.handle_key(pk(KeyCode::Left));
+        p.handle_key(pk(KeyCode::Char('ß')));
+        assert_eq!(p.text, "aßé");
+        p.handle_key(pk(KeyCode::Backspace));
+        p.handle_key(pk(KeyCode::Backspace));
+        assert_eq!(p.text, "é");
+        assert_eq!(p.cursor, 0);
+    }
+
+    #[test]
+    fn prompt_enter_esc_and_ignored_keys() {
+        let mut p = Prompt::new("t", "hi");
+        assert_eq!(
+            p.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
+            PromptOutcome::Pending
+        );
+        let mut rel = pk(KeyCode::Char('z'));
+        rel.kind = KeyEventKind::Release;
+        assert_eq!(p.handle_key(rel), PromptOutcome::Pending);
+        assert_eq!(p.text, "hi");
+        assert_eq!(
+            p.handle_key(pk(KeyCode::Enter)),
+            PromptOutcome::Submit("hi".into())
+        );
+        assert_eq!(p.handle_key(pk(KeyCode::Esc)), PromptOutcome::Cancel);
+    }
 
     fn dump(term: &Terminal<TestBackend>) -> String {
         let buf = term.backend().buffer();

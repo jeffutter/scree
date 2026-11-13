@@ -48,7 +48,19 @@ pub fn run(conn: &mut Connection, cwd: &Path, identity: &Identity, env: &Env) ->
     let mut pending = vec![Effect::Reload(state.load_spec())];
     while !state.should_quit {
         while let Some(effect) = pending.pop() {
-            let ev = effects::run_effect(conn, cwd, identity, effect);
+            let ev = match effect {
+                Effect::EditExternal { id, field } => {
+                    let r = effects::external_edit(conn, &id, field, identity, |path| {
+                        let _suspended = terminal::Suspended::new()
+                            .map_err(|e| format!("cannot leave the TUI: {e}"))?;
+                        effects::run_editor(&effects::editor_command(), path)
+                    });
+                    // Whatever the editor drew is gone from our screen state.
+                    term.clear()?;
+                    Event::ActionDone(r)
+                }
+                other => effects::run_effect(conn, cwd, identity, other),
+            };
             pending.extend(update(&mut state, ev));
         }
         term.draw(|f| view::draw(f, &mut state))?;

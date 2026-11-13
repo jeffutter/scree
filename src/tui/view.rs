@@ -24,6 +24,8 @@ const HINTS: [(&str, &str); 10] = [
     ("q", "quit"),
 ];
 
+const HINTS_EDIT: [(&str, &str); 1] = [("e/E/P", "title/desc/plan")];
+
 const HINTS_DETAIL: [(&str, &str); 4] = [
     ("Esc/q", "back"),
     ("j/k", "scroll"),
@@ -349,12 +351,22 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     } else {
         hints.len() - 1
     };
+    let n_offers = offers.len();
     for (i, (k, label, _)) in offers.into_iter().enumerate() {
         hints.insert(at + i, (k, label));
     }
+    if state.acted_ticket().is_some() {
+        for (i, h) in HINTS_EDIT.into_iter().enumerate() {
+            hints.insert(at + n_offers + i, h);
+        }
+    }
     let hints: &[(&str, &str)] = &hints;
     let status_line = state.error.is_some() || state.notice.is_some();
-    let footer_h = widgets::footer_height(hints, area.width, &state.theme) + u16::from(status_line);
+    let footer_h = if state.prompt.is_some() {
+        1
+    } else {
+        widgets::footer_height(hints, area.width, &state.theme) + u16::from(status_line)
+    };
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -382,6 +394,14 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         (None, Some(n)) => Some(n.clone()),
         (None, None) => None,
     };
+    if let Some(p) = &state.prompt {
+        let line = p.prompt.line();
+        frame.render_widget(Clear, footer);
+        frame.render_widget(Paragraph::new(Line::from(line)), footer);
+        let col = (p.prompt.cursor_col() as u16).min(footer.width.saturating_sub(1));
+        frame.set_cursor_position((footer.x + col, footer.y));
+        return;
+    }
     match message {
         Some(m) => {
             let [line, hints_area] =
@@ -647,6 +667,14 @@ mod tests {
             rows.iter()
                 .any(|r| r.starts_with("error: SCR-9 is blocked"))
         );
+    }
+
+    #[test]
+    fn prompt_replaces_hints_line() {
+        let mut s = sample_state();
+        key(&mut s, 'e');
+        key(&mut s, '!');
+        insta::assert_snapshot!(render(&mut s, 90, 14).join("\n"));
     }
 
     #[test]
