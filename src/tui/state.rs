@@ -478,6 +478,21 @@ impl State {
         self.reselect();
     }
 
+    /// Ids in navigation order: every list row, or the selected board column.
+    fn nav_ids(&self) -> Vec<String> {
+        if self.view == View::List {
+            self.list_order()
+                .into_iter()
+                .filter_map(|e| match e {
+                    ListEntry::Ticket { idx, .. } => Some(self.tickets[idx].id.clone()),
+                    ListEntry::Header(_) => None,
+                })
+                .collect()
+        } else {
+            self.column(self.col).iter().map(|t| t.id.clone()).collect()
+        }
+    }
+
     /// Clamp every column's row to its length, then record the selected id.
     fn settle(&mut self) {
         for c in 0..STATUSES.len() {
@@ -546,6 +561,8 @@ pub enum Event {
     /// A lifecycle action finished: Ok is a success message, Err the library's
     /// refusal text.
     ActionDone(Result<String, String>),
+    /// Another connection committed to the database: reload.
+    DbChanged,
 }
 
 /// Work `update` asks the runner to do; the runner feeds the result back as an Event.
@@ -622,7 +639,21 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             vec![]
         }
         Event::Loaded(Ok(tickets)) => {
+            // If the selected ticket vanished, move to its neighbour in the
+            // order the user was navigating: the next survivor, else the previous.
+            let old_ids = state.nav_ids();
             state.tickets = tickets;
+            if let Some(sel) = state.selected_id.clone()
+                && !state.tickets.iter().any(|t| t.id == sel)
+                && let Some(pos) = old_ids.iter().position(|i| *i == sel)
+            {
+                let alive = |i: &&String| state.tickets.iter().any(|t| t.id == **i);
+                state.selected_id = old_ids[pos + 1..]
+                    .iter()
+                    .find(alive)
+                    .or_else(|| old_ids[..pos].iter().rev().find(alive))
+                    .cloned();
+            }
             state.error = None;
             state.reselect();
             vec![]
@@ -654,6 +685,13 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
         Event::ActionDone(Ok(msg)) => {
             state.notice = Some(msg);
             state.error = None;
+            let mut fx = vec![Effect::Reload(state.load_spec())];
+            if let Some(d) = &state.detail {
+                fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
+            }
+            fx
+        }
+        Event::DbChanged => {
             let mut fx = vec![Effect::Reload(state.load_spec())];
             if let Some(d) = &state.detail {
                 fx.push(Effect::LoadDetail(d.ticket.ticket.id.clone()));
@@ -1406,6 +1444,59 @@ mod tests {
         );
         assert_eq!((s.col, s.rows[1]), (1, 1));
         assert_eq!(s.selected_id.as_deref(), Some("R2"));
+    }
+
+    #[test]
+    fn list_selection_moves_to_neighbour_when_vanished() {
+        let mut s = loaded(vec![code(KeyCode::Tab), press('j'), press('j')]);
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        update(
+            &mut s,
+            Event::Loaded(Ok(vec![ticket("R1", "ready"), ticket("R3", "ready")])),
+        );
+        assert_eq!(s.selected_id.as_deref(), Some("R3"));
+        update(&mut s, Event::Loaded(Ok(vec![ticket("R1", "ready")])));
+        assert_eq!(s.selected_id.as_deref(), Some("R1"));
+    }
+
+    #[test]
+    fn board_selection_moves_to_next_in_column_when_vanished() {
+        let mut s = loaded(vec![press('l'), press('j')]);
+        assert_eq!(s.selected_id.as_deref(), Some("R2"));
+        update(
+            &mut s,
+            Event::Loaded(Ok(vec![ticket("R1", "ready"), ticket("R3", "ready")])),
+        );
+        assert_eq!(s.selected_id.as_deref(), Some("R3"));
+        assert_eq!((s.col, s.rows[1]), (1, 1));
+    }
+
+    #[test]
+    fn db_changed_reloads_and_reloads_open_detail() {
+        let mut s = loaded(vec![]);
+        let fx = update(&mut s, Event::DbChanged);
+        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        let mut s = loaded(vec![Event::DetailLoaded(Ok(Box::new(detail_of("D1"))))]);
+        let fx = update(&mut s, Event::DbChanged);
+        assert_eq!(
+            fx,
+            vec![
+                Effect::Reload(s.load_spec()),
+                Effect::LoadDetail("D1".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn db_changed_leaves_prompt_and_confirm_untouched() {
+        let mut s = loaded(vec![press('l'), press('j'), press('e')]);
+        let before = format!("{:?}{:?}{:?}", s.prompt, s.confirm, s.picker);
+        update(&mut s, Event::DbChanged);
+        update(&mut s, Event::Loaded(Ok(sample())));
+        assert_eq!(
+            format!("{:?}{:?}{:?}", s.prompt, s.confirm, s.picker),
+            before
+        );
     }
 
     fn child(id: &str, status: &str, parent: &str) -> Ticket {

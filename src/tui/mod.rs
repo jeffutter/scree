@@ -9,6 +9,7 @@ mod state;
 mod terminal;
 mod theme;
 mod view;
+mod watch;
 mod widgets;
 
 use std::path::Path;
@@ -34,7 +35,14 @@ pub fn check_tty(env: &Env) -> Result<()> {
     }
 }
 
-pub fn run(conn: &mut Connection, cwd: &Path, identity: &Identity, env: &Env) -> Result<()> {
+pub fn run(
+    conn: &mut Connection,
+    db_path: &Path,
+    cwd: &Path,
+    identity: &Identity,
+    env: &Env,
+) -> Result<()> {
+    let changes = watch::spawn(db_path)?;
     let mut state = State::starting_in(
         crate::scope::detect(cwd),
         format!("{}/{}", identity.role.as_str(), identity.author),
@@ -63,8 +71,16 @@ pub fn run(conn: &mut Connection, cwd: &Path, identity: &Identity, env: &Env) ->
             };
             pending.extend(update(&mut state, ev));
         }
+        let mut changed = false;
+        while changes.try_recv().is_ok() {
+            changed = true;
+        }
+        if changed {
+            pending.extend(update(&mut state, Event::DbChanged));
+            continue;
+        }
         term.draw(|f| view::draw(f, &mut state))?;
-        if event::poll(Duration::from_millis(250))? {
+        if event::poll(Duration::from_millis(100))? {
             let ev = match event::read()? {
                 event::Event::Key(k) => Event::Key(k),
                 event::Event::Resize(_, h) => Event::Resize(h),
