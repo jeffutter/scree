@@ -418,17 +418,27 @@ fn row_line(t: &Ticket, width: usize, theme: &Theme) -> Line<'static> {
 /// Width of a collapsed (empty) board column: 2 border cells + 3 title chars.
 const COLLAPSED_W: u16 = 5;
 
+/// Least inner width a non-collapsed column must keep for strips to be used.
+const MIN_FILL_W: u16 = 20;
+
 fn draw_board(frame: &mut Frame, area: Rect, state: &mut State) {
     let cols = state.visible_columns();
     // Empty columns collapse to a narrow strip (derived from the data at
     // draw time, so a column expands as soon as it gains a ticket). When
     // every column is empty, or the strips would not fit, share the width
     // equally so full titles stay readable.
-    let collapsed: Vec<bool> = cols.iter().map(|&c| state.column(c).is_empty()).collect();
+    // The focused column never collapses, so its full title stays visible.
+    let collapsed: Vec<bool> = cols
+        .iter()
+        .map(|&c| c != state.col && state.column(c).is_empty())
+        .collect();
     let n_collapsed = collapsed.iter().filter(|&&x| x).count();
+    let n_fill = cols.len() - n_collapsed;
+    let strips_w = n_collapsed * usize::from(COLLAPSED_W);
+    let any_populated = cols.iter().any(|&c| !state.column(c).is_empty());
     let use_strips = n_collapsed > 0
-        && n_collapsed < cols.len()
-        && n_collapsed * usize::from(COLLAPSED_W) < usize::from(area.width);
+        && any_populated
+        && usize::from(area.width).saturating_sub(strips_w) >= n_fill * usize::from(MIN_FILL_W);
     let constraints: Vec<Constraint> = collapsed
         .iter()
         .map(|&e| {
@@ -1018,6 +1028,49 @@ mod tests {
         // Move to an empty column (draft/active/abandoned are collapsed).
         press(&mut s, KeyCode::Left);
         insta::assert_snapshot!(render(&mut s, 110, 12).join("\n"));
+    }
+
+    #[test]
+    fn focused_empty_column_shows_full_status_name() {
+        let mut s = sample_state();
+        let t: Vec<_> = s
+            .tickets
+            .iter()
+            .filter(|t| t.status == "ready")
+            .cloned()
+            .collect();
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        s.col = STATUSES.iter().position(|&x| x == "abandoned").unwrap();
+        let full = STATUSES[s.col];
+        assert!(s.column(s.col).is_empty());
+        assert!(
+            render(&mut s, 110, 12)[1].contains(full),
+            "focused empty column must show {full}"
+        );
+    }
+
+    #[test]
+    fn narrow_width_falls_back_to_equal_columns() {
+        let mut s = sample_state();
+        let t: Vec<_> = s
+            .tickets
+            .iter()
+            .filter(|t| t.status == "ready")
+            .cloned()
+            .collect();
+        crate::tui::state::update(&mut s, Event::Loaded(Ok(t)));
+        // Width 30, one populated column: strips would leave it 10 cells.
+        // Equal split gives every column 6, so no 5-wide strips appear: the
+        // first border row has 5 equal 6-cell panes.
+        let top = render(&mut s, 30, 8)[1].clone();
+        let corners = top.chars().filter(|&c| c == '+').count();
+        assert_eq!(corners, 2 * cols_count(&s));
+        // At 110 wide the populated column shows its full title and count.
+        assert!(render(&mut s, 110, 8)[1].contains("ready ("));
+    }
+
+    fn cols_count(s: &State) -> usize {
+        s.visible_columns().len()
     }
 
     #[test]
