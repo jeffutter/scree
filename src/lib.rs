@@ -9,6 +9,7 @@ pub mod scope;
 pub mod skill;
 pub mod sweep;
 pub mod ticket;
+pub mod tui;
 
 use clap::CommandFactory;
 
@@ -28,6 +29,8 @@ pub enum Outcome {
     PrintFail(String),
     /// Print the clap help to stdout, exit 2.
     Help,
+    /// Print nothing, exit 0.
+    Quiet,
 }
 
 /// `-` reads the text from stdin; unset is empty. Stored text is always trimmed.
@@ -92,6 +95,18 @@ fn apply_project_override(scope: &mut cli::ScopeArgs, project: Option<&Path>, cw
 
 /// `cwd` is the caller's directory, injected so tests need not chdir.
 pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
+    if let Some(Command::Tui) = cli.command {
+        // Refuse before the database or terminal is touched. The TUI is a human
+        // surface: Role human unless --role / SCREE_ROLE says otherwise.
+        tui::check_tty(env)?;
+        let identity =
+            identity::resolve(cli.role.or(Some(Role::Human)), cli.author, cli.session, env);
+        let path = db::resolve_path_from_env(cli.db)?;
+        let mut conn = db::open(&path)?;
+        sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
+        tui::run(&conn, cwd, &identity)?;
+        return Ok(Outcome::Quiet);
+    }
     let identity = identity::resolve(cli.role, cli.author, cli.session, env);
     let bare = cli.command.is_none();
     if bare && !(identity.role == Role::Human && env.stdout_tty) {
@@ -258,6 +273,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 &identity,
             )
         }
+        Command::Tui => unreachable!("handled before identity resolves"),
         Command::Skill { .. } => unreachable!("handled before the database opens"),
         Command::Sweep { dry_run } => {
             let r = sweep::sweep_command(&mut conn, cwd, cli.project.as_deref(), dry_run)?;

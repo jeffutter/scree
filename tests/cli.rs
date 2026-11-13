@@ -186,3 +186,14 @@ fn empty_scree_author_resolves_as_unset() {
 fn empty_scree_session_resolves_as_unset() {
     assert_json_list(&with_empty("SCREE_SESSION", &[], &["list"]));
 }
+
+#[test]
+fn tui_without_a_tty_exits_2_and_leaves_terminal_and_db_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("scree.db");
+    let out = scree_args(&db, &["tui"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("scree tui needs a terminal"));
+    assert!(out.stdout.is_empty(), "no escape sequences on stdout");
+    assert!(!db.exists(), "must not open the database");
+}

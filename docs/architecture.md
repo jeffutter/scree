@@ -4,7 +4,7 @@ Code layout, build, tests and release for v1. Vocabulary is in `../GLOSSARY.md`,
 
 ## Crate
 
-One Cargo package, edition 2024, not a workspace: a library (`src/lib.rs`) plus a thin binary (`src/main.rs`). A later TUI, web UI or runner depends on the library. Splitting into crates waits for a second consumer.
+One Cargo package, edition 2024, not a workspace: a library (`src/lib.rs`) plus a thin binary (`src/main.rs`). The TUI, a later web UI or a runner depends on the library. Splitting into crates waits for a second consumer.
 
 `main.rs` only parses arguments, decides the output format, runs the command and maps the error to an exit code. All behaviour is in the library.
 
@@ -23,12 +23,13 @@ Flat under `src/`, one per concept. Commands are plain functions that take a `&m
 | `order` | `position` placement and sibling ordering |
 | `sweep` | closed-Worktree sweep |
 | `output` | JSON or text decision and rendering |
+| `tui` | `scree tui`: terminal lifecycle with panic-safe restore, event loop, pure `update`, effect runner, drawing |
 | `skill` | generated SKILL.md and `--check` |
 | `error` | thiserror type and exit codes |
 
 ## Dependencies
 
-Runtime: `rusqlite` (feature `bundled`), `clap` (`derive`, `env`), `serde` (`derive`), `serde_json`, `thiserror`. Dev: `insta`, `tempfile`. Anything else needs a reason in the change that adds it.
+Runtime: `rusqlite` (feature `bundled`), `clap` (`derive`, `env`), `serde` (`derive`), `serde_json`, `thiserror`, `ratatui` (its re-exported `crossterm` is used for terminal control, so there is no separate crossterm dependency). Dev: `insta`, `tempfile`. Anything else needs a reason in the change that adds it.
 
 ## Tests
 

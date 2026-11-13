@@ -334,6 +334,8 @@ pub enum Command {
         #[arg(long, value_name = "PATH")]
         check: Option<PathBuf>,
     },
+    /// Open the interactive terminal UI
+    Tui,
     /// Hide a ticket (and its subtasks) from list without --archived
     Archive { id: String },
     /// Undo archive; a subtask of an archived parent is refused

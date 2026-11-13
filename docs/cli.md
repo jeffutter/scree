@@ -81,6 +81,10 @@ Every command that changes a ticket prints the updated ticket in the `show` shap
 
 Multi-line text (description, plan, comment body, abandon reason, evidence) is a plain argument, or `-` for stdin. There is no `$EDITOR` mode and no file flag.
 
+### Interactive UI
+
+`tui`: opens a terminal UI on the alternate screen; `q` or Ctrl-C quits. It runs as Role human with author `human` unless `--role`, `--author` or their `SCREE_*` variables say otherwise, and runs the automatic sweep once at startup. Needs stdin and stdout to be terminals; otherwise it exits 2 with a usage error before touching the database or the terminal. Bare `scree` is unchanged.
+
 ### No arguments
 
 `scree` on a terminal with a human Role runs `list` with the default scope and a one-line hint. For an agent, or when not on a terminal, it prints the clap help and exits 2.

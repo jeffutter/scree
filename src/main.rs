@@ -34,6 +34,7 @@ fn main() {
             println!("{out}");
             std::process::exit(1);
         }
+        Ok(Outcome::Quiet) => {}
         Ok(Outcome::Help) => {
             print!("{}", scree::help_text());
             std::process::exit(2);
