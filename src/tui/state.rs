@@ -1068,17 +1068,34 @@ fn reorder_key(state: &mut State, up: bool) -> Vec<Effect> {
         state.error = Some(format!("cannot reorder a ticket that is {status}"));
         return vec![];
     }
+    // The library only accepts an anchor in the same sibling set (Project,
+    // parent, Worktree); columns and the list interleave subtasks and other
+    // Projects, so keep only those tickets.
+    let me = match &state.detail {
+        Some(d) => d.ticket.ticket.clone(),
+        None => match state.tickets.iter().find(|t| t.id == id) {
+            Some(t) => t.clone(),
+            None => return vec![],
+        },
+    };
+    let project = |t: &Ticket| t.id.rsplit_once('-').map(|(p, _)| p.to_string());
+    let sibling = |t: &Ticket| {
+        project(t) == project(&me) && t.parent == me.parent && t.worktree == me.worktree
+    };
     let ids: Vec<&str> = match state.view {
         View::Board => state
             .column(state.col)
             .into_iter()
+            .filter(|t| sibling(t))
             .map(|t| t.id.as_str())
             .collect(),
         View::List => state
             .list_order()
             .into_iter()
             .filter_map(|e| match e {
-                ListEntry::Ticket { idx, .. } if state.tickets[idx].status == status => {
+                ListEntry::Ticket { idx, .. }
+                    if state.tickets[idx].status == status && sibling(&state.tickets[idx]) =>
+                {
                     Some(state.tickets[idx].id.as_str())
                 }
                 _ => None,
@@ -2415,6 +2432,70 @@ mod tests {
             update(&mut s, shift(KeyCode::Down)),
             vec![reorder("R2", "R3", false)]
         );
+    }
+
+    fn mixed() -> State {
+        let mut v = vec![
+            ticket("P-1", "ready"),
+            ticket("P-2", "ready"),
+            ticket("P-3", "ready"),
+            ticket("Q-1", "ready"),
+            ticket("P-4", "ready"),
+        ];
+        v[1].parent = Some("P-1".into());
+        v[2].worktree = Some("/wt".into());
+        let mut s = State::default();
+        update(&mut s, Event::Loaded(Ok(v)));
+        update(&mut s, press('l'));
+        s
+    }
+
+    fn select(s: &mut State, id: &str) {
+        for key in ['k', 'k', 'k', 'k', 'k', 'j', 'j', 'j', 'j', 'j'] {
+            if s.selected_id.as_deref() == Some(id) {
+                return;
+            }
+            update(s, press(key));
+        }
+        if s.selected_id.as_deref() == Some(id) {
+            return;
+        }
+        panic!("cannot select {id}");
+    }
+
+    #[test]
+    fn list_reorder_skips_subtask_of_selected_parent() {
+        let mut s = mixed();
+        update(&mut s, code(KeyCode::Tab));
+        select(&mut s, "P-1");
+        // P-2 is P-1's child, P-3 another worktree, Q-1 another Project.
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Down)),
+            vec![reorder("P-1", "P-4", false)]
+        );
+        select(&mut s, "P-4");
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Up)),
+            vec![reorder("P-4", "P-1", true)]
+        );
+    }
+
+    #[test]
+    fn board_reorder_skips_other_project_parent_and_worktree() {
+        let mut s = mixed();
+        select(&mut s, "P-1");
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Down)),
+            vec![reorder("P-1", "P-4", false)]
+        );
+        select(&mut s, "P-4");
+        assert_eq!(
+            update(&mut s, shift(KeyCode::Up)),
+            vec![reorder("P-4", "P-1", true)]
+        );
+        select(&mut s, "Q-1");
+        assert!(update(&mut s, shift(KeyCode::Up)).is_empty());
+        assert!(update(&mut s, shift(KeyCode::Down)).is_empty());
     }
 
     #[test]
