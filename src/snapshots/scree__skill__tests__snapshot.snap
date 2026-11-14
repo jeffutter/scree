@@ -20,7 +20,7 @@ Claim the first available ticket:
 
     scree start --next
 
-Read the whole ticket before you work: description, plan, criteria and comments.
+Read the whole ticket before you work: description, plan if one was written, criteria and comments.
 
     scree show SCR-12
 
@@ -39,6 +39,8 @@ If you cannot finish, give the ticket back, or abandon it with a reason:
     scree abandon SCR-12 "Superseded by SCR-14"
 
 Exit 5 means your claim was lost: pick another ticket. Exit 4 means scree refused: read the message and do not retry with `--force`. `--force` is for humans, or for an agent only when the human said to use it.
+
+A new ticket needs a title and at least one criterion. Leave `--plan` empty unless the human asked you to plan now; a later planning phase writes it.
 
 Create tickets as `draft`. A human (or an explicit instruction) makes them `ready`, because `next` skips drafts:
 
