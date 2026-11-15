@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
-  `${src.slice(from, to)}; return { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT };`)();
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
+  `${src.slice(from, to)}; return { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT };`)();
 
 assert.deepEqual(STATUS_ORDER, ["active", "ready", "draft", "done", "abandoned"]);
 
@@ -150,6 +150,15 @@ assert.equal(projectFolded({}, { key: "A", onlyDone: false }), false, "no stored
 assert.equal(projectFolded({ A: false }, { key: "A", onlyDone: true }), false, "stored expand beats the all-done default");
 assert.equal(projectFolded({ A: true }, { key: "A", onlyDone: false }), true, "stored fold beats the expanded default");
 assert.equal(projectFolded(undefined, { key: "A", onlyDone: true }), true, "missing store reads as no choice");
+
+// nextBoardFold: the value stored by toggleBoardFold must invert the resolved state, not just the
+// raw stored key. A mutation to `!folded[key]` would produce `true` for a missing key (undefined),
+// keeping the project folded - this test catches that.
+assert.equal(nextBoardFold({}, { key: "A", onlyDone: true }), false, "first click on all-done default expands");
+assert.equal(nextBoardFold({}, { key: "A", onlyDone: false }), true, "first click on mixed default folds");
+assert.equal(nextBoardFold({ A: true }, { key: "A", onlyDone: true }), false, "click on explicitly-folded expands");
+assert.equal(nextBoardFold({ A: false }, { key: "A", onlyDone: false }), true, "click on explicitly-expanded folds");
+assert.equal(nextBoardFold(undefined, { key: "A", onlyDone: true }), false, "missing store treated as empty");
 
 // Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
 // inside the try), so an open detail updates on poll.

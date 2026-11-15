@@ -196,6 +196,12 @@ function projectFolded(folded, project) {
   const v = folded?.[project.key];
   return v === undefined ? Boolean(project.onlyDone) : Boolean(v);
 }
+
+// The value stored by toggleBoardFold: the opposite of the resolved fold state, so the first click
+// on a project folded by its all-done default expands it rather than re-recording "folded".
+function nextBoardFold(folded, project) {
+  return !projectFolded(folded, project);
+}
 // --- pure end ---
 
 // Scree mod: one mod, two modes via props.view ("panel" | "board"). Data comes only from
@@ -362,7 +368,7 @@ export default class Scree extends View {
   // Toggling stores the resolved state's opposite, so the first click on a project folded by its
   // all-done default expands it instead of re-recording "folded".
   toggleBoardFold(p, cx) {
-    this.boardFolded = { ...this.boardFolded, [p.key]: !projectFolded(this.boardFolded, p) };
+    this.boardFolded = { ...this.boardFolded, [p.key]: nextBoardFold(this.boardFolded, p) };
     store.set("boardFolded", this.boardFolded);
     cx.notify();
   }
