@@ -57,17 +57,17 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 
 ### Change
 
-- `edit ID [--title T] [--description TEXT|-] [--plan TEXT|-] [--append] [--for agent|human]`. At least one field is required. Description and plan are replaced; passing an empty string for either clears the field. With `--append` (valid only with `--description` or `--plan`, and requires non-empty text) the new text is separated from the existing text by a blank line, and stands alone when the old text is empty or whitespace-only. Changing `for` follows the identity rules: a human either way, an agent only to `human`. Reassigning an `active` ticket releases the claim to `ready`.
+- `edit ID [--title T] [--description TEXT|-] [--plan TEXT|-] [--append] [--for agent|human]`. At least one field is required. Description and plan are replaced; passing an empty string for either clears the field. Reading `-` from stdin with nothing on the pipe is a usage error (exit 2). With `--append` (valid only with `--description` or `--plan`, and requires non-empty text) the new text is separated from the existing text by a blank line, and stands alone when the old text is empty or whitespace-only. Changing `for` follows the identity rules: a human either way, an agent only to `human`. Reassigning an `active` ticket releases the claim to `ready`.
 - `ready ID`: draft to ready.
 - `start ID | --next [--for ...]`: atomic claim; moves to `active` and records author and session. `--next` picks and claims in one transaction. Checks in order: exit 5 if already active; exit 4 for a ticket that is not `ready`, one with an open blocker, or an agent starting a `human` ticket.
 - `done ID [--force]`: allowed from draft, ready or active; refused while a criterion is unchecked unless `--force`, and while subtasks are open.
-- `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. Abandoning a parent abandons its open subtasks.
+- `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. An empty stdin read is a usage error (exit 2). Abandoning a parent abandons its open subtasks.
 - `reopen ID`: done or abandoned back to `ready`.
 - `release ID`: active back to `ready`; clears the claim.
 - `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A self edge, a cycle (counting a parent waiting on its subtasks and a subtask waiting on its earlier siblings) or a cross-Project edge is refused (exit 4); Worktrees of one Project may be mixed. Adding an existing edge, or removing a missing one, is a no-op.
 - `criteria add ID TEXT` / `criteria rm ID#N`.
-- `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence; checking again overwrites them, and `uncheck` clears them. Criteria and comments may be changed on done or abandoned tickets too.
-- `comment add ID BODY|-` / `comment rm ID COMMENT_ID`. Any caller may delete any comment, including the ones Scree writes.
+- `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence; checking again overwrites them, and `uncheck` clears them. An empty stdin read is a usage error (exit 2). Criteria and comments may be changed on done or abandoned tickets too.
+- `comment add ID BODY|-` / `comment rm ID COMMENT_ID`. An empty stdin read is a usage error (exit 2). Any caller may delete any comment, including the ones Scree writes.
 - `move ID (--worktree PATH | --root)`: moves the whole tree within its Project and places it last. Cross-Project moves are refused.
 - `reorder ID (--before ID | --after ID | --first | --last)`: relative only. Done and abandoned tickets are refused.
 - `archive ID` / `unarchive ID`: for tickets the automatic sweep never touches. Allowed in any status. Archiving a parent archives its subtasks and unarchiving it restores them; a subtask of an archived parent cannot be unarchived alone (exit 4). Repeating the call is a no-op.
@@ -79,7 +79,7 @@ Every command that changes a ticket prints the updated ticket in the `show` shap
 
 ### Text arguments
 
-Multi-line text (description, plan, comment body, abandon reason, evidence) is a plain argument, or `-` for stdin. There is no `$EDITOR` mode and no file flag.
+Multi-line text (description, plan, comment body, abandon reason, evidence) is a plain argument, or `-` for stdin. An empty stdin read is a usage error (exit 2); pass an empty literal (`""`) where clearing is intended. There is no `$EDITOR` mode and no file flag.
 
 ### Interactive UI
 

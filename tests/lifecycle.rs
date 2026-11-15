@@ -47,6 +47,11 @@ impl Env {
 
     /// Run with `input` on stdin; returns the exit code.
     fn stdin_code(&self, args: &[&str], input: &str) -> i32 {
+        self.stdin_result(args, input).0
+    }
+
+    /// Run with `input` on stdin; returns (exit code, stderr string).
+    fn stdin_result(&self, args: &[&str], input: &str) -> (i32, String) {
         let mut child = self
             .cmd(args)
             .stdin(Stdio::piped())
@@ -60,7 +65,11 @@ impl Env {
             .unwrap()
             .write_all(input.as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap().status.code().unwrap()
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code().unwrap(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
     }
 
     fn ok(&self, args: &[&str]) -> Value {
@@ -306,4 +315,67 @@ fn concurrent_start_has_one_winner() {
     assert_eq!(codes.iter().filter(|c| **c == 0).count(), 1, "{codes:?}");
     assert_eq!(codes.iter().filter(|c| **c == 5).count(), 7, "{codes:?}");
     assert_eq!(e.ok(&["show", &id])["status"], "active");
+}
+
+#[test]
+fn empty_stdin_is_refused() {
+    // Regression (SCR-28): every `-` flag must exit 2 on an empty stdin read,
+    // naming the flag in the error message, and leaving stored data unchanged.
+    let e = env();
+    let id = e.ready(&[
+        "--description",
+        "keep",
+        "--plan",
+        "pkeep",
+        "--criterion",
+        "works",
+    ]);
+
+    // Snapshot before: used to verify byte-identity after each failed command.
+    let before = e.ok(&["show", &id]);
+
+    // edit --description -
+    let (code, err) = e.stdin_result(&["edit", &id, "--description", "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--description"), "should name flag: {err}");
+    assert!(err.contains("read nothing from stdin"), "{err}");
+
+    // edit --plan -
+    let (code, err) = e.stdin_result(&["edit", &id, "--plan", "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--plan"), "should name flag: {err}");
+
+    // comment add ID -
+    let (code, err) = e.stdin_result(&["comment", "add", &id, "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("comment body"), "should name arg: {err}");
+
+    // abandon ID -
+    let (code, err) = e.stdin_result(&["abandon", &id, "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("abandon reason"), "should name arg: {err}");
+
+    // check REF --evidence -
+    let (code, err) = e.stdin_result(&["check", &format!("{id}#1"), "--evidence", "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--evidence"), "should name flag: {err}");
+
+    // After all five failures the ticket is byte-identical with updated_at unchanged.
+    let after = e.ok(&["show", &id]);
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(after["plan"], before["plan"]);
+    assert_eq!(after["updated_at"], before["updated_at"]);
+    assert_eq!(after["status"], before["status"]);
+    assert_eq!(after["criteria"][0]["checked"], false);
+
+    // add T --description - with empty stdin also exits 2 (no ticket created).
+    let count_before = e.ok(&["list"])["tickets"].as_array().unwrap().len();
+    let (code, err) = e.stdin_result(
+        &["--role", "human", "add", "new-ticket", "--description", "-"],
+        "",
+    );
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("--description"), "should name flag: {err}");
+    let count_after = e.ok(&["list"])["tickets"].as_array().unwrap().len();
+    assert_eq!(count_after, count_before, "no ticket should be created");
 }

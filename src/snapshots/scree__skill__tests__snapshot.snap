@@ -1,5 +1,6 @@
 ---
 source: src/skill.rs
+assertion_line: 321
 expression: text
 ---
 ---
@@ -95,8 +96,8 @@ Create a ticket
 
 - `<TITLE>`: Ticket title (required)
 - `--parent <PARENT>`: Make this a subtask of the given top-level ticket
-- `--description <DESCRIPTION>`: Description text, or `-` for stdin
-- `--plan <PLAN>`: Plan text, or `-` for stdin
+- `--description <DESCRIPTION>`: Description text, or `-` for stdin (an empty read is an error)
+- `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
 - `--criterion <CRITERIA>`: An acceptance criterion; repeatable
 - `--for <FOR_WHO>` (values: agent, human; default agent)
 - `--status <STATUS>` (values: draft, ready; default draft)
@@ -132,8 +133,8 @@ Change a ticket's title, description, plan or assignee
 
 - `<ID>` (required)
 - `--title <TITLE>`: New title
-- `--description <DESCRIPTION>`: Description text, or `-` for stdin
-- `--plan <PLAN>`: Plan text, or `-` for stdin
+- `--description <DESCRIPTION>`: Description text, or `-` for stdin (an empty read is an error)
+- `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
 - `--append`: Add to the end of --description / --plan instead of replacing it
 - `--for <FOR_WHO>`: Reassign; an agent may only reassign to human. Releases an active claim (values: agent, human)
 
@@ -194,7 +195,7 @@ Mark done; refused while a criterion is unchecked unless --force
 
 ### `scree abandon [OPTIONS] <ID> <REASON>`
 
-Abandon with a reason (text, or `-` for stdin), stored as a comment
+Abandon with a reason (text, or `-` for stdin; an empty read is an error), stored as a comment
 
 - `<ID>` (required)
 - `<REASON>` (required)
@@ -227,7 +228,7 @@ Remove a criterion by reference, e.g. SCR-12#2
 Mark a criterion checked, e.g. SCR-12#2, with optional evidence
 
 - `<TARGET>` (required)
-- `--evidence <EVIDENCE>`: Evidence text, or `-` for stdin
+- `--evidence <EVIDENCE>`: Evidence text, or `-` for stdin (an empty read is an error)
 
 ### `scree uncheck [OPTIONS] <TARGET>`
 
@@ -259,7 +260,7 @@ Add or delete comments
 
 ### `scree comment add [OPTIONS] <ID> <BODY>`
 
-Add a comment (text, or `-` for stdin)
+Add a comment (text, or `-` for stdin; an empty read is an error)
 
 - `<ID>` (required)
 - `<BODY>` (required)

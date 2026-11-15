@@ -189,8 +189,8 @@ function addArgs(form = {}, scope = {}) {
 }
 
 // A flag carrying free text, or nothing when the value is absent. A lone "-" tells scree to read
-// stdin (src/lib.rs text_arg) and exec gives it none, so a dash becomes a space, which the CLI
-// trims to empty.
+// stdin (src/lib.rs text_arg); an empty read exits 2 with a usage error. The mod must never block
+// on stdin, so a dash becomes a space (which text_arg trims to empty for the non-stdin path).
 function textFlag(name, v) {
   if (v === undefined || v === null || v === "") return [];
   const s = String(v);

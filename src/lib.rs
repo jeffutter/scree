@@ -33,14 +33,20 @@ pub enum Outcome {
     Quiet,
 }
 
-/// `-` reads the text from stdin; unset is empty. Stored text is always trimmed.
-fn text_arg(v: Option<&str>) -> Result<String> {
+/// `-` reads the text from stdin; an empty read is a usage error. Unset is empty.
+/// A literal argument is trimmed; empty is allowed (it means "clear" for `edit`).
+/// Stored text is always trimmed.
+fn text_arg(flag: &str, v: Option<&str>) -> Result<String> {
     match v {
         None => Ok(String::new()),
         Some("-") => {
             let mut s = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
-            Ok(s.trim().to_string())
+            let s = s.trim().to_string();
+            if s.is_empty() {
+                return Err(Error::Usage(format!("{flag} read nothing from stdin")));
+            }
+            Ok(s)
         }
         Some(s) => Ok(s.trim().to_string()),
     }
@@ -203,8 +209,8 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
-            let description = text_arg(a.description.as_deref())?;
-            let plan = text_arg(a.plan.as_deref())?;
+            let description = text_arg("--description", a.description.as_deref())?;
+            let plan = text_arg("--plan", a.plan.as_deref())?;
             let t = ticket::add(
                 &mut conn,
                 &scope,
@@ -227,9 +233,13 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             let description = a
                 .description
                 .as_deref()
-                .map(|d| text_arg(Some(d)))
+                .map(|d| text_arg("--description", Some(d)))
                 .transpose()?;
-            let plan = a.plan.as_deref().map(|d| text_arg(Some(d))).transpose()?;
+            let plan = a
+                .plan
+                .as_deref()
+                .map(|d| text_arg("--plan", Some(d)))
+                .transpose()?;
             let t = ticket::edit(
                 &mut conn,
                 &a.id,
@@ -317,7 +327,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Abandon { id, reason } => {
-            let reason = text_arg(Some(&reason))?;
+            let reason = text_arg("abandon reason", Some(&reason))?;
             transition(
                 &mut conn,
                 format,
@@ -346,10 +356,10 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Check { target, evidence } => {
-            let evidence = evidence.as_deref().map(|e| text_arg(Some(e))).transpose()?;
-            if evidence.as_deref() == Some("") {
-                return Err(Error::Usage("evidence must not be empty".into()));
-            }
+            let evidence = evidence
+                .as_deref()
+                .map(|e| text_arg("--evidence", Some(e)))
+                .transpose()?;
             let t = ticket::check(&mut conn, &target, evidence.as_deref(), &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
@@ -358,7 +368,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Comment(CommentCommand::Add { id, body }) => {
-            let body = text_arg(Some(&body))?;
+            let body = text_arg("comment body", Some(&body))?;
             let t = ticket::comment_add(&mut conn, &id, &body, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }

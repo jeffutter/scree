@@ -705,6 +705,9 @@ pub fn check(
     evidence: Option<&str>,
     who: &Identity,
 ) -> Result<TicketDetail> {
+    if evidence.is_some_and(|e| e.trim().is_empty()) {
+        return Err(Error::Usage("evidence must not be empty".into()));
+    }
     on_criterion(conn, target, |tx, row, n| {
         Ok(tx.execute(
             &format!(
@@ -779,8 +782,8 @@ pub struct EditFields<'a> {
 
 /// `old` followed by `new`, separated by a blank line.
 /// Trims both sides so whitespace already in the stored row cannot produce a stray blank line.
-/// Callers in `edit()` refuse an empty addition before reaching here; the `new.is_empty()`
-/// branch only normalises whitespace already present in `old`.
+/// Callers guard against an empty `new` before reaching here (`text_arg` for stdin,
+/// `edit()` for `--append`); the `new.is_empty()` branch normalises whitespace-only input.
 fn appended(old: &str, new: &str) -> String {
     let old = old.trim();
     let new = new.trim();

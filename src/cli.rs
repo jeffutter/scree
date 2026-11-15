@@ -145,10 +145,10 @@ pub struct AddArgs {
     /// Make this a subtask of the given top-level ticket
     #[arg(long)]
     pub parent: Option<String>,
-    /// Description text, or `-` for stdin
+    /// Description text, or `-` for stdin (an empty read is an error)
     #[arg(long)]
     pub description: Option<String>,
-    /// Plan text, or `-` for stdin
+    /// Plan text, or `-` for stdin (an empty read is an error)
     #[arg(long)]
     pub plan: Option<String>,
     /// An acceptance criterion; repeatable
@@ -277,10 +277,10 @@ pub struct EditArgs {
     /// New title
     #[arg(long)]
     pub title: Option<String>,
-    /// Description text, or `-` for stdin
+    /// Description text, or `-` for stdin (an empty read is an error)
     #[arg(long)]
     pub description: Option<String>,
-    /// Plan text, or `-` for stdin
+    /// Plan text, or `-` for stdin (an empty read is an error)
     #[arg(long)]
     pub plan: Option<String>,
     /// Add to the end of --description / --plan instead of replacing it
@@ -315,7 +315,7 @@ pub enum DepCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CommentCommand {
-    /// Add a comment (text, or `-` for stdin)
+    /// Add a comment (text, or `-` for stdin; an empty read is an error)
     Add { id: String, body: String },
     /// Delete any comment by its id, including ones scree wrote
     Rm { id: String, comment_id: i64 },
@@ -349,7 +349,7 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Abandon with a reason (text, or `-` for stdin), stored as a comment
+    /// Abandon with a reason (text, or `-` for stdin; an empty read is an error), stored as a comment
     Abandon { id: String, reason: String },
     /// Done or abandoned back to ready
     Reopen { id: String },
@@ -359,7 +359,7 @@ pub enum Command {
     /// Mark a criterion checked, e.g. SCR-12#2, with optional evidence
     Check {
         target: String,
-        /// Evidence text, or `-` for stdin
+        /// Evidence text, or `-` for stdin (an empty read is an error)
         #[arg(long)]
         evidence: Option<String>,
     },
