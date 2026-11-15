@@ -1,6 +1,6 @@
 # Scree
 
-A Herdr mod that shows scree tickets: a side panel for the focused space's project and a full-window board of every project. It reads tickets and changes their status.
+A Herdr mod that shows scree tickets: a side panel for the focused space's project and a full-window board of every project. It reads tickets, changes their status, edits a ticket's title, description, plan and assignee, and files new tickets.
 
 ![Scree](preview.png)
 
@@ -8,13 +8,13 @@ A Herdr mod that shows scree tickets: a side panel for the focused space's proje
 
 Panel: a rounded 10px card, `theme().background`, 1px `border`, 13px text, in the layout's right column beside Files, Changes and Cairn.
 
-- **Header:** scree icon, "Scree", the counts line ("N active, N ready, N draft"), a scope button ("This worktree" or "All worktrees") and a "tui" button.
+- **Header:** scree icon, "Scree", the counts line ("N active, N ready, N draft"), a scope button ("This worktree" or "All worktrees"), a "New" button and a "tui" button.
 - **Filter bar:** chips All, Agent, Human, Blocked only.
 - **Body:** sections Active, Ready, Draft, Done (Done shows the 5 newest), each with a fold arrow and "Label (count)". Rows: status mark (14px svg), monospace id (11px, dim), title (truncated); second line: 48x4 criteria bar plus "checked/total", then chips in the order blocked, human, "N subtasks", claimer (session or author, cut to 8 chars when longer than 12).
 - **Legend:** a bottom strip marking Active, Ready, Draft, Done, Blocked.
-- **Detail** (replaces the panel on a row click): header with "Back", id, title and "Open in scree tui"; chips for status, "for human|agent", blocked, claimed; sections Description, Plan (monospace), Criteria with evidence, Comments, Blocked by, Subtasks (the last two are clickable).
+- **Detail** (replaces the panel on a row click): header with "Back", id, title, "Edit" and "Open in scree tui"; chips for status, "for human|agent", blocked, claimed; sections Description, Plan (monospace), Criteria with evidence, Comments, Blocked by, Subtasks (the last two are clickable).
 
-Board: header "Scree board", a machine chip ("this computer" or the machine name) and counts; the filter bar; a column header row (Draft, Ready, Active, Done with counts, 220px columns); per project a clickable header (key, root path, count) with one lane per worktree (root checkout first, label is the folder name). Cards show mark, id, title and the same second line. Done shows only the last 7 days.
+Board: header "Scree board", a machine chip ("this computer" or the machine name) and counts; the filter bar; a column header row (Draft, Ready, Active, Done with counts, 220px columns); per project a clickable header (key, root path, count, and a "New ticket" button when the project has a root) with one lane per worktree (root checkout first, label is the folder name). Cards show mark, id, title and the same second line. Done shows only the last 7 days.
 
 ## How it behaves
 
@@ -22,6 +22,9 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 - Polls every 3 s in the active space's folder (focused pane `cwd`, else the space folder) on that space's machine. Changing space or scope parks that context's data and restores it. An open detail reloads on each poll.
 - Clicks: row or card opens the detail; section header folds, project header toggles its fold (a stored choice beats the all-done default below); scope button toggles; chips filter; "+N more" expands a cell past 5 cards ("Show less" collapses); "tui" runs `terminal.open` with argv `[scree, "tui"]`, `place: "right"`.
 - Status marks are buttons: clicking one (panel row, board card, or the detail's status chip) opens a `Popup` listing the statuses reachable from where that ticket stands - draft offers ready/done/abandoned, ready active/draft/done/abandoned, active ready/done/abandoned, done and abandoned offer ready. Choosing one runs the command, closes the menu and refetches, so the card moves before the next poll. Escape or a click outside closes it; an unknown status shows "Nothing reachable".
+- Edit (detail header) swaps Description and Plan for a form with Title, Description, Plan and For; Save runs `scree edit` with only the changed flags in the ticket's Project root. Cancel, Back and Escape discard; a failed save keeps every typed character and shows scree's message in a red line.
+- New (panel header) and New ticket (board Project header) open a create form in place of the body: Title (required), Description, Plan, Acceptance Criteria (one `--criterion` per non-empty line), For (agent|human, default agent) and Status (draft|ready, default draft; the only two `add` accepts). The form names its target ("into SCR @ /path"). `scree add` runs with cwd set to the panel's folder or the Project root, because scree takes the Scope from cwd and ignores `--project` inside a repo; no button is offered when no folder is known (a LOCAL project). An empty Title shows "title must not be empty" and runs nothing; a refusal keeps the typed text. Success refreshes and opens the new ticket's detail.
+- Every write the mod makes: `ready`, `start`, `release`, `draft`, `done`, `abandon`, `reopen`, `edit`, `add`, all as `scree --json --role human ...`.
 - Fold, scope and filter state survive restarts through `localStorage` (keys `allWorktrees`, `folded`, `boardFolded`, `boardExpanded`, `filterFor`, `blockedOnly`). `boardFolded` holds explicit user choices only: a key present as a boolean wins over the data, a missing key means a project whose visible tickets are all done (`onlyDone` in `boardModel`) starts folded.
 - Errors: "scree not found on <machine>" when no binary answers, "Not in a scree project", otherwise scree's message. A failed write puts scree's own message in a strip under the header (`theme().blocked`) until the next write succeeds or you change view, so a refusal survives the poll. Empty: "No tickets" or "No tickets match the filters".
 - No keys. Agent statuses do not apply.
@@ -54,5 +57,6 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 - The Board button shows every project with its columns; the project header folds, and a project whose visible tickets are all done starts folded until clicked. `scree.test.mjs` exercises `toggleBoardFold` directly and pins that `renderBoard` reads through `projectFolded`, so a mutation in either call site fails CI.
 - A row click shows the detail with criteria evidence; Back returns.
 - Clicking a status mark offers the statuses reachable from that ticket's current one, and choosing one moves the card without waiting for the poll. `scree.test.mjs` pins the exact argv per transition and refuses any argv a builder did not produce.
+- Edit saves a changed title, description, plan or For; New ticket on a board Project header creates a ticket in that project (`scree --json show <id>` reports the typed text and project key) that appears in its lane on the next draw. `scree.test.mjs` pins the `addArgs` argv.
 - "tui" opens a pane running `scree tui`.
 - Stopping `scree` from `PATH` shows "scree not found".

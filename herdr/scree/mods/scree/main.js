@@ -192,12 +192,23 @@ function editArgs(ticket, fields = {}) {
   return argv.length === WRITE_FLAGS.length + 2 ? null : build(argv);
 }
 
-// File a new Ticket. `form.status` is draft or ready, the only two `add` accepts (src/cli.rs
-// NewStatus); `scope.parent` files it as a subtask. Built now for SCR-17.3's create screen.
+// One criterion per non-empty line of the Acceptance Criteria box. `--criterion` is not read from
+// stdin (src/lib.rs text_arg only handles description and plan), so a "-" line is stored as typed.
+function criteriaLines(text) {
+  return String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
+// The only Statuses `add` accepts (src/cli.rs NewStatus); `--status active` is a clap error.
+const CREATE_STATUSES = ["draft", "ready"];
+
+// File a new Ticket. `form.criteria` is the box's text or an array of lines. The Scope is never in
+// the argv: scope::for_write ignores --project inside any repo, so the caller picks the exec cwd.
+// `scope.parent` files it as a subtask (no UI uses it).
 function addArgs(form = {}, scope = {}) {
   const argv = [...WRITE_FLAGS, "add", String(form.title ?? "")];
   argv.push(...textFlag("--description", form.description), ...textFlag("--plan", form.plan));
-  for (const c of form.criteria ?? []) argv.push("--criterion", String(c));
+  const lines = Array.isArray(form.criteria) ? form.criteria.map(String) : criteriaLines(form.criteria);
+  for (const c of lines) argv.push("--criterion", c);
   if (form.for !== undefined) argv.push("--for", String(form.for));
   if (form.status !== undefined) argv.push("--status", String(form.status));
   if (scope.parent !== undefined && scope.parent !== null) argv.push("--parent", String(scope.parent));
@@ -406,6 +417,16 @@ export default class Scree extends View {
     this.planState = TextareaState.new({ placeholder: "Plan" });
     this.descState.set_auto_grow(4, 12); this.planState.set_auto_grow(4, 12);
     for (const st of [this.titleState, this.descState, this.planState]) st.on("change", (_e, cx) => this.saveDraft(cx));
+    // Create form: same pattern. this.create is {cwd, on, label, from, for, status, error, saving};
+    // createDrafts maps draftKey(cwd) to the typed fields so Back-and-return or a failed save keeps text.
+    this.createHandle = cx.focus_handle();
+    this.create = null; this.createDrafts = new Map();
+    this.createTitle = InputState.new({ placeholder: "Title" });
+    this.createDesc = TextareaState.new({ placeholder: "Description" });
+    this.createPlan = TextareaState.new({ placeholder: "Plan" });
+    this.createCrit = TextareaState.new({ placeholder: "One criterion per line" });
+    for (const st of [this.createDesc, this.createPlan, this.createCrit]) st.set_auto_grow(3, 10);
+    for (const st of [this.createTitle, this.createDesc, this.createPlan, this.createCrit]) st.on("change", (_e, cx) => this.saveCreateDraft(cx));
     this.refresh(cx);
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
   }
@@ -446,6 +467,7 @@ export default class Scree extends View {
       const s = this.parked.get(context) ?? { open: [], done: [], board: [], error: null, loaded: false };
       this.context = context; this.open = s.open; this.done = s.done; this.board = s.board; this.error = s.error; this.loaded = s.loaded;
       this.bin = null;
+      this.leaveCreate();
       this.detail = null;
       this.menu = null;
       this.notice = null;
@@ -492,6 +514,7 @@ export default class Scree extends View {
   // Opens the read-only detail for a ticket; the board calls this on card click too.
   openDetail(id, cx) {
     this.leaveEdit();
+    this.leaveCreate(true);
     this.selected = id;
     this.detail = { id, data: null, error: null, loading: true };
     this.menu = null;
@@ -561,6 +584,106 @@ export default class Scree extends View {
       if (this.detail?.id === id) await this.fetchDetail(id, loc, context, cx);
       cx.notify();
     });
+  }
+
+  createFields() {
+    return {
+      title: this.createTitle.value(), description: this.createDesc.value(), plan: this.createPlan.value(),
+      criteria: this.createCrit.value(), for: this.create?.for, status: this.create?.status,
+    };
+  }
+  createKey(cwd) { return JSON.stringify([this.context, cwd]); }
+  // this.create is set before any set_value, so the change event set_value fires files under the right key.
+  saveCreateDraft(cx) {
+    if (!this.create) return;
+    this.createDrafts.set(this.createKey(this.create.cwd), this.createFields());
+    cx.notify();
+  }
+
+  // Opens the create form for a folder. No folder, no form: creating into an unrelated repo or into
+  // LOCAL by accident is worse than not offering the button.
+  startCreate(target, from, cx) {
+    if (!target?.cwd) return;
+    this.leaveEdit();
+    this.detail = null; this.menu = null; this.notice = null;
+    const draft = this.createDrafts.get(this.createKey(target.cwd));
+    this.create = { cwd: target.cwd, on: location().on, label: target.label, from, for: draft?.for ?? "agent", status: draft?.status ?? "draft", error: null, saving: false };
+    this.createTitle.set_value(draft?.title ?? ""); this.createDesc.set_value(draft?.description ?? "");
+    this.createPlan.set_value(draft?.plan ?? ""); this.createCrit.set_value(draft?.criteria ?? "");
+    this.createTitle.focus();
+    cx.notify();
+  }
+
+  // Leaves the form and empties the widgets; `discard` (cancel, success) also drops the draft.
+  leaveCreate(discard = false) {
+    if (!this.create) return;
+    const key = this.createKey(this.create.cwd);
+    this.create = null;
+    if (discard) this.createDrafts.delete(key);
+    for (const st of [this.createTitle, this.createDesc, this.createPlan, this.createCrit]) st.set_value("");
+  }
+  // Back and Cancel both discard; a failed save is the only path that keeps text.
+  cancelCreate(cx) { this.leaveCreate(true); cx.notify(); }
+
+  saveCreate(cx) {
+    const c = this.create;
+    if (!c || c.saving) return;
+    const fields = this.createFields();
+    const errors = editErrors(fields);
+    if (errors.length) { c.error = errors.map((x) => x.message).join("; "); cx.notify(); return; }
+    c.saving = true; c.error = null; cx.notify();
+    cx.spawn(async (cx) => {
+      let id;
+      try { id = JSON.parse(await this.scree(addArgs(fields), { cwd: c.cwd, on: c.on })).id; }
+      catch (err) { c.saving = false; c.error = String(err.message ?? err); cx.notify(); return; }
+      if (this.create === c) this.leaveCreate(true);
+      this.refresh(cx);
+      this.openDetail(id, cx);
+    });
+  }
+
+  createForm(t) {
+    const c = this.create;
+    const label = (x) => div().text_size(11).text_color(t.dim).child(x);
+    const button = (id, text, on, primary) => div().id(id).flex_none().px(10).py(3).rounded(6).text_size(12).border_1()
+      .border_color(primary ? t.accent : t.border).text_color(primary ? t.foreground : t.muted).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); on(cx); }).child(text);
+    const chips = (key, values) => h_flex().gap(6).children(values.map((v) => div().id(`scree-create-${key}-${v}`).flex_none().px(8).py(2).rounded(4).text_size(11).border_1()
+      .border_color(c[key] === v ? t.accent : t.border).text_color(c[key] === v ? t.foreground : t.muted).cursor_pointer()
+      .on_click((_e, cx) => { cx.stop_propagation(); c[key] = v; this.saveCreateDraft(cx); }).child(v)));
+    const box = (state) => Textarea.new(state).px(8).py(4).rounded(6).border_1().border_color(t.border).text_size(12);
+    return v_flex().id("scree-create-form").px(12).py(6).gap(8)
+      .child(div().id("scree-create-target").text_size(11).text_color(t.muted).child(`into ${c.label} @ ${c.cwd}`))
+      .child(label("Title")).child(Input.new(this.createTitle).px(8).h(30).rounded(6).border_1().border_color(t.border).text_size(12))
+      .child(label("Description")).child(box(this.createDesc))
+      .child(label("Plan")).child(box(this.createPlan).font_family("monospace").text_size(11))
+      .child(label("Acceptance Criteria (one per line)")).child(box(this.createCrit))
+      .child(label("For")).child(chips("for", ["agent", "human"]))
+      .child(label("Status")).child(chips("status", CREATE_STATUSES))
+      .when(Boolean(c.error), (el) => el.child(div().id("scree-create-error").text_size(11).text_color(t.blocked).child(c.error)))
+      .child(h_flex().gap(8)
+        .child(button("scree-create-save", c.saving ? "Saving..." : "Save", (cx) => this.saveCreate(cx), true))
+        .child(button("scree-create-cancel", "Cancel", (cx) => this.cancelCreate(cx), false)));
+  }
+
+  renderCreate(t) {
+    const back = div().id("scree-create-back").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
+      .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.cancelCreate(cx)).child("\u2190 Back");
+    const header = h_flex().flex_none().px(10).py(8).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(back).child(div().flex_1().min_w(0).truncate().font_weight(600).child("New ticket"));
+    return v_flex().id("scree-create").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .track_focus(this.createHandle)
+      .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); this.cancelCreate(cx); } })
+      .child(header)
+      .child(v_flex().id("scree-body-create").flex_1().min_h(0).overflow_y_scroll().child(this.createForm(t)));
+  }
+
+  // The "New ticket" button. stop_propagation keeps the project header's fold toggle and the view's
+  // dismiss handler from firing underneath it.
+  newButton(t, id, text, target, from) {
+    return div().id(id).flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
+      .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.startCreate(target, from, cx); }).child(text);
   }
 
   // Where a write runs: the Project root the Ticket belongs to, because scope::for_write ignores
@@ -645,6 +768,12 @@ export default class Scree extends View {
   canOpenTui() { return !location().on && Boolean(this.tuiFolder()); }
   openTui() {
     run("terminal.open", { argv: tuiArgv(this.bin), folder: this.tuiFolder(), place: "right" });
+  }
+
+  // The Project key for the panel's create target: the key its tickets carry, else the folder name.
+  panelLabel() {
+    const k = [...this.open, ...this.done].find((x) => x.project?.key);
+    return k?.project?.key ?? (location().cwd ?? "").split("/").filter(Boolean).pop() ?? "";
   }
 
   stateLine() {
@@ -749,7 +878,8 @@ export default class Scree extends View {
         .on_click((_e, cx) => this.toggleBoardFold(p, cx))
         .child(div().w(10).flex_none().child(folded ? "\u25b8" : "\u25be"))
         .child(div().font_weight(600).child(p.key))
-        .child(div().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${p.root ?? "local"} (${p.count})`));
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${p.root ?? "local"} (${p.count})`))
+        .when(Boolean(p.root), (el) => el.child(this.newButton(t, `scree-new-${p.key}`, "New ticket", { cwd: p.root, label: p.key }, "board")));
       const rows = folded ? [] : p.lanes.map((l) =>
         h_flex().gap(8).px(10).py(6).items_start().border_b(1).border_color(t.border)
           .child(div().w(90).flex_none().truncate().text_size(11).text_color(t.dim).child(l.label))
@@ -898,6 +1028,7 @@ export default class Scree extends View {
   render(cx) {
     if (this.key() !== this.context) this.refresh(cx);
     const t = theme();
+    if (this.create) return this.renderCreate(t);
     if (this.detail) return this.renderDetail(t);
     const filtered = applyFilters(this.open, this.filters()), filteredDone = applyFilters(this.done, this.filters());
     let state = this.stateLine();
@@ -921,6 +1052,7 @@ export default class Scree extends View {
       .when(!fatal, (el) => el.child(div().id("scree-scope").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.toggleScope(cx))
         .child(this.allWorktrees ? "All worktrees" : "This worktree")))
+      .when(!fatal && Boolean(location().cwd), (el) => el.child(this.newButton(t, "scree-new", "New", { cwd: location().cwd, label: this.panelLabel() }, "panel")))
       .when(!fatal && this.canOpenTui(), (el) => el.child(div().id("scree-open-tui").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, _cx) => this.openTui()).child("tui")));
     const body = state

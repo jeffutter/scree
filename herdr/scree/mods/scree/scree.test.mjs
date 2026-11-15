@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -174,6 +174,15 @@ assert.deepEqual(editErrors({ title: "  ", description: "x" }), [{ field: "title
 assert.deepEqual(editErrors({ title: "ok" }), []);
 assert.deepEqual(editErrors({}), [{ field: "title", message: "title must not be empty" }]);
 assert.deepEqual(addArgs({ title: "N" }, {}), ["--json", "--role", "human", "add", "N"]);
+assert.deepEqual(addArgs({ title: "T", description: "d", criteria: "a\n\n b \n", for: "human", status: "ready" }),
+  ["--json", "--role", "human", "add", "T", "--description", "d", "--criterion", "a", "--criterion", "b", "--for", "human", "--status", "ready"],
+  "one --criterion per non-empty line");
+assert.deepEqual(addArgs({ title: "T", description: "", plan: "", criteria: "  \n" }), ["--json", "--role", "human", "add", "T"], "empty optional fields omitted");
+assert(!addArgs({ title: "T", for: "agent", status: "draft" }).includes("--project"), "scope comes from cwd, not --project");
+assert.deepEqual(criteriaLines("a\r\n\r\n-\n  b  "), ["a", "-", "b"], "CRLF, blanks, lone dash kept as a criterion");
+assert.deepEqual(criteriaLines(""), []);
+assert.deepEqual(CREATE_STATUSES, ["draft", "ready"], "only draft and ready are legal at create");
+assert.deepEqual(editErrors({ title: " " }).map((e) => e.field), ["title"], "create reuses the title check");
 assert.deepEqual(addArgs({ title: "N", plan: "-" }, { parent: "SCR-2" }),
   ["--json", "--role", "human", "add", "N", "--plan", " ", "--parent", "SCR-2"], "a lone dash becomes a space, not a stdin read");
 assert.deepEqual(textFlag("--description", null), []);
