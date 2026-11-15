@@ -56,7 +56,7 @@ Link the folder per file (`recursive = true`) so Herdr can write its own files b
 - Click the Board button for the board. A project whose visible tickets are all done starts folded; one with any open ticket starts expanded. Clicking a project header pins your choice either way, and it survives polls and restarts. Click a card to open its detail, "+N more" to expand a long cell.
 - Click a ticket's status mark - a panel row, a board card, or the detail's status chip - for its status menu, which lists the statuses scree can move it to from where it stands. Choosing one runs the change and refetches at once, so the card moves without waiting for the next poll; Escape or a click anywhere else closes the menu. Abandon records a fixed reason ("abandoned from the scree mod"), and a refusal shows scree's own message in a strip under the header.
 - Click Edit in a ticket's detail to change its title, description, plan or For; Save runs `scree edit` with only what changed.
-- Click "New" in the panel header, or "New ticket" on a board Project header, to file a ticket: title, description, plan, one acceptance criterion per line, For and Status (draft or ready). The form shows which project it files into; Save opens the new ticket.
+- Click "New" in the panel header, or "New ticket" on a board Project header, to file a ticket: title, description, plan, one acceptance criterion per line, For and Status (draft or ready). The form shows which project it files into; Create opens the new ticket.
 - "tui" (panel header) and "Open in scree tui" (detail) open `scree tui` in a new pane on the right, for a space on this machine.
 - The mod polls every 3 s; no server is involved.
 

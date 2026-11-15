@@ -395,6 +395,41 @@ function location() {
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
 }
 
+// Shared pieces of the create and edit forms, so the two cannot drift apart. A field is its label and
+// control kept close together, with the larger gap between fields, so a label reads as belonging to the
+// control under it. `solid` / `solid_foreground` are the theme's primary button; the error colour is the
+// theme's red (ansi1) because `blocked` is a neutral grey in some themes and made errors easy to miss.
+function formKit(t) {
+  const red = t.ansi1 ?? t.blocked;
+  return {
+    field: (label, control, hint) => v_flex().gap(4)
+      .child(h_flex().gap(6).items_baseline()
+        .child(div().text_size(12).font_weight(500).text_color(t.muted).child(label))
+        .when(Boolean(hint), (el) => el.child(div().text_size(11).text_color(t.dim).child(hint))))
+      .child(control),
+    box: (child) => child.px(8).py(5).rounded(6).border_1().border_color(t.border).bg(t.input).text_size(12),
+    chips: (id, current, values, set) => h_flex().gap(6).children(values.map((v) => div().id(`${id}-${v}`).flex_none().px(10).py(3).rounded(6).text_size(12).border_1()
+      .border_color(current === v ? t.accent : t.border).bg(current === v ? t.selected : t.background)
+      .text_color(current === v ? t.foreground : t.muted).cursor_pointer().hover((s) => s.bg(current === v ? t.selected : t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); set(v, cx); }).child(v))),
+    // Icon and a lead-in carry the meaning too: a theme may map red to a neutral colour (stylix does).
+    error: (id, text) => h_flex().id(id).gap(8).items_start().px(8).py(6).rounded(6).border_1().border_color(red).bg(t.raised)
+      .child(svg("mods/scree/mark-blocked.svg").size(14).flex_none().text_color(red))
+      .child(v_flex().flex_1().min_w(0).gap(1)
+        .child(div().text_size(12).font_weight(600).text_color(t.foreground).child("Couldn't save"))
+        .child(div().text_size(12).text_color(t.muted).child(text))),
+    // Pinned under the scrolling body so Save never scrolls out of reach on a long form.
+    footer: (saveId, saveText, onSave, cancelId, onCancel) => {
+      const button = (id, text, on, primary) => div().id(id).flex_none().px(14).py(4).rounded(6).text_size(12).border_1()
+        .border_color(primary ? t.solid : t.border).bg(primary ? t.solid : t.background)
+        .text_color(primary ? t.solid_foreground : t.muted).font_weight(primary ? 600 : 400).cursor_pointer()
+        .hover((s) => s.bg(primary ? t.solid : t.hover)).on_click((_e, cx) => { cx.stop_propagation(); on(cx); }).child(text);
+      return h_flex().flex_none().px(12).py(8).gap(8).justify_end().border_t(1).border_color(t.border)
+        .child(button(cancelId, "Cancel", onCancel, false)).child(button(saveId, saveText, onSave, true));
+    },
+  };
+}
+
 class ScreeError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
 }
@@ -661,27 +696,19 @@ export default class Scree extends View {
   }
 
   createForm(t) {
-    const c = this.create;
-    const label = (x) => div().text_size(11).text_color(t.dim).child(x);
-    const button = (id, text, on, primary) => div().id(id).flex_none().px(10).py(3).rounded(6).text_size(12).border_1()
-      .border_color(primary ? t.accent : t.border).text_color(primary ? t.foreground : t.muted).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); on(cx); }).child(text);
-    const chips = (key, values) => h_flex().gap(6).children(values.map((v) => div().id(`scree-create-${key}-${v}`).flex_none().px(8).py(2).rounded(4).text_size(11).border_1()
-      .border_color(c[key] === v ? t.accent : t.border).text_color(c[key] === v ? t.foreground : t.muted).cursor_pointer()
-      .on_click((_e, cx) => { cx.stop_propagation(); c[key] = v; this.saveCreateDraft(cx); }).child(v)));
-    const box = (state) => Textarea.new(state).px(8).py(4).rounded(6).border_1().border_color(t.border).text_size(12);
-    return v_flex().id("scree-create-form").px(12).py(6).gap(8)
-      .child(div().id("scree-create-target").text_size(11).text_color(t.muted).child(`into ${c.label} @ ${c.cwd}`))
-      .child(label("Title")).child(Input.new(this.createTitle).px(8).h(30).rounded(6).border_1().border_color(t.border).text_size(12))
-      .child(label("Description")).child(box(this.createDesc))
-      .child(label("Plan")).child(box(this.createPlan).font_family("monospace").text_size(11))
-      .child(label("Acceptance Criteria (one per line)")).child(box(this.createCrit))
-      .child(label("For")).child(chips("for", ["agent", "human"]))
-      .child(label("Status")).child(chips("status", CREATE_STATUSES))
-      .when(Boolean(c.error), (el) => el.child(div().id("scree-create-error").text_size(11).text_color(t.blocked).child(c.error)))
-      .child(h_flex().gap(8)
-        .child(button("scree-create-save", c.saving ? "Saving..." : "Save", (cx) => this.saveCreate(cx), true))
-        .child(button("scree-create-cancel", "Cancel", (cx) => this.cancelCreate(cx), false)));
+    const c = this.create, k = formKit(t);
+    return v_flex().id("scree-create-form").px(12).py(10).gap(14)
+      .child(h_flex().id("scree-create-target").gap(6).items_baseline().text_size(12)
+        .child(div().flex_none().text_color(t.muted).child(`Filing into ${c.label}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(c.cwd)))
+      .child(k.field("Title", k.box(Input.new(this.createTitle).h(30)), "required"))
+      .child(k.field("Description", k.box(Textarea.new(this.createDesc))))
+      .child(k.field("Plan", k.box(Textarea.new(this.createPlan))))
+      .child(k.field("Acceptance criteria", k.box(Textarea.new(this.createCrit)), "one per line"))
+      .child(h_flex().gap(24).flex_wrap()
+        .child(k.field("For", k.chips("scree-create-for", c.for, ["agent", "human"], (v, cx) => { c.for = v; this.saveCreateDraft(cx); })))
+        .child(k.field("Status", k.chips("scree-create-status", c.status, CREATE_STATUSES, (v, cx) => { c.status = v; this.saveCreateDraft(cx); }))))
+      .when(Boolean(c.error), (el) => el.child(k.error("scree-create-error", c.error)));
   }
 
   renderCreate(t) {
@@ -693,7 +720,8 @@ export default class Scree extends View {
       .track_focus(this.createHandle)
       .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); this.cancelCreate(cx); } })
       .child(header)
-      .child(v_flex().id("scree-body-create").flex_1().min_h(0).overflow_y_scroll().child(this.createForm(t)));
+      .child(v_flex().id("scree-body-create").flex_1().min_h(0).overflow_y_scroll().child(this.createForm(t)))
+      .child(formKit(t).footer("scree-create-save", this.create.saving ? "Saving..." : "Create", (cx) => this.saveCreate(cx), "scree-create-cancel", (cx) => this.cancelCreate(cx)));
   }
 
   // The "New ticket" button. stop_propagation keeps the project header's fold toggle and the view's
@@ -985,25 +1013,15 @@ export default class Scree extends View {
   // The edit form: Title, Description, Plan, For. Criteria, comments and blockers stay read-only
   // below it. The red line sits above the buttons and never touches a widget value.
   editForm(t) {
-    const e = this.edit;
-    const label = (x) => div().text_size(11).text_color(t.dim).child(x);
-    const button = (id, text, on, primary) => div().id(id).flex_none().px(10).py(3).rounded(6).text_size(12).border_1()
-      .border_color(primary ? t.accent : t.border).text_color(primary ? t.foreground : t.muted).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); on(cx); }).child(text);
-    const chip = (v) => div().id(`scree-edit-for-${v}`).flex_none().px(8).py(2).rounded(4).text_size(11).border_1()
-      .border_color(e.for === v ? t.accent : t.border).text_color(e.for === v ? t.foreground : t.muted).cursor_pointer()
-      .on_click((_e, cx) => { cx.stop_propagation(); e.for = v; this.saveDraft(cx); }).child(v);
+    const e = this.edit, k = formKit(t);
     const releases = e.base.status === "active" && e.for !== e.base.for;
-    return v_flex().id("scree-edit-form").px(12).py(6).gap(8)
-      .child(label("Title")).child(Input.new(this.titleState).px(8).h(30).rounded(6).border_1().border_color(t.border).text_size(12))
-      .child(label("Description")).child(Textarea.new(this.descState).px(8).py(4).rounded(6).border_1().border_color(t.border).text_size(12))
-      .child(label("Plan")).child(Textarea.new(this.planState).px(8).py(4).rounded(6).border_1().border_color(t.border).font_family("monospace").text_size(11))
-      .child(label("For")).child(h_flex().gap(6).child(chip("agent")).child(chip("human")))
+    return v_flex().id("scree-edit-form").px(12).py(10).gap(14)
+      .child(k.field("Title", k.box(Input.new(this.titleState).h(30)), "required"))
+      .child(k.field("Description", k.box(Textarea.new(this.descState))))
+      .child(k.field("Plan", k.box(Textarea.new(this.planState))))
+      .child(k.field("For", k.chips("scree-edit-for", e.for, ["agent", "human"], (v, cx) => { e.for = v; this.saveDraft(cx); })))
       .when(releases, (el) => el.child(div().text_size(11).text_color(t.dim).child("Changing For releases the claim to ready")))
-      .when(Boolean(e.error), (el) => el.child(div().id("scree-edit-error").text_size(11).text_color(t.blocked).child(e.error)))
-      .child(h_flex().gap(8)
-        .child(button("scree-edit-save", e.saving ? "Saving..." : "Save", (cx) => this.saveEdit(cx), true))
-        .child(button("scree-edit-cancel", "Cancel", (cx) => this.cancelEdit(cx), false)));
+      .when(Boolean(e.error), (el) => el.child(k.error("scree-edit-error", e.error)));
   }
 
   renderDetail(t) {
@@ -1056,7 +1074,8 @@ export default class Scree extends View {
       .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
       .when(this.notice, (el) => el.child(this.noticeStrip(t)))
-      .child(v_flex().id("scree-body-detail").flex_1().min_h(0).overflow_y_scroll().children(body));
+      .child(v_flex().id("scree-body-detail").flex_1().min_h(0).overflow_y_scroll().children(body))
+      .when(Boolean(this.edit), (el) => el.child(formKit(t).footer("scree-edit-save", this.edit.saving ? "Saving..." : "Save", (cx) => this.saveEdit(cx), "scree-edit-cancel", (cx) => this.cancelEdit(cx))));
   }
 
   render(cx) {
