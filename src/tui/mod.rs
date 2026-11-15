@@ -35,6 +35,12 @@ pub fn check_tty(env: &Env) -> Result<()> {
     }
 }
 
+/// A terminal or watcher failure is not a database failure: report it as a
+/// plain failure (exit 1), not through `Error::Io`, which means storage.
+fn terminal_err(e: std::io::Error) -> Error {
+    Error::Other(format!("terminal error: {e}"))
+}
+
 pub fn run(
     conn: &mut Connection,
     db_path: &Path,
@@ -50,11 +56,14 @@ pub fn run(
         format!("{}/{}", identity.role.as_str(), identity.author),
         theme::Theme::from_env(env),
     );
-    let _guard = terminal::Guard::enter()?;
-    let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-    term.clear()?;
+    let _guard = terminal::Guard::enter().map_err(terminal_err)?;
+    let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(terminal_err)?;
+    term.clear().map_err(terminal_err)?;
 
-    update(&mut state, Event::Resize(term.size()?.height));
+    update(
+        &mut state,
+        Event::Resize(term.size().map_err(terminal_err)?.height),
+    );
     let mut pending = vec![Effect::Reload(state.load_spec())];
     while !state.should_quit {
         while let Some(effect) = pending.pop() {
@@ -66,7 +75,7 @@ pub fn run(
                         effects::run_editor(&effects::editor_command(), path)
                     });
                     // Whatever the editor drew is gone from our screen state.
-                    term.clear()?;
+                    term.clear().map_err(terminal_err)?;
                     Event::ActionDone(r)
                 }
                 other => effects::run_effect(conn, cwd, project_root, identity, other),
@@ -81,9 +90,10 @@ pub fn run(
             pending.extend(update(&mut state, Event::DbChanged));
             continue;
         }
-        term.draw(|f| view::draw(f, &mut state))?;
-        if event::poll(Duration::from_millis(100))? {
-            let ev = match event::read()? {
+        term.draw(|f| view::draw(f, &mut state))
+            .map_err(terminal_err)?;
+        if event::poll(Duration::from_millis(100)).map_err(terminal_err)? {
+            let ev = match event::read().map_err(terminal_err)? {
                 event::Event::Key(k) => Event::Key(k),
                 event::Event::Resize(_, h) => Event::Resize(h),
                 _ => continue,

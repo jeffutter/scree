@@ -40,8 +40,13 @@ fn text_arg(flag: &str, v: Option<&str>) -> Result<String> {
     match v {
         None => Ok(String::new()),
         Some("-") => {
-            let mut s = String::new();
-            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+            // Read bytes, not a String, so a read failure and invalid UTF-8
+            // can each be reported as the caller's bad input, not a database error.
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)
+                .map_err(|e| Error::Usage(format!("cannot read {flag} from stdin: {e}")))?;
+            let s = String::from_utf8(buf)
+                .map_err(|_| Error::Usage(format!("{flag} read invalid UTF-8 from stdin")))?;
             let s = s.trim().to_string();
             if s.is_empty() {
                 return Err(Error::Usage(format!("{flag} read nothing from stdin")));

@@ -422,3 +422,52 @@ fn option_value_never_swallows_the_next_flag() {
     assert_eq!(after["plan"], before["plan"]);
     assert_eq!(after["updated_at"], before["updated_at"]);
 }
+
+#[test]
+fn unreadable_stdin_is_a_usage_error_not_a_database_error() {
+    // Regression (SCR-37): bad stdin is the caller's input, never "database" / exit 6.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let e = Env::new();
+    let id = e.ready(&["--description", "keep"]);
+    let before = e.ok(&["show", &id]);
+    let args = ["edit", id.as_str(), "--description", "-"];
+
+    let check = |out: std::process::Output, what: &str| {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(2), "{what}: {err}");
+        assert!(err.contains("--description"), "{what}: {err}");
+        assert!(err.contains("\"code\":\"usage\""), "{what}: {err}");
+        assert!(!err.contains("database"), "{what}: {err}");
+    };
+
+    let mut child = e
+        .cmd(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&[0xff, 0xfe, 0x80, b'x'])
+        .unwrap();
+    check(child.wait_with_output().unwrap(), "invalid utf-8");
+
+    let dir = std::fs::File::open(e.path()).unwrap();
+    let out = e
+        .cmd(&args)
+        .stdin(Stdio::from(dir))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    check(out, "directory on stdin");
+
+    let after = e.ok(&["show", &id]);
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(after["updated_at"], before["updated_at"]);
+}
