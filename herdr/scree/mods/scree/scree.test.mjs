@@ -350,6 +350,72 @@ const MUTANTS = {
   assert(!/\breturn\b/.test(tryBody), "no return inside refresh()'s try block");
 }
 
+// SCR-22: the class-body toggle methods must call their helpers. A mutation that reverts
+// nextBoardFold(this.boardFolded, p) to !this.boardFolded[p.key], or projectFolded(...) to
+// Boolean(...), must fail here rather than silently break the click path in production.
+
+// Write path: exercise the actual toggle methods by slicing them into an object literal.
+{
+  const start = src.indexOf("  toggleFold(status, cx) {");
+  const end = src.indexOf("  mark(t, ticket, status) {");
+  assert(start > 0 && end > start, "toggle methods not found in main.js class body");
+  const store = { set() {} };
+  const obj = new Function("store", "nextBoardFold",
+    `"use strict"; return new class {${src.slice(start, end)}};`)(store, nextBoardFold);
+  const cx = { notify() {} };
+
+  // toggleBoardFold: first click on an all-done default-folded project must store false (expand).
+  // A mutation to !this.boardFolded[p.key] would store true (negation of undefined), keeping it folded.
+  obj.boardFolded = {};
+  obj.toggleBoardFold({ key: "A", onlyDone: true }, cx);
+  assert.equal(obj.boardFolded.A, false, "click on all-done default stores expand (not raw inversion)");
+
+  // First click on a mixed project stores true (fold).
+  obj.boardFolded = {};
+  obj.toggleBoardFold({ key: "B", onlyDone: false }, cx);
+  assert.equal(obj.boardFolded.B, true, "click on mixed default stores fold");
+
+  // Click on explicitly-folded project stores expand.
+  obj.boardFolded = { C: true };
+  obj.toggleBoardFold({ key: "C", onlyDone: true }, cx);
+  assert.equal(obj.boardFolded.C, false, "click on explicitly-folded stores expand");
+
+  // Click on explicitly-expanded project stores fold.
+  obj.boardFolded = { D: false };
+  obj.toggleBoardFold({ key: "D", onlyDone: false }, cx);
+  assert.equal(obj.boardFolded.D, true, "click on explicitly-expanded stores fold");
+
+  // toggleFold: simple inversion (panel sections have no data-driven default).
+  obj.folded = {};
+  obj.toggleFold("done", cx);
+  assert.equal(obj.folded.done, true, "toggleFold stores inverted value");
+  obj.toggleFold("done", cx);
+  assert.equal(obj.folded.done, false, "second toggleFold reverts");
+
+  // toggleCell: simple inversion (cell expansion has no data-driven default).
+  obj.boardExpanded = {};
+  obj.toggleCell("X|wt|ready", cx);
+  assert.equal(obj.boardExpanded["X|wt|ready"], true, "toggleCell stores inverted value");
+  obj.toggleCell("X|wt|ready", cx);
+  assert.equal(obj.boardExpanded["X|wt|ready"], false, "second toggleCell reverts");
+}
+
+// Read sites: the render methods must read through projectFolded so the all-done default applies.
+// A mutation to Boolean(this.boardFolded[p.key]) means an all-done project with no stored choice
+// reads as expanded instead of folded.
+{
+  const renderSrc = src.slice(
+    src.indexOf("  renderBoard(t, state) {"),
+    src.indexOf("  section(t, g, total, cx) {"));
+  assert(renderSrc.includes("projectFolded(this.boardFolded, p)"),
+    "renderBoard reads board fold through projectFolded, not Boolean()");
+  assert(renderSrc.includes("Boolean(this.boardExpanded[ck])"),
+    "renderBoard reads cell expansion via Boolean (correct: no helper needed)");
+  const sectionSrc = src.slice(src.indexOf("  section(t, g, total, cx) {"));
+  assert(sectionSrc.includes("Boolean(this.folded[g.status])"),
+    "section reads panel fold via Boolean (correct: no data-driven default)");
+}
+
 console.log("ok");
 
 // Run one mutant over the same coverage checks. An unexpected crash is reported as such, because a

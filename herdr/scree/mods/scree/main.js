@@ -567,8 +567,6 @@ export default class Scree extends View {
     cx.notify();
   }
 
-  // Toggling stores the resolved state's opposite, so the first click on a project folded by its
-  // all-done default expands it instead of re-recording "folded".
   toggleBoardFold(p, cx) {
     this.boardFolded = { ...this.boardFolded, [p.key]: nextBoardFold(this.boardFolded, p) };
     store.set("boardFolded", this.boardFolded);

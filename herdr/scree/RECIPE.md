@@ -51,7 +51,7 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 - `herdr-app check mods/scree` passes and `herdr-app status` shows no errors.
 - `node scree.test.mjs` prints `ok`.
 - In a repo with tickets, the Scree button opens the panel with the right sections and counts; the scope button changes the list.
-- The Board button shows every project with its columns; the project header folds, and a project whose visible tickets are all done starts folded until clicked. The fold toggle's click path (`nextBoardFold`) is covered by `scree.test.mjs`.
+- The Board button shows every project with its columns; the project header folds, and a project whose visible tickets are all done starts folded until clicked. `scree.test.mjs` exercises `toggleBoardFold` directly and pins that `renderBoard` reads through `projectFolded`, so a mutation in either call site fails CI.
 - A row click shows the detail with criteria evidence; Back returns.
 - Clicking a status mark offers the statuses reachable from that ticket's current one, and choosing one moves the card without waiting for the poll. `scree.test.mjs` pins the exact argv per transition and refuses any argv a builder did not produce.
 - "tui" opens a pane running `scree tui`.

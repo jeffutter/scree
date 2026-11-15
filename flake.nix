@@ -60,7 +60,7 @@
         # The Herdr mod (herdr/scree/mods/scree), laid out as a Herdr home's mods/ folder so
         # another flake can link $out/mods/scree into ~/.config/herdr-app/mods/. The mod's
         # scree binary is pinned to this flake's package. The node test of the mod's pure
-        # helpers runs first, so a broken mod fails the build.
+        # helpers and click-path guards runs first, so a broken mod fails the build.
         herdr-mod = pkgs.runCommand "scree-herdr-mod" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
           mkdir -p $out/mods
           cp -r ${./herdr/scree/mods/scree} $out/mods/scree
