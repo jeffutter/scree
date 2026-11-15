@@ -1,7 +1,8 @@
 //! Status transitions, claim and edit, run through the real binary.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
 
@@ -20,7 +21,7 @@ impl Env {
         self.dir.path().join("scree.db")
     }
 
-    fn run(&self, args: &[&str]) -> Output {
+    fn cmd(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
         for (k, _) in std::env::vars() {
             if k.starts_with("SCREE_")
@@ -36,9 +37,30 @@ impl Env {
         cmd.current_dir(self.dir.path())
             .arg("--db")
             .arg(self.db())
-            .args(args)
-            .output()
+            .args(args);
+        cmd
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.cmd(args).output().unwrap()
+    }
+
+    /// Run with `input` on stdin; returns the exit code.
+    fn stdin_code(&self, args: &[&str], input: &str) -> i32 {
+        let mut child = self
+            .cmd(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
             .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap().status.code().unwrap()
     }
 
     fn ok(&self, args: &[&str]) -> Value {
@@ -172,6 +194,19 @@ fn edit_fields_and_append() {
     assert_eq!(e.code(&["edit", &id, "--append"]), 2);
     assert_eq!(e.code(&["edit", &id, "--append", "--title", "x"]), 2);
     assert_eq!(e.code(&["edit", &id, "--title", " "]), 2);
+
+    // Regression: --append with empty or whitespace-only text must exit 2 (SCR-21).
+    let before = e.ok(&["show", &id]);
+    assert_eq!(e.code(&["edit", &id, "--append", "--description", ""]), 2);
+    assert_eq!(e.code(&["edit", &id, "--append", "--plan", "  "]), 2);
+    assert_eq!(
+        e.stdin_code(&["edit", &id, "--append", "--description", "-"], ""),
+        2
+    );
+    let after = e.ok(&["show", &id]);
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(after["plan"], before["plan"]);
+
     let t = e.ok(&["edit", &id, "--title", " new ", "--plan", "p1"]);
     assert_eq!(t["title"], "new");
     assert_eq!(t["plan"], "p1");
@@ -191,6 +226,10 @@ fn edit_fields_and_append() {
     let id3 = e.ready(&[]);
     let t = e.ok(&["edit", &id3, "--plan", "p", "--append"]);
     assert_eq!(t["plan"], "p");
+
+    // Replacing with an empty string still clears the field (escape hatch preserved).
+    let t = e.ok(&["edit", &id, "--description", ""]);
+    assert_eq!(t["description"], "");
 }
 
 #[test]

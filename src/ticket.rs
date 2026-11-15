@@ -768,7 +768,9 @@ pub struct EditFields<'a> {
 }
 
 /// `old` followed by `new`, separated by a blank line.
-/// Trims both sides; returns whichever is non-empty when the other is empty or whitespace-only.
+/// Trims both sides so whitespace already in the stored row cannot produce a stray blank line.
+/// Callers in `edit()` refuse an empty addition before reaching here; the `new.is_empty()`
+/// branch only normalises whitespace already present in `old`.
 fn appended(old: &str, new: &str) -> String {
     let old = old.trim();
     let new = new.trim();
@@ -796,6 +798,14 @@ pub fn edit(
         return Err(Error::Usage(
             "--append needs --description or --plan".into(),
         ));
+    }
+    if f.append
+        && [f.description, f.plan]
+            .into_iter()
+            .flatten()
+            .any(|t| t.trim().is_empty())
+    {
+        return Err(Error::Usage("--append needs text to append".into()));
     }
     if f.title.is_some_and(|t| t.trim().is_empty()) {
         return Err(Error::Usage("title must not be empty".into()));
