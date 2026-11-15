@@ -877,9 +877,21 @@ export default class Scree extends View {
       .child(this.cardMeta(t, k, 0));
   }
 
+  // Builds the board model, mapping a throw from the pure builders onto the error shape a failed
+  // poll uses so renderBoard draws a state line instead of the pane dying. Render must not write
+  // this.error (the next poll would clear it anyway), so the error is returned, not stored.
+  boardView() {
+    try {
+      const model = boardModel(this.board, { ...this.filters(), now: Date.now(), showAbandoned: this.showAbandoned });
+      return { model, counts: boardCounts(model), error: null };
+    } catch (e) {
+      return { model: [], counts: boardCounts([]), error: { kind: "error", message: `Board failed to render: ${String(e?.message ?? e)}` } };
+    }
+  }
+
   renderBoard(t, state) {
-    const model = boardModel(this.board, { ...this.filters(), now: Date.now(), showAbandoned: this.showAbandoned });
-    const counts = boardCounts(model);
+    const { model, counts, error: viewError } = this.boardView();
+    state = state ?? viewError?.message ?? null;
     const COL_W = 220;
     const columns = boardColumns(this.showAbandoned);
     const fatal = this.error && ["no-binary"].includes(this.error.kind);
@@ -889,7 +901,7 @@ export default class Scree extends View {
       .child(div().id("scree-board-machine").flex_none().px(6).py(1).rounded(4).text_size(11).border_1().border_color(t.border).text_color(t.muted)
         .child(machineLabel(location().on)))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
-        .child(fatal ? "" : boardHeadline(counts)));
+        .child(fatal || viewError ? "" : boardHeadline(counts)));
     const colHeader = h_flex().flex_none().gap(8).px(10).py(5).border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
       .child(div().w(90).flex_none())
       .children(columns.map((c) => div().w(COL_W).flex_none().child(`${LABELS[c]} (${counts[c]})`)));
@@ -917,7 +929,7 @@ export default class Scree extends View {
       return [head, ...rows];
     });
     let body;
-    if (state) body = [div().p(10).text_color(this.error ? t.blocked : t.dim).child(state)];
+    if (state) body = [div().p(10).text_color(this.error || viewError ? t.blocked : t.dim).child(state)];
     else if (!model.length) body = [div().p(10).text_color(t.dim).child("No tickets match the filters")];
     else body = [colHeader, ...lanes];
     // One container scrolls both axes; the inner column keeps a minimum width so narrow windows
@@ -1081,7 +1093,7 @@ export default class Scree extends View {
       .when(!fatal && this.canOpenTui(), (el) => el.child(div().id("scree-open-tui").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, _cx) => this.openTui()).child("tui")));
     const body = state
-      ? [div().p(10).text_color(this.error ? t.blocked : t.dim).child(state)]
+      ? [div().p(10).text_color(this.error || viewError ? t.blocked : t.dim).child(state)]
       : sections.map((x) => this.section(t, x.g, x.total, cx));
     // The legend is panel-only and lists the marks Active-first; its statuses are COLUMNS' plus "blocked".
     const legend = h_flex().flex_none().px(10).py(6).gap(12).gap_y(4).items_center().flex_wrap().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)

@@ -509,6 +509,40 @@ const MUTANTS = {
     "section reads panel fold via Boolean (correct: no data-driven default)");
 }
 
+// SCR-23: a throw from the board's model build becomes the error shape renderBoard draws, not a
+// dead pane. Claim covered: boardView() absorbs the throw and renderBoard routes through it; the
+// gpui builders in renderBoard itself are not executed here.
+{
+  const start = src.indexOf("  boardView() {");
+  const end = src.indexOf("  renderBoard(t, state) {");
+  assert(start > 0 && end > start, "boardView not found in main.js class body");
+  const make = (bm) => {
+    const o = new Function("boardModel", "boardCounts", "BOARD_COLUMNS",
+      `"use strict"; return new class {${src.slice(start, end)}};`)(bm, boardCounts, BOARD_COLUMNS);
+    o.board = []; o.showAbandoned = false; o.filters = () => ({});
+    return o;
+  };
+  const trace = "Cannot read properties of undefined (reading 'push')";
+  const bad = make(() => { throw new TypeError(trace); });
+  let v;
+  assert.doesNotThrow(() => { v = bad.boardView(); }, "boardView absorbs a throwing boardModel");
+  assert.equal(v.error.kind, "error", "boardView maps a model throw onto kind error");
+  assert(v.error.message.includes(trace), "boardView error message carries the thrown text");
+  assert.deepEqual(v.model, [], "boardView model is empty on error");
+  for (const c of BOARD_COLUMNS) assert.equal(v.counts[c], 0, `boardView zeroes count for ${c} on error`);
+
+  const tk = { id: "SCR-1", title: "t", status: "ready", project: { key: "SCR", root: "/r" }, worktree: null };
+  const good = make(boardModel);
+  good.board = [tk];
+  const g = good.boardView();
+  assert.equal(g.error, null, "boardView has no error for a valid board");
+  assert.deepEqual(g.counts, boardCounts(boardModel([tk], { now: Date.now() })), "boardView counts match boardCounts(boardModel(...))");
+
+  const rb = src.slice(end, src.indexOf("  section(t, g, total, cx) {"));
+  assert(rb.includes("this.boardView()"), "renderBoard builds its model through this.boardView()");
+  assert(!/\bboardModel\(/.test(rb), "renderBoard does not call boardModel directly");
+}
+
 // Static checks on the render region that cannot be exercised through pureWith:
 // mark-<status>.svg files exist for every column, and the colour table in mark() names each status.
 {
