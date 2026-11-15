@@ -17,7 +17,13 @@ const BOARD_COLUMNS = COLUMNS.map(([s]) => s);
 // The statuses that mean "not finished": both open list calls and the all-done fold check read this.
 const OPEN_STATUSES = BOARD_COLUMNS.filter((s) => s !== "done");
 // Display name per status ("Draft", "Ready", ...), for the board's column headers and the panel's sections.
-const LABELS = Object.fromEntries(COLUMNS);
+// Columns shown only on demand (the "Show abandoned" chip). Kept out of COLUMNS so they are neither
+// fetched nor counted by default: OPEN_STATUSES and the headline stay the open statuses.
+const OPTIONAL_COLUMNS = [["abandoned", "Abandoned"]];
+const ABANDONED_STATUSES = OPTIONAL_COLUMNS.map(([s]) => s);
+// The board's column statuses in order, plus the optional ones when asked for.
+const boardColumns = (showAbandoned) => (showAbandoned ? [...BOARD_COLUMNS, ...ABANDONED_STATUSES] : BOARD_COLUMNS);
+const LABELS = Object.fromEntries([...COLUMNS, ...OPTIONAL_COLUMNS]);
 
 // A Status is "finished" when no command settles it: done and abandoned.
 const CLOSED_STATUSES = ["done", "abandoned"];
@@ -137,10 +143,12 @@ const ABANDON_REASON = "abandoned from the scree mod";
 // Done tickets are fetched with --done-since so the server's position order cannot drop recent ones.
 const DONE_DAYS = 7;
 
-// The two list calls of one poll: open tickets, and done tickets (for the Done count and tail).
-function listArgs(allWorktrees) {
+// The list calls of one poll: open tickets, and done tickets (for the Done count and tail), plus an
+// abandoned call only when showAbandoned is on (the key is absent otherwise).
+function listArgs(allWorktrees, showAbandoned = false) {
   const scope = allWorktrees ? ["--all-worktrees"] : [];
   return {
+    ...(showAbandoned ? { abandoned: build(["--json", "list", ...scope, "--status", "abandoned", "--limit", "200"]) } : {}),
     open: build(["--json", "list", ...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "200"]),
     done: build(["--json", "list", ...scope, "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "500"]),
   };
@@ -262,8 +270,9 @@ function detailModel(show) {
 // conflicts with `--all-worktrees`). The default limit is 50, so pass a large one. Open and done
 // are separate so accumulated done tickets cannot crowd open ones out of the limit. Done is
 // ordered by position, so boardModel cuts it to the last days client-side.
-function boardListArgs() {
+function boardListArgs(showAbandoned = false) {
   return {
+    ...(showAbandoned ? { abandoned: build(["--json", "list", "--all-projects", "--status", "abandoned", "--limit", "1000"]) } : {}),
     open: build(["--json", "list", "--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "1000"]),
     done: build(["--json", "list", "--all-projects", "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "1000"]),
   };
@@ -284,11 +293,12 @@ function machineLabel(on) { return on ? String(on) : "this computer"; }
 // Tickets keep list order (position) inside a cell. Empty lanes and projects are omitted.
 // onlyDone is true when every visible ticket in the project is done; the board folds such a
 // project by default (see projectFolded). It reflects the filters, so it can flip per view.
-function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.now(), doneDays = DONE_DAYS } = {}) {
+function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.now(), doneDays = DONE_DAYS, showAbandoned = false } = {}) {
+  const columns = boardColumns(showAbandoned);
   const cutoff = now - doneDays * 86400000;
   const projects = new Map();
   for (const t of applyFilters(tickets, { forRole, blockedOnly })) {
-    if (!BOARD_COLUMNS.includes(t.status) || t.archived_at) continue;
+    if (!columns.includes(t.status) || t.archived_at) continue;
     if (t.status === "done") {
       const at = Date.parse(t.done_at ?? "");
       if (!(at >= cutoff)) continue;
@@ -298,13 +308,16 @@ function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.
     const p = projects.get(key);
     const wt = t.worktree ?? null;
     if (!p.lanes.has(wt))
-      p.lanes.set(wt, { worktree: wt, label: worktreeLabel(wt), cells: Object.fromEntries(BOARD_COLUMNS.map((s) => [s, []])) });
+      p.lanes.set(wt, { worktree: wt, label: worktreeLabel(wt), cells: Object.fromEntries(columns.map((s) => [s, []])) });
     p.lanes.get(wt).cells[t.status].push(t);
-    p.count++;
+    // Abandoned cards are shown on demand and never counted, like the headline.
+    if (!ABANDONED_STATUSES.includes(t.status)) p.count++;
   }
   // Done shows newest first so the collapsed view keeps the most recent cards.
-  for (const p of projects.values()) for (const l of p.lanes.values())
+  for (const p of projects.values()) for (const l of p.lanes.values()) {
     l.cells.done.sort((a, b) => Date.parse(b.done_at ?? "") - Date.parse(a.done_at ?? ""));
+    if (l.cells.abandoned) l.cells.abandoned.sort((a, b) => Date.parse(b.updated_at ?? "") - Date.parse(a.updated_at ?? ""));
+  }
   const byPath = (a, b) => String(a.worktree).localeCompare(String(b.worktree));
   return [...projects.values()]
     .map((p) => {
@@ -322,10 +335,12 @@ function cellVisible(cards, expanded, limit = CELL_LIMIT) {
   return { shown: cards.slice(0, limit), hidden: cards.length - limit };
 }
 
-// Per-column totals across all projects in a boardModel result.
+// Per-column totals across all projects in a boardModel result. An abandoned key appears only when
+// the model was built with showAbandoned; boardHeadline never prints it.
 function boardCounts(model) {
-  const out = Object.fromEntries(BOARD_COLUMNS.map((s) => [s, 0]));
-  for (const p of model) for (const l of p.lanes) for (const c of BOARD_COLUMNS) out[c] += l.cells[c].length;
+  const cols = model.some((p) => p.lanes.some((l) => l.cells.abandoned)) ? boardColumns(true) : BOARD_COLUMNS;
+  const out = Object.fromEntries(cols.map((s) => [s, 0]));
+  for (const p of model) for (const l of p.lanes) for (const c of cols) out[c] += l.cells[c].length;
   return out;
 }
 
@@ -393,12 +408,14 @@ export default class Scree extends View {
     this.open = []; this.done = []; this.board = []; this.error = null; this.loaded = false; this.context = null; this.bin = null;
     this.loading = false; this.parked = new Map();
     this.allWorktrees = store.get("allWorktrees", false) === true;
-    this.folded = store.get("folded", { done: true });
+    this.folded = { abandoned: true, ...store.get("folded", { done: true }) };
     this.boardFolded = store.get("boardFolded", {});
     this.boardExpanded = store.get("boardExpanded", {});
     this.selected = null;
     this.filterFor = ["all", "agent", "human"].includes(store.get("filterFor", "all")) ? store.get("filterFor", "all") : "all";
     this.blockedOnly = store.get("blockedOnly", false) === true;
+    this.showAbandoned = store.get("showAbandoned", false) === true;
+    this.abandoned = [];
     this.detail = null; // {id, data, error, loading} while a ticket's detail is open
     // One status menu may be open at a time: {id, status}. notice is the last write's failure,
     // which survives polls so it can be read, and goes when the next write works or the view changes.
@@ -464,9 +481,9 @@ export default class Scree extends View {
     const loc = location(), context = this.key();
     if (context !== this.context) {
       // A different space, folder or scope: park this one's state and restore the target's.
-      if (this.context !== null) this.parked.set(this.context, { open: this.open, done: this.done, board: this.board, error: this.error, loaded: this.loaded });
-      const s = this.parked.get(context) ?? { open: [], done: [], board: [], error: null, loaded: false };
-      this.context = context; this.open = s.open; this.done = s.done; this.board = s.board; this.error = s.error; this.loaded = s.loaded;
+      if (this.context !== null) this.parked.set(this.context, { open: this.open, done: this.done, board: this.board, abandoned: this.abandoned, error: this.error, loaded: this.loaded });
+      const s = this.parked.get(context) ?? { open: [], done: [], board: [], abandoned: [], error: null, loaded: false };
+      this.context = context; this.open = s.open; this.done = s.done; this.board = s.board; this.abandoned = s.abandoned; this.error = s.error; this.loaded = s.loaded;
       this.bin = null;
       this.leaveCreate();
       this.detail = null;
@@ -475,17 +492,17 @@ export default class Scree extends View {
     }
     if (!loc.cwd && this.mode !== "board") { this.error = { kind: "no-project" }; this.loaded = true; cx.notify(); return; }
     this.loading = true;
-    const args = listArgs(this.allWorktrees);
+    const args = listArgs(this.allWorktrees, this.showAbandoned);
     cx.spawn(async (cx) => {
       try {
         if (this.mode === "board") {
           // Two calls on the focused space's machine; all-projects needs no repo, so a missing cwd is fine.
-          const bargs = boardListArgs();
-          const [open, done] = (await Promise.all([this.scree(bargs.open, loc), this.scree(bargs.done, loc)])).map((x) => JSON.parse(x));
-          if (this.key() === context) { this.board = [...(open.tickets ?? []), ...(done.tickets ?? [])]; this.error = null; this.loaded = true; }
+          const bargs = boardListArgs(this.showAbandoned);
+          const [open, done, abandoned] = (await Promise.all([this.scree(bargs.open, loc), this.scree(bargs.done, loc), ...(bargs.abandoned ? [this.scree(bargs.abandoned, loc)] : [])])).map((x) => JSON.parse(x));
+          if (this.key() === context) { this.board = [...(open.tickets ?? []), ...(done.tickets ?? []), ...(abandoned?.tickets ?? [])]; this.error = null; this.loaded = true; }
         } else {
-          const [open, done] = (await Promise.all([this.scree(args.open, loc), this.scree(args.done, loc)])).map((x) => JSON.parse(x));
-          if (this.key() === context) { this.open = open.tickets ?? []; this.done = done.tickets ?? []; this.error = null; this.loaded = true; }
+          const [open, done, abandoned] = (await Promise.all([this.scree(args.open, loc), this.scree(args.done, loc), ...(args.abandoned ? [this.scree(args.abandoned, loc)] : [])])).map((x) => JSON.parse(x));
+          if (this.key() === context) { this.open = open.tickets ?? []; this.done = done.tickets ?? []; this.abandoned = abandoned?.tickets ?? []; this.error = null; this.loaded = true; }
         }
       } catch (e) {
         if (this.key() === context) { this.error = { kind: e.kind ?? "error", message: String(e.message ?? e) }; this.loaded = true; }
@@ -761,6 +778,8 @@ export default class Scree extends View {
 
   setFilterFor(v, cx) { this.filterFor = v; store.set("filterFor", v); cx.notify(); }
   toggleBlockedOnly(cx) { this.blockedOnly = !this.blockedOnly; store.set("blockedOnly", this.blockedOnly); cx.notify(); }
+  // The data set changes (an extra list call), so refetch rather than only re-render.
+  toggleShowAbandoned(cx) { this.showAbandoned = !this.showAbandoned; store.set("showAbandoned", this.showAbandoned); this.refresh(cx); cx.notify(); }
   filters() { return { forRole: this.filterFor, blockedOnly: this.blockedOnly }; }
 
   // `scree tui` in a new pane at the space's folder. Not offered for a space on another machine.
@@ -816,7 +835,7 @@ export default class Scree extends View {
     // Status marks, keyed by the board's columns plus "blocked". A new column needs an entry here,
     // a mark-<kind>.svg, and nothing else: COLUMNS covers fetching, labelling and counting it.
     const kind = ticket.blocked ? "blocked" : status;
-    const color = { blocked: t.blocked, active: t.working, ready: t.idle, draft: t.dim, done: t.done }[kind] ?? t.dim;
+    const color = { blocked: t.blocked, active: t.working, ready: t.idle, draft: t.dim, done: t.done, abandoned: t.dim }[kind] ?? t.dim;
     return svg(`mods/scree/mark-${kind}.svg`).size(14).flex_none().text_color(color);
   }
 
@@ -859,9 +878,10 @@ export default class Scree extends View {
   }
 
   renderBoard(t, state) {
-    const model = boardModel(this.board, { ...this.filters(), now: Date.now() });
+    const model = boardModel(this.board, { ...this.filters(), now: Date.now(), showAbandoned: this.showAbandoned });
     const counts = boardCounts(model);
     const COL_W = 220;
+    const columns = boardColumns(this.showAbandoned);
     const fatal = this.error && ["no-binary"].includes(this.error.kind);
     const header = h_flex().flex_none().px(10).py(8).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg("mods/scree/scree.svg").size(14).flex_none().text_color(t.muted))
@@ -872,7 +892,7 @@ export default class Scree extends View {
         .child(fatal ? "" : boardHeadline(counts)));
     const colHeader = h_flex().flex_none().gap(8).px(10).py(5).border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
       .child(div().w(90).flex_none())
-      .children(BOARD_COLUMNS.map((c) => div().w(COL_W).flex_none().child(`${LABELS[c]} (${counts[c]})`)));
+      .children(columns.map((c) => div().w(COL_W).flex_none().child(`${LABELS[c]} (${counts[c]})`)));
     const lanes = model.flatMap((p) => {
       const folded = projectFolded(this.boardFolded, p);
       const head = h_flex().id(`scree-proj-${p.key}`).px(10).py(5).gap(6).items_center().cursor_pointer().bg(t.hover).text_size(12)
@@ -884,7 +904,7 @@ export default class Scree extends View {
       const rows = folded ? [] : p.lanes.map((l) =>
         h_flex().gap(8).px(10).py(6).items_start().border_b(1).border_color(t.border)
           .child(div().w(90).flex_none().truncate().text_size(11).text_color(t.dim).child(l.label))
-          .children(BOARD_COLUMNS.map((c) => {
+          .children(columns.map((c) => {
             const ck = `${p.key}|${l.worktree ?? ""}|${c}`, open = Boolean(this.boardExpanded[ck]);
             const { shown, hidden } = cellVisible(l.cells[c], open);
             const toggle = (text) => div().id(`scree-cell-${ck}`).px(8).py(3).rounded(6).text_size(11).text_color(t.muted).cursor_pointer()
@@ -902,7 +922,7 @@ export default class Scree extends View {
     else body = [colHeader, ...lanes];
     // One container scrolls both axes; the inner column keeps a minimum width so narrow windows
     // scroll sideways instead of squeezing or clipping cards.
-    const minW = 90 + BOARD_COLUMNS.length * (COL_W + 8) + 28;
+    const minW = 90 + columns.length * (COL_W + 8) + 28;
     return v_flex().id("scree-board").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
@@ -932,7 +952,8 @@ export default class Scree extends View {
     return h_flex().flex_none().px(10).py(5).gap(6).items_center().flex_wrap().border_b(1).border_color(t.border)
       .children([["all", "All"], ["agent", "Agent"], ["human", "Human"]].map(([v, label]) =>
         this.chip(t, `scree-for-${v}`, label, this.filterFor === v, (cx) => this.setFilterFor(v, cx))))
-      .child(this.chip(t, "scree-blocked-only", "Blocked only", this.blockedOnly, (cx) => this.toggleBlockedOnly(cx)));
+      .child(this.chip(t, "scree-blocked-only", "Blocked only", this.blockedOnly, (cx) => this.toggleBlockedOnly(cx)))
+      .child(this.chip(t, "scree-show-abandoned", "Show abandoned", this.showAbandoned, (cx) => this.toggleShowAbandoned(cx)));
   }
 
   detailSection(t, title, items) {
@@ -1033,7 +1054,7 @@ export default class Scree extends View {
     if (this.detail) return this.renderDetail(t);
     const filtered = applyFilters(this.open, this.filters()), filteredDone = applyFilters(this.done, this.filters());
     let state = this.stateLine();
-    if (!state && !filtered.length && !filteredDone.length) state = "No tickets match the filters";
+    if (!state && !filtered.length && !filteredDone.length && !(this.showAbandoned && this.abandoned.length)) state = "No tickets match the filters";
     if (this.mode === "board") return this.renderBoard(t, this.stateLine());
     const fatal = this.error && ["no-binary", "no-project"].includes(this.error.kind);
     const groups = new Map(groupByStatus(filtered).map((g) => [g.status, g]));
@@ -1045,6 +1066,9 @@ export default class Scree extends View {
       const g = groups.get(s);
       return g ? { g, total: g.tickets.length } : null;
     }).filter(Boolean);
+    // Abandoned comes after Done, only when the chip is on, and never enters the header counts.
+    const filteredAbandoned = this.showAbandoned ? applyFilters(this.abandoned, this.filters()) : [];
+    if (filteredAbandoned.length) sections.push({ g: { status: "abandoned", tickets: filteredAbandoned }, total: filteredAbandoned.length });
     const counts = countsLine([...groups.values()]);
     const header = h_flex().flex_none().px(10).py(8).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg("mods/scree/scree.svg").size(14).flex_none().text_color(t.muted))

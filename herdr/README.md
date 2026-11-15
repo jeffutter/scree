@@ -2,8 +2,8 @@
 
 A [Herdr](https://herdr.dev) mod that shows scree tickets inside the window. One mod, two views chosen by the layout block's `props.view`:
 
-- **panel**: a side panel of the focused space's project, grouped Active, Ready, Draft and Done, with criteria progress bars and a ticket detail view.
-- **board**: a full-window board of every Project and Worktree, with Draft, Ready, Active and Done columns and one swimlane per project.
+- **panel**: a side panel of the focused space's project, grouped Active, Ready, Draft and Done (plus Abandoned on demand), with criteria progress bars and a ticket detail view.
+- **board**: a full-window board of every Project and Worktree, with Draft, Ready, Active and Done columns (plus Abandoned on demand) and one swimlane per project.
 
 ![Scree for Herdr](scree/preview.png)
 
@@ -52,7 +52,7 @@ Link the folder per file (`recursive = true`) so Herdr can write its own files b
 
 ## Use
 
-- Click the Scree button for the panel. Section headers fold; "This worktree" / "All worktrees" switches scope; the chips filter by All, Agent, Human and Blocked only. Click a row for the ticket detail, "Back" returns.
+- Click the Scree button for the panel. Section headers fold; "This worktree" / "All worktrees" switches scope; the chips filter by All, Agent, Human and Blocked only. "Show abandoned" adds an Abandoned section (panel) or column (board), hidden by default and not counted in the headline; it costs one extra list call per poll, and abandoned tickets of removed worktrees stay archived and hidden. With it on, an abandoned ticket's status menu offers reopen. Click a row for the ticket detail, "Back" returns.
 - Click the Board button for the board. A project whose visible tickets are all done starts folded; one with any open ticket starts expanded. Clicking a project header pins your choice either way, and it survives polls and restarts. Click a card to open its detail, "+N more" to expand a long cell.
 - Click a ticket's status mark - a panel row, a board card, or the detail's status chip - for its status menu, which lists the statuses scree can move it to from where it stands. Choosing one runs the change and refetches at once, so the card moves without waiting for the next poll; Escape or a click anywhere else closes the menu. Abandon records a fixed reason ("abandoned from the scree mod"), and a refusal shows scree's own message in a strip under the header.
 - Click Edit in a ticket's detail to change its title, description, plan or For; Save runs `scree edit` with only what changed.

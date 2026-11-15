@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline", "boardColumns", "OPTIONAL_COLUMNS"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline, boardColumns, OPTIONAL_COLUMNS } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -292,7 +292,7 @@ function checkColumnCoverage(m) {
   const full = m.boardModel(cols.map((s) => tick(`C-${s}`, s)), { now: NOW });
   assert.deepEqual(cols.map((s) => full[0].lanes[0].cells[s].map((x) => x.id)), cols.map((s) => [`C-${s}`]), "one ticket in every column survives boardModel, each in its own cell");
   assert.deepEqual(Object.keys(m.boardCounts(full)), cols, "boardCounts covers every column");
-  assert.deepEqual(Object.keys(m.LABELS), cols, "LABELS names every column");
+  assert.deepEqual(Object.keys(m.LABELS), [...cols, ...m.OPTIONAL_COLUMNS.map(([s]) => s)], "LABELS names every column, optional ones last");
   for (const [s, label] of m.COLUMNS) assert.equal(String(m.LABELS[s]), label, `${s} renders as "${label}", not undefined`);
   // Both open list calls ask for exactly the unfinished columns, one --status each, in that order.
   for (const [what, argv] of [["panel", m.listArgs(false).open], ["panel all-worktrees", m.listArgs(true).open], ["board", m.boardListArgs().open]])
@@ -348,8 +348,44 @@ function checkRenderCoverage(m) {
 }
 
 // Both derived shapes plus render coverage, over the live code and over each mutant.
-const MODULE = { COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts, STATUS_ORDER, SETTLEABLE, TRANSITIONS, transitionsFor, SECTIONS, boardHeadline };
-function checkCoverage(m) { checkColumnCoverage(m); checkTransitionCoverage(m); checkRenderCoverage(m); }
+const MODULE = { COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts, STATUS_ORDER, SETTLEABLE, TRANSITIONS, transitionsFor, SECTIONS, boardHeadline, OPTIONAL_COLUMNS, isBuilt, statusArgs, boardColumns };
+// SCR-26: abandoned tickets are hidden by default and reachable on demand, so the reopen row in the
+// status menu has a card to hang off. Checked on whichever module (real or mutant) is passed in.
+function checkAbandonedCoverage(m) {
+  const flags = (argv) => argv.filter((_, i) => i > 0 && argv[i - 1] === "--status");
+  // Default calls ask for no abandoned and carry no abandoned key.
+  for (const a of [m.listArgs(false), m.listArgs(true), m.boardListArgs()]) {
+    assert(!("abandoned" in a), "no abandoned call by default");
+    for (const argv of Object.values(a)) assert(!flags(argv).includes("abandoned"), "no --status abandoned by default");
+  }
+  // On: exactly one extra call, and the open and done calls are unchanged.
+  for (const [off, on] of [[m.listArgs(false), m.listArgs(false, true)], [m.listArgs(true), m.listArgs(true, true)], [m.boardListArgs(), m.boardListArgs(true)]]) {
+    assert.deepEqual(Object.keys(on).sort(), ["abandoned", "done", "open"], "exactly one extra call");
+    assert.deepEqual(flags(on.abandoned), ["abandoned"], "the extra call asks only for abandoned");
+    assert.deepEqual(on.open, off.open); assert.deepEqual(on.done, off.done);
+    assert(!on.abandoned.includes("--done-since"), "abandoned has no done_at to bound");
+    assert(m.isBuilt(on.abandoned), "the abandoned call passes the builder gate");
+  }
+  const ab = (id, at, extra = {}) => ({ id, status: "abandoned", for: "agent", blocked: false, archived_at: null, done_at: null, updated_at: at, worktree: null, project: { key: "ABN", root: "/abn" }, ...extra });
+  const ts = [ab("B-1", "2026-11-01T00:00:00Z"), ab("B-2", "2026-11-05T00:00:00Z"), ab("B-3", "2026-11-09T00:00:00Z", { archived_at: "2026-11-10T00:00:00Z" }),
+    { ...ab("B-4", null), status: "ready" }];
+  const hidden = m.boardModel(ts, { now: NOW });
+  assert.deepEqual(Object.keys(hidden[0].lanes[0].cells), m.BOARD_COLUMNS, "no abandoned cell by default");
+  assert.deepEqual(hidden[0].lanes[0].cells.ready.map((x) => x.id), ["B-4"]);
+  assert(!JSON.stringify(hidden).includes("B-1"), "abandoned tickets are hidden by default");
+  const shown = m.boardModel(ts, { now: NOW, showAbandoned: true });
+  assert.deepEqual(shown[0].lanes[0].cells.abandoned.map((x) => x.id), ["B-2", "B-1"], "newest first, archived (swept) dropped");
+  // Not counted in the headline or the project count, and an abandoned-only project reads as onlyDone.
+  assert.equal(shown[0].count, 1);
+  assert.equal(m.boardCounts(shown).abandoned, 2);
+  assert.equal(m.boardHeadline(m.boardCounts(shown)), m.boardHeadline(m.boardCounts(hidden)), "abandoned stays out of the headline");
+  assert.equal(m.boardModel([ts[0]], { now: NOW, showAbandoned: true })[0].onlyDone, true);
+  // The reopen row is reachable: one row, running reopen as a human.
+  assert.deepEqual(m.transitionsFor("abandoned"), [{ status: "ready", verb: "reopen" }]);
+  assert.deepEqual(m.statusArgs("SCR-1", m.transitionsFor("abandoned")[0]), ["--json", "--role", "human", "reopen", "SCR-1"]);
+  assert.equal(m.LABELS.abandoned, "Abandoned");
+}
+function checkCoverage(m) { checkColumnCoverage(m); checkTransitionCoverage(m); checkRenderCoverage(m); checkAbandonedCoverage(m); }
 checkCoverage(MODULE);
 
 // Mutants: each one adds a fifth column to the table and, except for the control, hands one of the
@@ -363,6 +399,11 @@ const ADD_PARKED_STATUS = [
   'const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned"];',
   'const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned", "parked"];'];
 const MUTANTS = {
+  // Abandoned tickets shown without the toggle: the filter on boardModel is dropped.
+  abandoned_shown_without_toggle: { expect: "fail", edits: [["const columns = boardColumns(showAbandoned);", "const columns = boardColumns(true);"]] },
+  // The abandoned list call sent on every poll.
+  abandoned_call_always_sent: { expect: "fail", edits: [["...(showAbandoned ? { abandoned: build([\"--json\", \"list\", \"--all-projects\"", "...(true ? { abandoned: build([\"--json\", \"list\", \"--all-projects\""]] },
+  abandoned_counted_in_project: { expect: "fail", edits: [["if (!ABANDONED_STATUSES.includes(t.status)) p.count++;", "p.count++;"]] },
   // The point of the change: the table is the only edit a new column needs.
   add_column_to_table: { expect: "pass", edits: [ADD_PARKED] },
   // A lane's cells written out by hand again. Before SCR-20 this died in renderBoard with
@@ -472,6 +513,7 @@ const MUTANTS = {
 // mark-<status>.svg files exist for every column, and the colour table in mark() names each status.
 {
   const cols = COLUMNS.map(([s]) => s);
+  cols.push(...OPTIONAL_COLUMNS.map(([s]) => s));
   for (const s of cols)
     assert(existsSync(new URL(`./mark-${s}.svg`, import.meta.url)), `mark-${s}.svg exists beside main.js`);
   assert(existsSync(new URL("./mark-blocked.svg", import.meta.url)), "mark-blocked.svg exists beside main.js");
