@@ -20,8 +20,8 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 
 - Status marks (`mark-<kind>.svg`, tinted): active `theme().working`, ready `idle`, draft `dim`, done `done`, and any blocked ticket uses the blocked mark in `theme().blocked`. Human tickets get a "human" chip in `working`.
 - Polls every 3 s in the active space's folder (focused pane `cwd`, else the space folder) on that space's machine. Changing space or scope parks that context's data and restores it. An open detail reloads on each poll.
-- Clicks: row or card opens the detail; section header and project header fold; scope button toggles; chips filter; "+N more" expands a cell past 5 cards ("Show less" collapses); "tui" runs `terminal.open` with argv `[scree, "tui"]`, `place: "right"`.
-- Fold, scope and filter state survive restarts through `localStorage` (keys `allWorktrees`, `folded`, `boardFolded`, `boardExpanded`, `filterFor`, `blockedOnly`).
+- Clicks: row or card opens the detail; section header folds, project header toggles its fold (a stored choice beats the all-done default below); scope button toggles; chips filter; "+N more" expands a cell past 5 cards ("Show less" collapses); "tui" runs `terminal.open` with argv `[scree, "tui"]`, `place: "right"`.
+- Fold, scope and filter state survive restarts through `localStorage` (keys `allWorktrees`, `folded`, `boardFolded`, `boardExpanded`, `filterFor`, `blockedOnly`). `boardFolded` holds explicit user choices only: a key present as a boolean wins over the data, a missing key means a project whose visible tickets are all done (`onlyDone` in `boardModel`) starts folded.
 - Errors: "scree not found on <machine>" when no binary answers, "Not in a scree project", otherwise scree's message. Empty: "No tickets" or "No tickets match the filters".
 - No keys. Agent statuses do not apply.
 
@@ -48,7 +48,7 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 - `herdr-app check mods/scree` passes and `herdr-app status` shows no errors.
 - `node scree.test.mjs` prints `ok`.
 - In a repo with tickets, the Scree button opens the panel with the right sections and counts; the scope button changes the list.
-- The Board button shows every project with its columns; the project header folds.
+- The Board button shows every project with its columns; the project header folds, and a project whose visible tickets are all done starts folded until clicked.
 - A row click shows the detail with criteria evidence; Back returns.
 - "tui" opens a pane running `scree tui`.
 - Stopping `scree` from `PATH` shows "scree not found".

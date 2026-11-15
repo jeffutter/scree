@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, boardListArgs, boardModel, boardCounts, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
-  `${src.slice(from, to)}; return { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, boardListArgs, boardModel, boardCounts, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT };`)();
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
+  `${src.slice(from, to)}; return { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT };`)();
 
 assert.deepEqual(STATUS_ORDER, ["active", "ready", "draft", "done", "abandoned"]);
 
@@ -137,6 +137,19 @@ assert.equal(cellVisible(many.slice(0, CELL_LIMIT), false).hidden, 0);
 // Done cells list newest first.
 const dn = [1, 3, 2].map((d) => ({ id: `D-${d}`, status: "done", done_at: new Date(NOW - d * 3600000).toISOString(), project: { key: "Q", root: "/q" } }));
 assert.deepEqual(boardModel(dn, { now: NOW })[0].lanes[0].cells.done.map((x) => x.id), ["D-1", "D-2", "D-3"]);
+
+// A project whose visible tickets are all done folds by default; an explicit click wins.
+assert.deepEqual(OPEN_STATUSES, ["draft", "ready", "active"]);
+assert.equal(boardModel(tickets, { now: NOW }).find((p) => p.key === "AAA").onlyDone, false, "mixed project is not onlyDone");
+assert.equal(boardModel(dn, { now: NOW })[0].onlyDone, true, "recent done tickets only");
+const mix = [bt("M-1", "ready", "MIX", null, { for: "human" }), bt("M-2", "done", "MIX", null, { done_at: "2026-11-10T00:00:00Z" })];
+assert.equal(boardModel(mix, { now: NOW })[0].onlyDone, false, "open ticket visible: not onlyDone");
+assert.equal(boardModel(mix, { now: NOW, forRole: "agent" })[0].onlyDone, true, "filters drop the open ticket: onlyDone");
+assert.equal(projectFolded({}, { key: "A", onlyDone: true }), true, "no stored choice follows an all-done default");
+assert.equal(projectFolded({}, { key: "A", onlyDone: false }), false, "no stored choice follows a mixed default");
+assert.equal(projectFolded({ A: false }, { key: "A", onlyDone: true }), false, "stored expand beats the all-done default");
+assert.equal(projectFolded({ A: true }, { key: "A", onlyDone: false }), true, "stored fold beats the expanded default");
+assert.equal(projectFolded(undefined, { key: "A", onlyDone: true }), true, "missing store reads as no choice");
 
 // Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
 // inside the try), so an open detail updates on poll.

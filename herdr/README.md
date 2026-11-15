@@ -53,7 +53,7 @@ Link the folder per file (`recursive = true`) so Herdr can write its own files b
 ## Use
 
 - Click the Scree button for the panel. Section headers fold; "This worktree" / "All worktrees" switches scope; the chips filter by All, Agent, Human and Blocked only. Click a row for the ticket detail, "Back" returns.
-- Click the Board button for the board. Click a project header to fold it, a card to open its detail, "+N more" to expand a long cell.
+- Click the Board button for the board. A project whose visible tickets are all done starts folded; one with any open ticket starts expanded. Clicking a project header pins your choice either way, and it survives polls and restarts. Click a card to open its detail, "+N more" to expand a long cell.
 - "tui" (panel header) and "Open in scree tui" (detail) open `scree tui` in a new pane on the right, for a space on this machine.
 - The mod polls every 3 s; no server is involved.
 

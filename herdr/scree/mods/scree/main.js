@@ -117,15 +117,16 @@ function detailModel(show) {
 
 // Board columns, left to right.
 const BOARD_COLUMNS = ["draft", "ready", "active", "done"];
+// The columns that mean "not finished": the open board call and the all-done check share this.
+const OPEN_STATUSES = BOARD_COLUMNS.filter((c) => c !== "done");
 
 // The board's two calls: every Project and Worktree (`--all-projects` already means both; it
 // conflicts with `--all-worktrees`). The default limit is 50, so pass a large one. Open and done
 // are separate so accumulated done tickets cannot crowd open ones out of the limit. Done is
 // ordered by position, so boardModel cuts it to the last days client-side.
 function boardListArgs() {
-  const open = BOARD_COLUMNS.filter((s) => s !== "done");
   return {
-    open: ["--json", "list", "--all-projects", ...open.flatMap((s) => ["--status", s]), "--limit", "1000"],
+    open: ["--json", "list", "--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "1000"],
     done: ["--json", "list", "--all-projects", "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "1000"],
   };
 }
@@ -139,10 +140,12 @@ function worktreeLabel(path) {
 // "this computer" for the local machine, else the machine name.
 function machineLabel(on) { return on ? String(on) : "this computer"; }
 
-// Projects as swimlanes: [{key, root, name, count, lanes: [{worktree, label, cells: {draft, ready, active, done}}]}].
+// Projects as swimlanes: [{key, root, name, count, onlyDone, lanes: [{worktree, label, cells: {draft, ready, active, done}}]}].
 // Filters apply first; abandoned, archived and done older than doneDays are dropped. Projects sort
 // by key with LOCAL (no root) last; lanes list the root checkout first, then worktrees by path.
 // Tickets keep list order (position) inside a cell. Empty lanes and projects are omitted.
+// onlyDone is true when every visible ticket in the project is done; the board folds such a
+// project by default (see projectFolded). It reflects the filters, so it can flip per view.
 function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.now(), doneDays = DONE_DAYS } = {}) {
   const cutoff = now - doneDays * 86400000;
   const projects = new Map();
@@ -165,7 +168,10 @@ function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.
     l.cells.done.sort((a, b) => Date.parse(b.done_at ?? "") - Date.parse(a.done_at ?? ""));
   const byPath = (a, b) => String(a.worktree).localeCompare(String(b.worktree));
   return [...projects.values()]
-    .map((p) => ({ ...p, lanes: [...p.lanes.values()].sort((a, b) => (a.worktree === null ? -1 : b.worktree === null ? 1 : byPath(a, b))) }))
+    .map((p) => {
+      const lanes = [...p.lanes.values()].sort((a, b) => (a.worktree === null ? -1 : b.worktree === null ? 1 : byPath(a, b)));
+      return { ...p, lanes, onlyDone: lanes.every((l) => OPEN_STATUSES.every((c) => !l.cells[c].length)) };
+    })
     .sort((a, b) => (a.root === null) - (b.root === null) || a.key.localeCompare(b.key));
 }
 
@@ -182,6 +188,13 @@ function boardCounts(model) {
   const out = { draft: 0, ready: 0, active: 0, done: 0 };
   for (const p of model) for (const l of p.lanes) for (const c of BOARD_COLUMNS) out[c] += l.cells[c].length;
   return out;
+}
+
+// Whether a project renders folded on the board. A stored boolean is an explicit user choice and
+// always wins; a missing key means follow the data: folded when every visible ticket is done.
+function projectFolded(folded, project) {
+  const v = folded?.[project.key];
+  return v === undefined ? Boolean(project.onlyDone) : Boolean(v);
 }
 // --- pure end ---
 
@@ -346,8 +359,10 @@ export default class Scree extends View {
     cx.notify();
   }
 
-  toggleBoardFold(key, cx) {
-    this.boardFolded = { ...this.boardFolded, [key]: !this.boardFolded[key] };
+  // Toggling stores the resolved state's opposite, so the first click on a project folded by its
+  // all-done default expands it instead of re-recording "folded".
+  toggleBoardFold(p, cx) {
+    this.boardFolded = { ...this.boardFolded, [p.key]: !projectFolded(this.boardFolded, p) };
     store.set("boardFolded", this.boardFolded);
     cx.notify();
   }
@@ -418,9 +433,9 @@ export default class Scree extends View {
       .child(div().w(90).flex_none())
       .children(BOARD_COLUMNS.map((c) => div().w(COL_W).flex_none().child(`${LABELS[c]} (${counts[c]})`)));
     const lanes = model.flatMap((p) => {
-      const folded = Boolean(this.boardFolded[p.key]);
+      const folded = projectFolded(this.boardFolded, p);
       const head = h_flex().id(`scree-proj-${p.key}`).px(10).py(5).gap(6).items_center().cursor_pointer().bg(t.hover).text_size(12)
-        .on_click((_e, cx) => this.toggleBoardFold(p.key, cx))
+        .on_click((_e, cx) => this.toggleBoardFold(p, cx))
         .child(div().w(10).flex_none().child(folded ? "\u25b8" : "\u25be"))
         .child(div().font_weight(600).child(p.key))
         .child(div().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${p.root ?? "local"} (${p.count})`));
