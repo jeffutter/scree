@@ -36,13 +36,7 @@ pub fn scope_args(mode: ScopeMode, project_root: Option<&Path>) -> ScopeArgs {
 /// Every status, no practical limit (the CLI default of 50 would cut a board).
 pub fn list_args(spec: LoadSpec, project_root: Option<&Path>) -> ListArgs {
     ListArgs {
-        status: vec![
-            Status::Draft,
-            Status::Ready,
-            Status::Active,
-            Status::Done,
-            Status::Abandoned,
-        ],
+        status: Status::ALL.to_vec(),
         limit: Some(100_000),
         scope: scope_args(spec.mode, project_root),
         archived: spec.show_archived,

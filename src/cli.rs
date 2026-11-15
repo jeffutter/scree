@@ -54,6 +54,12 @@ impl ForWho {
     }
 }
 
+/// The life of a Ticket (GLOSSARY.md: Status). This enum is the one
+/// declaration of the set: the board's columns, the lifecycle guards, and every
+/// `status IN (...)` query are derived from it, so adding or reclassifying a
+/// status is one edit here plus the migration that allows it. The database
+/// constrains the same five names in `src/migrations/001_init.sql`; the test
+/// beside [`Status::ALL`] fails if the two ever disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Status {
     Draft,
@@ -64,6 +70,24 @@ pub enum Status {
 }
 
 impl Status {
+    /// Every status, in the order the TUI board lays them out as columns.
+    pub const ALL: [Status; 5] = [
+        Status::Draft,
+        Status::Ready,
+        Status::Active,
+        Status::Done,
+        Status::Abandoned,
+    ];
+
+    /// The unfinished statuses: a ticket in one of them is still work to do.
+    /// These are what a bare `scree list` returns, what holds a parent open,
+    /// and what a closed Worktree sweeps to abandoned.
+    pub const OPEN: [Status; 3] = [Status::Draft, Status::Ready, Status::Active];
+
+    /// The settled statuses: [`Status::OPEN`]'s complement. A ticket here needs
+    /// no work left, whether or not it got done.
+    pub const SETTLED: [Status; 2] = [Status::Done, Status::Abandoned];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Status::Draft => "draft",
@@ -72,6 +96,29 @@ impl Status {
             Status::Done => "done",
             Status::Abandoned => "abandoned",
         }
+    }
+
+    /// Whether a ticket carrying this status string is unfinished. Tickets hold
+    /// their status as a `String` (`src/model.rs`), so the guard takes text
+    /// rather than a parsed `Status`.
+    pub fn is_open(status: &str) -> bool {
+        Self::OPEN.iter().any(|s| s.as_str() == status)
+    }
+
+    /// Whether a ticket carrying this status string needs no work left. The
+    /// complement of [`Status::is_open`] over the five names, so a settled
+    /// ticket is one that neither the board's open columns nor a sweep counts.
+    pub fn is_settled(status: &str) -> bool {
+        Self::SETTLED.iter().any(|s| s.as_str() == status)
+    }
+
+    /// The statuses as SQL text: `'draft', 'ready', 'active'`. Fills the
+    /// `IN (...)` of a query, so no query spells out the set itself.
+    pub(crate) fn sql_list(list: &[Status]) -> String {
+        list.iter()
+            .map(|s| format!("'{}'", s.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -344,4 +391,86 @@ pub enum Command {
     Archive { id: String },
     /// Undo archive; a subtask of an archived parent is refused
     Unarchive { id: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The status names the database allows, read out of the migration that
+    /// created the table. Migrations are history, so `001_init.sql` holds the
+    /// schema's own list; a later migration that changed it would have to be
+    /// named here too.
+    fn schema_statuses() -> Vec<String> {
+        let sql = include_str!("migrations/001_init.sql");
+        let after = sql
+            .split_once("CHECK (status IN (")
+            .expect("001_init.sql declares a status CHECK")
+            .1;
+        let list = after.split_once(')').expect("the status CHECK closes").0;
+        list.split(',')
+            .map(|s| s.trim().trim_matches('\'').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn all_names_the_statuses_the_schema_allows() {
+        assert_eq!(
+            Status::ALL.map(Status::as_str).to_vec(),
+            schema_statuses(),
+            "the status set is declared twice"
+        );
+    }
+
+    #[test]
+    fn open_and_settled_partition_all() {
+        for s in Status::ALL {
+            assert!(
+                Status::OPEN.contains(&s) != Status::SETTLED.contains(&s),
+                "{:?} is in neither half or both",
+                s
+            );
+        }
+        assert_eq!(
+            Status::OPEN.len() + Status::SETTLED.len(),
+            Status::ALL.len()
+        );
+    }
+
+    #[test]
+    fn the_unfinished_set_is_pinned_to_its_names() {
+        // Changing which statuses count as unfinished means every consumer of
+        // `scree list`, the lifecycle guards and the sweep needs a decision, so
+        // it has to fail a test first.
+        assert_eq!(
+            Status::OPEN.map(Status::as_str),
+            ["draft", "ready", "active"]
+        );
+        assert_eq!(Status::SETTLED.map(Status::as_str), ["done", "abandoned"]);
+        assert_eq!(
+            Status::sql_list(&Status::OPEN),
+            "'draft', 'ready', 'active'"
+        );
+        assert_eq!(Status::sql_list(&Status::SETTLED), "'done', 'abandoned'");
+    }
+
+    #[test]
+    fn is_open_and_is_settled_follow_the_declaration() {
+        for s in Status::ALL {
+            assert_eq!(
+                Status::is_open(s.as_str()),
+                Status::OPEN.contains(&s),
+                "{:?} misclassified as unfinished",
+                s
+            );
+            assert_eq!(
+                Status::is_settled(s.as_str()),
+                Status::SETTLED.contains(&s),
+                "{:?} misclassified as settled",
+                s
+            );
+        }
+        assert!(!Status::is_open("stuck"));
+        assert!(!Status::is_settled("stuck"));
+    }
 }

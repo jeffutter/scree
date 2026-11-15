@@ -99,6 +99,7 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Status;
 
     fn env(vars: &[(&str, &str)], tty: bool) -> Env {
         Env {
@@ -111,27 +112,31 @@ mod tests {
         }
     }
 
-    const STATUSES: [(&str, bool, bool); 7] = [
-        ("draft", false, false),
-        ("ready", false, false),
-        ("active", false, false),
-        ("done", false, false),
-        ("abandoned", false, false),
-        ("ready", true, false),
-        ("ready", false, true),
-    ];
+    /// Every status with neither flag set, plus the two `ready` rows that carry
+    /// the blocked and available styles. The first five come from
+    /// [`Status::ALL`], so a status added to the domain cannot slip past the
+    /// icon test.
+    fn statuses() -> Vec<(&'static str, bool, bool)> {
+        let mut v: Vec<_> = Status::ALL
+            .iter()
+            .map(|s| (s.as_str(), false, false))
+            .collect();
+        v.extend([("ready", true, false), ("ready", false, true)]);
+        v
+    }
 
     #[test]
     fn icons_are_distinct_in_both_modes() {
         for unicode in [true, false] {
             let t = Theme::new(true, unicode);
-            let mut icons: Vec<_> = STATUSES
+            let all = statuses();
+            let mut icons: Vec<_> = all
                 .iter()
                 .map(|(s, b, a)| t.status_style(s, *b, *a).0)
                 .collect();
             icons.sort();
             icons.dedup();
-            assert_eq!(icons.len(), STATUSES.len(), "unicode={unicode}");
+            assert_eq!(icons.len(), all.len(), "unicode={unicode}");
         }
     }
 
@@ -151,7 +156,7 @@ mod tests {
     #[test]
     fn no_color_yields_no_colors() {
         let t = Theme::new(false, true);
-        for (s, b, a) in STATUSES {
+        for (s, b, a) in statuses() {
             let st = t.status_style(s, b, a).1;
             assert_eq!((st.fg, st.bg), (None, None));
         }

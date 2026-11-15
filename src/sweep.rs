@@ -12,7 +12,7 @@ use rusqlite::{Connection, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::ScopeArgs;
+use crate::cli::{ScopeArgs, Status};
 use crate::db;
 use crate::error::Result;
 use crate::identity::Env;
@@ -138,8 +138,8 @@ fn close_worktree(conn: &Connection, project_id: i64, path: &str, dry: bool) -> 
             |r| r.get(0),
         )?)
     };
-    let abandoned = count("'draft', 'ready', 'active'")?;
-    let archived = count("'done', 'abandoned'")?;
+    let abandoned = count(&Status::sql_list(&Status::OPEN))?;
+    let archived = count(&Status::sql_list(&Status::SETTLED))?;
     if dry {
         return Ok((archived, abandoned));
     }
@@ -148,7 +148,8 @@ fn close_worktree(conn: &Connection, project_id: i64, path: &str, dry: bool) -> 
             "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
              SELECT id, 'scree', NULL, 'agent', ?3, {NOW} FROM tickets
              WHERE project_id = ?1 AND worktree_path = ?2 AND archived_at IS NULL
-               AND status IN ('draft', 'ready', 'active')"
+               AND status IN ({})",
+            Status::sql_list(&Status::OPEN),
         ),
         params![
             project_id,
@@ -161,7 +162,8 @@ fn close_worktree(conn: &Connection, project_id: i64, path: &str, dry: bool) -> 
             "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
                 claimed_by_session = NULL, updated_at = {NOW}, archived_at = {NOW}
              WHERE project_id = ?1 AND worktree_path = ?2 AND archived_at IS NULL
-               AND status IN ('draft', 'ready', 'active')"
+               AND status IN ({})",
+            Status::sql_list(&Status::OPEN),
         ),
         params![project_id, path],
     )?;

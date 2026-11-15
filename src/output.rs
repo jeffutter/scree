@@ -2,6 +2,7 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
+use crate::cli::Status;
 use crate::error::{Error, Result};
 use crate::identity::{Env, Role};
 use crate::model::{ListResult, TicketDetail};
@@ -61,7 +62,7 @@ pub fn render_text_list(list: &ListResult, color: bool) -> String {
         if t.for_who == "human" {
             line.push_str(" [human]");
         }
-        let dim = color && (t.status == "done" || t.status == "abandoned");
+        let dim = color && Status::is_settled(&t.status);
         if dim {
             let _ = writeln!(out, "\x1b[2m{}\x1b[0m", line.trim_end());
         } else {

@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
-use crate::cli::{ForWho, ListArgs, NewStatus, NextArgs, ScopeArgs};
+use crate::cli::{ForWho, ListArgs, NewStatus, NextArgs, ScopeArgs, Status};
 use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
@@ -21,39 +21,42 @@ use crate::scope::{self, Scope, path_str};
 const ID_EXPR: &str =
     "p.key || '-' || CASE WHEN pt.id IS NULL THEN t.number ELSE pt.number || '.' || t.number END";
 
-/// SQL for a ticket (alias `t`) with a blocker that is not done. An
-/// abandoned blocker still blocks. A macro so `concat!` can build BLOCKED
-/// from it.
-macro_rules! open_blocker {
-    () => {
-        "EXISTS (SELECT 1 FROM dependencies d
+/// SQL for a ticket (alias `t`) with a blocker that is not done. An abandoned
+/// blocker still blocks.
+const OPEN_BLOCKER_SQL: &str = "EXISTS (SELECT 1 FROM dependencies d
     JOIN tickets b ON b.id = d.blocked_by_id
-    WHERE d.ticket_id = t.id AND b.status <> 'done')"
-    };
-}
+    WHERE d.ticket_id = t.id AND b.status <> 'done')";
 
 /// SQL for a parent (alias `t`) with a subtask that is not settled.
-macro_rules! open_subtask {
-    () => {
+fn open_subtask_sql() -> String {
+    format!(
         "EXISTS (SELECT 1 FROM tickets c
-    WHERE c.parent_id = t.id AND c.status IN ('draft', 'ready', 'active'))"
-    };
+    WHERE c.parent_id = t.id AND c.status IN ({}))",
+        Status::sql_list(&Status::OPEN)
+    )
 }
 
 /// Blocked, for a ticket aliased `t`: an unfinished blocker or an unsettled
 /// subtask. `start`, `next`, `list` and `show` all use this, so they cannot
 /// disagree about what is Available.
-const BLOCKED: &str = concat!("(", open_blocker!(), " OR ", open_subtask!(), ")");
+fn blocked_sql() -> String {
+    format!("({OPEN_BLOCKER_SQL} OR {})", open_subtask_sql())
+}
 
 /// Available, for a ticket aliased `t`, apart from being blocked: ready,
 /// not archived, and either top-level or the first unsettled sibling by
 /// position among its parent's subtasks.
-const READY_FIRST: &str = "t.status = 'ready' AND t.archived_at IS NULL
+fn ready_first_sql() -> String {
+    format!(
+        "t.status = 'ready' AND t.archived_at IS NULL
     AND (t.parent_id IS NULL OR t.id = (
         SELECT c.id FROM tickets c
         WHERE c.parent_id = t.parent_id AND c.archived_at IS NULL
-          AND c.status IN ('draft', 'ready', 'active')
-        ORDER BY c.position, c.number LIMIT 1))";
+          AND c.status IN ({})
+        ORDER BY c.position, c.number LIMIT 1))",
+        Status::sql_list(&Status::OPEN)
+    )
+}
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
@@ -142,7 +145,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
                     "{pid} is a subtask; tickets nest two levels deep"
                 )));
             }
-            if matches!(status.as_str(), "done" | "abandoned") {
+            if Status::is_settled(&status) {
                 return Err(Error::Refused(format!(
                     "cannot add a subtask to {pid}, which is {status}"
                 )));
@@ -436,7 +439,7 @@ pub fn transition(
                 "cannot {what} a ticket that is {status}"
             )))
         };
-        let open = matches!(status.as_str(), "draft" | "ready" | "active");
+        let open = Status::is_open(&status);
         match action {
             Action::Ready => {
                 if status != "draft" {
@@ -457,7 +460,7 @@ pub fn transition(
                     return refuse("start");
                 }
                 let blocked: bool = tx.query_row(
-                    &format!("SELECT {BLOCKED} FROM tickets t WHERE t.id = ?1"),
+                    &format!("SELECT {} FROM tickets t WHERE t.id = ?1", blocked_sql()),
                     [row],
                     |r| r.get(0),
                 )?;
@@ -465,7 +468,10 @@ pub fn transition(
                     return Err(Error::Refused(format!("{id} is blocked and not Available")));
                 }
                 let first: bool = tx.query_row(
-                    &format!("SELECT {READY_FIRST} FROM tickets t WHERE t.id = ?1"),
+                    &format!(
+                        "SELECT {} FROM tickets t WHERE t.id = ?1",
+                        ready_first_sql()
+                    ),
                     [row],
                     |r| r.get(0),
                 )?;
@@ -496,8 +502,11 @@ pub fn transition(
                     return refuse("finish");
                 }
                 let open_children: i64 = tx.query_row(
-                    "SELECT count(*) FROM tickets
-                     WHERE parent_id = ?1 AND status IN ('draft', 'ready', 'active')",
+                    &format!(
+                        "SELECT count(*) FROM tickets
+                     WHERE parent_id = ?1 AND status IN ({})",
+                        Status::sql_list(&Status::OPEN)
+                    ),
                     [row],
                     |r| r.get(0),
                 )?;
@@ -537,10 +546,11 @@ pub fn transition(
                     params![row, who.author, who.session, who.role.as_str(), reason],
                 )?;
                 let children: Vec<i64> = tx
-                    .prepare(
+                    .prepare(&format!(
                         "SELECT id FROM tickets
-                         WHERE parent_id = ?1 AND status IN ('draft', 'ready', 'active')",
-                    )?
+                         WHERE parent_id = ?1 AND status IN ({})",
+                        Status::sql_list(&Status::OPEN)
+                    ))?
                     .query_map([row], |r| r.get(0))?
                     .collect::<std::result::Result<_, _>>()?;
                 let parent_id = display_id(tx, row)?;
@@ -581,7 +591,7 @@ pub fn transition(
                     )
                     .optional()?;
                 if let Some(ps) = parent_status
-                    && matches!(ps.as_str(), "done" | "abandoned")
+                    && Status::is_settled(&ps)
                 {
                     return Err(Error::Refused(format!(
                         "cannot reopen {id}: its parent is {ps}; reopen the parent first"
@@ -986,7 +996,7 @@ pub fn list(
         return Ok(ListResult { tickets: vec![] });
     };
     let statuses: Vec<&str> = if a.status.is_empty() {
-        vec!["draft", "ready", "active"]
+        Status::OPEN.iter().copied().map(Status::as_str).collect()
     } else {
         a.status.iter().map(|s| s.as_str()).collect()
     };
@@ -1015,10 +1025,10 @@ pub fn list(
         args.push(Sql::Text(done_since_bound(conn, when)?));
     }
     if a.blocked {
-        conds.push(BLOCKED.into());
+        conds.push(blocked_sql());
     }
     if a.available {
-        conds.push(format!("{READY_FIRST} AND NOT {BLOCKED}"));
+        conds.push(format!("{} AND NOT {}", ready_first_sql(), blocked_sql()));
     }
     if let Some(parent) = &a.parent {
         conds.push("t.parent_id = ?".into());
@@ -1051,11 +1061,11 @@ fn pool_conds(
     let Some((mut conds, mut args)) = scope_conds(conn, cwd, scope)? else {
         return Ok(None);
     };
-    conds.push(READY_FIRST.into());
+    conds.push(ready_first_sql());
     conds.push(if blocked {
-        BLOCKED.into()
+        blocked_sql()
     } else {
-        format!("NOT {BLOCKED}")
+        format!("NOT {}", blocked_sql())
     });
     conds.push("t.\"for\" = ?".into());
     args.push(Sql::Text(for_who.as_str().into()));
@@ -1172,7 +1182,7 @@ pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<TicketDe
                 [row],
                 |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?, x.get(3)?)),
             )?;
-        if matches!(status.as_str(), "done" | "abandoned") {
+        if Status::is_settled(&status) {
             return Err(Error::Refused(format!(
                 "cannot reorder a ticket that is {status}"
             )));
@@ -1453,6 +1463,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
     )?;
 
     // Blockers: unfinished dependencies, then unsettled subtasks.
+    let open_sql = Status::sql_list(&Status::OPEN);
     let blocked_by: Vec<Blocker> = conn
         .prepare(&format!(
             "SELECT * FROM (
@@ -1465,7 +1476,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
                SELECT {ID_EXPR}, t.title, t.status, t.worktree_path, 1, t.position, t.number
                FROM tickets t JOIN projects p ON p.id = t.project_id
                JOIN tickets pt ON pt.id = t.parent_id
-               WHERE t.parent_id = ?1 AND t.status IN ('draft', 'ready', 'active')
+               WHERE t.parent_id = ?1 AND t.status IN ({open_sql})
              ) ORDER BY k, o1, o2"
         ))?
         .query_map([id], |r| {
@@ -1495,7 +1506,11 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
 
     let blocked = !blocked_by.is_empty();
     let available: bool = conn.query_row(
-        &format!("SELECT {READY_FIRST} AND NOT {BLOCKED} FROM tickets t WHERE t.id = ?1"),
+        &format!(
+            "SELECT {} AND NOT {} FROM tickets t WHERE t.id = ?1",
+            ready_first_sql(),
+            blocked_sql()
+        ),
         [id],
         |r| r.get(0),
     )?;
@@ -1601,5 +1616,35 @@ mod tests {
             parse_id("SCR-99999999999999999999"),
             Err(Error::Usage(_))
         ));
+    }
+
+    /// The status names inside the first `IN (...)` of a SQL fragment.
+    fn in_list(sql: &str) -> Vec<String> {
+        let after = sql.split_once("IN (").expect("fragment has an IN list").1;
+        let list = after.split_once(')').expect("the IN list closes").0;
+        list.split(',')
+            .map(|s| s.trim().trim_matches('\'').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn status_sql_comes_from_the_declaration() {
+        let open: Vec<String> = Status::OPEN
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect();
+        for sql in [blocked_sql(), ready_first_sql(), open_subtask_sql()] {
+            assert_eq!(in_list(&sql), open, "{sql}");
+        }
+        // What the guards call unfinished must be what BLOCKED selects, so a
+        // sixth status cannot agree with one and not the other.
+        for s in Status::ALL {
+            assert_eq!(
+                Status::is_open(s.as_str()),
+                in_list(&blocked_sql()).iter().any(|n| n == s.as_str()),
+                "{:?} disagrees between is_open and the SQL BLOCKED uses",
+                s
+            );
+        }
     }
 }

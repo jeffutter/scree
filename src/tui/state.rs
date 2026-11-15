@@ -2,18 +2,22 @@
 //! terminal or the database, so key handling is tested with scripted events.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::theme::Theme;
 use super::widgets::{Prompt, PromptOutcome};
+use crate::cli::Status;
 use crate::model::{Ticket, TicketDetail};
 use crate::scope::Scope;
 
-/// Board columns, left to right.
-pub const STATUSES: [&str; 5] = ["draft", "ready", "active", "done", "abandoned"];
+/// Board columns, left to right. Derived from [`Status::ALL`], so the board
+/// cannot show a column the domain does not have.
+pub static STATUSES: LazyLock<[&'static str; Status::ALL.len()]> =
+    LazyLock::new(|| Status::ALL.map(Status::as_str));
 /// Index of the first closed column (done); it and later ones hide together.
-const FIRST_CLOSED: usize = 3;
+const FIRST_CLOSED: usize = Status::OPEN.len();
 
 /// How wide the board reads: this Worktree, its whole Project, or every Project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,7 +173,7 @@ pub type Offer = (&'static str, &'static str, Lifecycle);
 /// The single source of truth for which lifecycle keys apply to a ticket:
 /// the footer lists them and the key handler ignores the rest.
 pub fn allowed(status: &str, archived: bool) -> Vec<Offer> {
-    let open = matches!(status, "draft" | "ready" | "active");
+    let open = Status::is_open(status);
     let mut v = vec![];
     match status {
         "draft" => v.push(("r", "ready", Lifecycle::Ready)),
@@ -1069,7 +1073,7 @@ fn reorder_key(state: &mut State, up: bool) -> Vec<Effect> {
     let Some((id, status, _)) = state.acted_ticket() else {
         return vec![];
     };
-    if matches!(status.as_str(), "done" | "abandoned") {
+    if Status::is_settled(&status) {
         state.error = Some(format!("cannot reorder a ticket that is {status}"));
         return vec![];
     }

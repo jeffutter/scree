@@ -1340,7 +1340,7 @@ mod tests {
         assert!(rows[0].contains("all Projects"));
         assert!(rows[0].contains("human/human"));
         assert!(rows[0].contains("0 tickets"));
-        for st in STATUSES {
+        for st in STATUSES.iter().copied() {
             assert!(rows[1].contains(st), "{st}");
         }
         assert!(!rows[1].contains("(0)"));
