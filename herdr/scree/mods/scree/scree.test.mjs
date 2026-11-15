@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "addArgs", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, addArgs, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -106,7 +106,7 @@ for (const a of [showArgs("X"), listArgs(false).open, listArgs(true).done, board
   assert(isBuilt(a), `a read builder's output is built: ${a.join(" ")}`);
 for (const a of [
   statusArgs("SCR-1", { status: "active", verb: "start" }),
-  editArgs("SCR-1", { title: "T" }),
+  editArgs({ id: "SCR-1", title: "S" }, { title: "T" }),
   addArgs({ title: "New" }, {}),
 ]) assert(isBuilt(a), `a write builder's output is built: ${a.join(" ")}`);
 for (const a of [["edit", "SCR-1", "--status", "x"], ["--json", "comment", "SCR-1", "hi"], ["--json", "--role", "human", "done", "SCR-1"], []])
@@ -151,16 +151,27 @@ assert.equal(statusLabel("ready"), "Ready", "a column's label wins over capitali
 for (const argv of [
   statusArgs("SCR-1", { status: "active", verb: "start" }),
   statusArgs("SCR-1", { status: "abandoned", verb: "abandon" }),
-  editArgs("SCR-1", { title: "T", description: "D", plan: "P", for: "human" }),
+  editArgs({ id: "SCR-1", title: "S", for: "agent" }, { title: "T", description: "D", plan: "P", for: "human" }),
   addArgs({ title: "N", criteria: ["a", "b"], status: "ready", for: "agent" }, { parent: "SCR-2" }),
 ]) assert.deepEqual(argv.slice(0, 3), ["--json", "--role", "human"], argv.join(" "));
 assert.deepEqual(WRITE_FLAGS, ["--json", "--role", "human"]);
 
 // Builders pass only what the form holds, and never a bare "-" (which means stdin to scree).
-assert.deepEqual(editArgs("SCR-1", {}), ["--json", "--role", "human", "edit", "SCR-1"]);
-assert.deepEqual(editArgs("SCR-1", { description: "" }), ["--json", "--role", "human", "edit", "SCR-1"]);
-assert.deepEqual(editArgs("SCR-1", { title: "A", for: "human" }), ["--json", "--role", "human", "edit", "SCR-1", "--title", "A", "--for", "human"]);
-assert(!editArgs("SCR-1", { title: "A" }).includes("--status"), "edit has no --status: a change is a transition");
+const T = { id: "SCR-1", title: "Old", description: "D", plan: "", for: "agent" };
+const EDIT = ["--json", "--role", "human", "edit", "SCR-1"];
+assert.equal(editArgs(T, {}), null, "nothing given: nothing to run");
+assert.equal(editArgs(T, { title: "Old", description: "D", plan: "", for: "agent" }), null, "an unchanged form runs nothing");
+assert.deepEqual(editArgs(T, { title: "New" }), [...EDIT, "--title", "New"]);
+assert.deepEqual(editArgs(T, { title: "A", description: "E", plan: "P", for: "human" }),
+  [...EDIT, "--title", "A", "--description", "E", "--plan", "P", "--for", "human"], "changed flags only, in order");
+assert.deepEqual(editArgs(T, { title: "Old", description: "" }), [...EDIT, "--description", ""], "a cleared description is sent as empty");
+assert.deepEqual(editArgs({ ...T, description: undefined }, { description: "" }), null, "a missing description equals empty");
+assert.deepEqual(editArgs(T, { plan: "-" }), [...EDIT, "--plan", " "], "a lone dash becomes a space");
+assert(isBuilt(editArgs(T, { title: "N" })), "editArgs output is built");
+assert(!editArgs(T, { title: "A" }).includes("--status"), "edit has no --status: a change is a transition");
+assert.deepEqual(editErrors({ title: "  ", description: "x" }), [{ field: "title", message: "title must not be empty" }], "names the missing field");
+assert.deepEqual(editErrors({ title: "ok" }), []);
+assert.deepEqual(editErrors({}), [{ field: "title", message: "title must not be empty" }]);
 assert.deepEqual(addArgs({ title: "N" }, {}), ["--json", "--role", "human", "add", "N"]);
 assert.deepEqual(addArgs({ title: "N", plan: "-" }, { parent: "SCR-2" }),
   ["--json", "--role", "human", "add", "N", "--plan", " ", "--parent", "SCR-2"], "a lone dash becomes a space, not a stdin read");

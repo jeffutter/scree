@@ -1,5 +1,5 @@
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Popup } from "gpui-base";
+import { v_flex, h_flex, Popup, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { spaces, panes, focused, exec, theme, run, props as layoutProps } from "herdr";
 
 // Scree pure helpers: no host calls. scree.test.mjs slices the text between the two markers
@@ -165,15 +165,31 @@ function statusArgs(id, target) {
   return build(target.verb === "abandon" ? [...argv, ABANDON_REASON] : argv);
 }
 
-// Change title, description, plan or assignee. Only the keys present in `fields` are passed, so a
-// form that left a box alone cannot blank it. There is no --status: `edit` has none (src/cli.rs
-// EditArgs), which is why a status change is a transition. Built now for SCR-17.2's edit form.
-function editArgs(id, fields = {}) {
-  const argv = [...WRITE_FLAGS, "edit", String(id)];
-  argv.push(...textFlag("--title", fields.title), ...textFlag("--description", fields.description),
-    ...textFlag("--plan", fields.plan));
-  if (fields.for !== undefined) argv.push("--for", String(fields.for));
-  return build(argv);
+// The required text fields of a form and the message scree itself gives for each (src/ticket.rs:796
+// for title). One table so the create form can reuse it. Returns one {field, message} per missing
+// field, so a form can name every problem before any argv is built.
+const REQUIRED_FIELDS = [["title", "title must not be empty"]];
+function editErrors(fields = {}) {
+  return REQUIRED_FIELDS.filter(([k]) => String(fields[k] ?? "").trim() === "").map(([field, message]) => ({ field, message }));
+}
+
+// Change title, description, plan or assignee: only the flags whose value differs from the loaded
+// `ticket`, in that order, so an untouched box cannot be blanked and a cleared one is sent as "".
+// Returns null when nothing differs, because `scree edit` with no flag exits 2 (src/ticket.rs:786);
+// the caller then just leaves edit mode. There is no --status: `edit` has none (src/cli.rs
+// EditArgs), which is why a status change is a transition. A lone "-" would make scree read stdin,
+// so it is sent as a space.
+function editArgs(ticket, fields = {}) {
+  const t = ticket ?? {};
+  const argv = [...WRITE_FLAGS, "edit", String(t.id)];
+  const text = (name, key) => {
+    if (fields[key] === undefined || fields[key] === (t[key] ?? "")) return;
+    const s = String(fields[key]);
+    argv.push(name, s === "-" ? " " : s);
+  };
+  text("--title", "title"); text("--description", "description"); text("--plan", "plan");
+  if (fields.for !== undefined && fields.for !== t.for) argv.push("--for", String(fields.for));
+  return argv.length === WRITE_FLAGS.length + 2 ? null : build(argv);
 }
 
 // File a new Ticket. `form.status` is draft or ready, the only two `add` accepts (src/cli.rs
@@ -379,6 +395,17 @@ export default class Scree extends View {
     this.refreshQueued = false;
     // A handle lives longer than a render, so it is made here and never in render().
     this.menuFocus = cx.focus_handle();
+    // Edit form: retained widget state made once here, never in render. this.edit is
+    // {base, for, error} while editing (base is the Ticket as loaded at startEdit); drafts maps
+    // draftKey(id) to the last typed fields so a cancelled or abandoned edit of one Ticket never
+    // shows in another. Polls only replace this.detail and never call set_value.
+    this.editHandle = cx.focus_handle();
+    this.edit = null; this.drafts = new Map();
+    this.titleState = InputState.new({ placeholder: "Title" });
+    this.descState = TextareaState.new({ placeholder: "Description" });
+    this.planState = TextareaState.new({ placeholder: "Plan" });
+    this.descState.set_auto_grow(4, 12); this.planState.set_auto_grow(4, 12);
+    for (const st of [this.titleState, this.descState, this.planState]) st.on("change", (_e, cx) => this.saveDraft(cx));
     this.refresh(cx);
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
   }
@@ -464,6 +491,7 @@ export default class Scree extends View {
 
   // Opens the read-only detail for a ticket; the board calls this on card click too.
   openDetail(id, cx) {
+    this.leaveEdit();
     this.selected = id;
     this.detail = { id, data: null, error: null, loading: true };
     this.menu = null;
@@ -473,7 +501,67 @@ export default class Scree extends View {
     cx.spawn((cx) => this.fetchDetail(id, loc, context, cx));
   }
 
-  closeDetail(cx) { this.detail = null; this.menu = null; this.notice = null; cx.notify(); }
+  closeDetail(cx) { this.leaveEdit(); this.detail = null; this.menu = null; this.notice = null; cx.notify(); }
+
+  draftKey(id) { return JSON.stringify([this.context, id]); }
+  editFields() {
+    return { title: this.titleState.value(), description: this.descState.value(), plan: this.planState.value(), for: this.edit?.for };
+  }
+  // Files the typed fields under the Ticket's key. this.edit is set before any set_value, so the
+  // change event that set_value fires lands under the right key (same ordering as cairn's composer).
+  saveDraft(cx) {
+    if (!this.edit) return;
+    this.drafts.set(this.draftKey(this.edit.base.id), this.editFields());
+    cx.notify();
+  }
+
+  // Enters edit mode from the loaded Ticket, or from its draft when one was kept.
+  startEdit(cx) {
+    const base = this.detail?.data;
+    if (!base) return;
+    const draft = this.drafts.get(this.draftKey(base.id));
+    this.edit = { base, for: draft?.for ?? base.for, error: null };
+    this.menu = null; this.notice = null;
+    this.titleState.set_value(draft?.title ?? base.title);
+    this.descState.set_value(draft?.description ?? base.description);
+    this.planState.set_value(draft?.plan ?? base.plan);
+    this.titleState.focus();
+    cx.notify();
+  }
+
+  // Leaves edit mode and empties the widgets. The draft goes too when `discard` (cancel, Back, save).
+  leaveEdit() {
+    if (!this.edit) return;
+    const key = this.draftKey(this.edit.base.id);
+    this.edit = null;
+    this.drafts.delete(key);
+    for (const st of [this.titleState, this.descState, this.planState]) st.set_value("");
+  }
+
+  cancelEdit(cx) { this.leaveEdit(); cx.notify(); }
+
+  // Validates, then runs only the changed flags. A failure shows in edit.error and touches no
+  // field. editArgs gets the Ticket as loaded at startEdit, so a poll cannot change what counts as
+  // changed.
+  saveEdit(cx) {
+    const e = this.edit;
+    if (!e || e.saving) return;
+    const fields = this.editFields();
+    const errors = editErrors(fields);
+    if (errors.length) { e.error = errors.map((x) => x.message).join("; "); cx.notify(); return; }
+    const args = editArgs(e.base, fields);
+    if (!args) { this.leaveEdit(); cx.notify(); return; }
+    e.saving = true; e.error = null; cx.notify();
+    const loc = location(), context = this.key(), id = e.base.id;
+    cx.spawn(async (cx) => {
+      try { await this.scree(args, this.writeOpts(e.base)); }
+      catch (err) { e.saving = false; e.error = String(err.message ?? err); cx.notify(); return; }
+      if (this.edit === e) this.leaveEdit();
+      this.refresh(cx);
+      if (this.detail?.id === id) await this.fetchDetail(id, loc, context, cx);
+      cx.notify();
+    });
+  }
 
   // Where a write runs: the Project root the Ticket belongs to, because scope::for_write ignores
   // --project whenever cwd is inside any repo, and add/start/done sweep the cwd's Project
@@ -730,14 +818,40 @@ export default class Scree extends View {
       .child(div().flex_1().min_w(0).text_size(12).child(b.title));
   }
 
+  // The edit form: Title, Description, Plan, For. Criteria, comments and blockers stay read-only
+  // below it. The red line sits above the buttons and never touches a widget value.
+  editForm(t) {
+    const e = this.edit;
+    const label = (x) => div().text_size(11).text_color(t.dim).child(x);
+    const button = (id, text, on, primary) => div().id(id).flex_none().px(10).py(3).rounded(6).text_size(12).border_1()
+      .border_color(primary ? t.accent : t.border).text_color(primary ? t.foreground : t.muted).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); on(cx); }).child(text);
+    const chip = (v) => div().id(`scree-edit-for-${v}`).flex_none().px(8).py(2).rounded(4).text_size(11).border_1()
+      .border_color(e.for === v ? t.accent : t.border).text_color(e.for === v ? t.foreground : t.muted).cursor_pointer()
+      .on_click((_e, cx) => { cx.stop_propagation(); e.for = v; this.saveDraft(cx); }).child(v);
+    const releases = e.base.status === "active" && e.for !== e.base.for;
+    return v_flex().id("scree-edit-form").px(12).py(6).gap(8)
+      .child(label("Title")).child(Input.new(this.titleState).px(8).h(30).rounded(6).border_1().border_color(t.border).text_size(12))
+      .child(label("Description")).child(Textarea.new(this.descState).px(8).py(4).rounded(6).border_1().border_color(t.border).text_size(12))
+      .child(label("Plan")).child(Textarea.new(this.planState).px(8).py(4).rounded(6).border_1().border_color(t.border).font_family("monospace").text_size(11))
+      .child(label("For")).child(h_flex().gap(6).child(chip("agent")).child(chip("human")))
+      .when(releases, (el) => el.child(div().text_size(11).text_color(t.dim).child("Changing For releases the claim to ready")))
+      .when(Boolean(e.error), (el) => el.child(div().id("scree-edit-error").text_size(11).text_color(t.blocked).child(e.error)))
+      .child(h_flex().gap(8)
+        .child(button("scree-edit-save", e.saving ? "Saving..." : "Save", (cx) => this.saveEdit(cx), true))
+        .child(button("scree-edit-cancel", "Cancel", (cx) => this.cancelEdit(cx), false)));
+  }
+
   renderDetail(t) {
     const d = this.detail, m = d.data;
     const back = div().id("scree-back").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
-      .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.closeDetail(cx)).child("← Back");
+      .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => (this.edit ? this.cancelEdit(cx) : this.closeDetail(cx))).child("← Back");
     const header = h_flex().flex_none().px(10).py(8).gap(8).items_center().border_b(1).border_color(t.border)
       .child(back)
       .child(div().flex_none().font_family("monospace").text_size(11).text_color(t.dim).child(d.id))
       .child(div().flex_1().min_w(0).truncate().font_weight(600).child(m?.title ?? ""))
+      .when(Boolean(m) && !this.edit, (el) => el.child(div().id("scree-edit").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
+        .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); this.startEdit(cx); }).child("Edit")))
       .when(this.canOpenTui(), (el) => el.child(div().id("scree-open-tui").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, _cx) => this.openTui()).child("Open in scree tui")));
     let body;
@@ -754,8 +868,10 @@ export default class Scree extends View {
       body = [
         d.error ? div().px(12).py(4).text_size(11).text_color(t.blocked).child(d.error) : null,
         h_flex().px(12).py(6).gap(6).flex_wrap().children(chipEls),
-        this.detailSection(t, "Description", m.description ? [div().text_size(12).child(m.description)] : []),
-        this.detailSection(t, "Plan", m.plan ? [div().font_family("monospace").text_size(11).child(m.plan)] : []),
+        ...(this.edit ? [this.editForm(t)] : [
+          this.detailSection(t, "Description", m.description ? [div().text_size(12).child(m.description)] : []),
+          this.detailSection(t, "Plan", m.plan ? [div().font_family("monospace").text_size(11).child(m.plan)] : []),
+        ]),
         this.detailSection(t, `Criteria (${m.criteria.filter((c) => c.checked).length}/${m.criteria.length})`, m.criteria.map((c) =>
           v_flex().gap(1).py(2)
             .child(h_flex().gap(6).items_start()
@@ -771,6 +887,8 @@ export default class Scree extends View {
       ].filter(Boolean);
     }
     return v_flex().id("scree-detail").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .track_focus(this.editHandle)
+      .on_key_down((e, cx) => { if (this.edit && e.key === "escape") { cx.stop_propagation(); this.cancelEdit(cx); } })
       .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
       .when(this.notice, (el) => el.child(this.noticeStrip(t)))
