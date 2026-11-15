@@ -10,8 +10,8 @@ import { spaces, panes, focused, exec, theme, run, props as layoutProps } from "
 const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned"];
 
 // The board's columns, left to right, as [status, label]. One table holds the fact "these are the
-// board's statuses": BOARD_COLUMNS, OPEN_STATUSES and LABELS derive from it, so a new column is
-// fetched, rendered and counted without editing anywhere else in this file.
+// board's statuses": BOARD_COLUMNS, OPEN_STATUSES, LABELS, SECTIONS and boardHeadline derive from
+// it, so a new column is fetched, rendered, counted and displayed without editing anywhere else.
 const COLUMNS = [["draft", "Draft"], ["ready", "Ready"], ["active", "Active"], ["done", "Done"]];
 const BOARD_COLUMNS = COLUMNS.map(([s]) => s);
 // The statuses that mean "not finished": both open list calls and the all-done fold check read this.
@@ -313,6 +313,23 @@ function projectFolded(folded, project) {
 function nextBoardFold(folded, project) {
   return !projectFolded(folded, project);
 }
+
+// Panel sections, Active first (the board's COLUMNS are Draft first); derived from BOARD_COLUMNS
+// ordered by STATUS_ORDER so a new column renders without editing this list.
+const SECTIONS = [
+  ...STATUS_ORDER.filter((s) => BOARD_COLUMNS.includes(s)),
+  ...BOARD_COLUMNS.filter((s) => !STATUS_ORDER.includes(s)),
+];
+
+// The board headline: one entry per open status in Active-first order, printing zero counts too
+// (unlike countsLine which skips empty groups).
+function boardHeadline(counts) {
+  const ordered = [
+    ...STATUS_ORDER.filter((s) => OPEN_STATUSES.includes(s)),
+    ...OPEN_STATUSES.filter((s) => !STATUS_ORDER.includes(s)),
+  ];
+  return ordered.map((s) => `${counts[s]} ${s}`).join(", ");
+}
 // --- pure end ---
 
 // Scree mod: one mod, two modes via props.view ("panel" | "board"). Data comes only from
@@ -339,9 +356,7 @@ class ScreeError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
 }
 
-// Panel sections, Active first (the board's COLUMNS are Draft first); their labels come from LABELS,
-// so every status named here must be a column in COLUMNS.
-const SECTIONS = ["active", "ready", "draft", "done"];
+
 
 export default class Scree extends View {
   init(props, cx) {
@@ -636,7 +651,7 @@ export default class Scree extends View {
       .child(div().id("scree-board-machine").flex_none().px(6).py(1).rounded(4).text_size(11).border_1().border_color(t.border).text_color(t.muted)
         .child(machineLabel(location().on)))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
-        .child(fatal ? "" : `${counts.active} active, ${counts.ready} ready, ${counts.draft} draft`));
+        .child(fatal ? "" : boardHeadline(counts)));
     const colHeader = h_flex().flex_none().gap(8).px(10).py(5).border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
       .child(div().w(90).flex_none())
       .children(BOARD_COLUMNS.map((c) => div().w(COL_W).flex_none().child(`${LABELS[c]} (${counts[c]})`)));
@@ -795,7 +810,7 @@ export default class Scree extends View {
       : sections.map((x) => this.section(t, x.g, x.total, cx));
     // The legend is panel-only and lists the marks Active-first; its statuses are COLUMNS' plus "blocked".
     const legend = h_flex().flex_none().px(10).py(6).gap(12).gap_y(4).items_center().flex_wrap().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
-      .children([["active", "Active"], ["ready", "Ready"], ["draft", "Draft"], ["done", "Done"], ["blocked", "Blocked"]].map(([kind, label]) =>
+      .children([...SECTIONS.map((s) => [s, LABELS[s]]), ["blocked", "Blocked"]].map(([kind, label]) =>
         h_flex().gap(4).items_center().flex_none()
           .child(this.mark(t, { blocked: kind === "blocked" }, kind))
           .child(label)));

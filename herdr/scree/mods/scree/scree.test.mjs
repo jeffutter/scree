@@ -1,13 +1,13 @@
 // Run: node scree.test.mjs. Loads the pure helpers out of main.js (which imports host-only
 // modules, so it cannot be imported directly).
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
 
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "addArgs", "textFlag", "parseScreeError"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, addArgs, textFlag, parseScreeError } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "addArgs", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, addArgs, textFlag, parseScreeError, SECTIONS, boardHeadline } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -299,9 +299,35 @@ function checkTransitionCoverage(m) {
   }
 }
 
-// Both derived shapes, over the live code and over each mutant.
-const MODULE = { COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts, STATUS_ORDER, SETTLEABLE, TRANSITIONS, transitionsFor };
-function checkCoverage(m) { checkColumnCoverage(m); checkTransitionCoverage(m); }
+// Render-region coverage: SECTIONS and boardHeadline must derive from COLUMNS/STATUS_ORDER so a
+// new column renders without editing anything else.
+function checkRenderCoverage(m) {
+  const cols = m.COLUMNS.map(([s]) => s);
+  // SECTIONS equals BOARD_COLUMNS ordered by STATUS_ORDER (known first, then any extras).
+  const expectedSections = [
+    ...m.STATUS_ORDER.filter((s) => cols.includes(s)),
+    ...cols.filter((s) => !m.STATUS_ORDER.includes(s)),
+  ];
+  assert.deepEqual(m.SECTIONS, expectedSections, "SECTIONS covers every column in STATUS_ORDER display order");
+  // boardHeadline includes every open status (Active-first), even at zero count.
+  const counts = Object.fromEntries(cols.map((s) => [s, 0]));
+  counts.active = 1; // one nonzero to anchor order
+  const headline = m.boardHeadline(counts);
+  const unfinished = m.OPEN_STATUSES;
+  const expectedOrder = [
+    ...m.STATUS_ORDER.filter((s) => unfinished.includes(s)),
+    ...unfinished.filter((s) => !m.STATUS_ORDER.includes(s)),
+  ];
+  for (const s of expectedOrder)
+    assert(headline.includes(`${counts[s]} ${s}`), `boardHeadline includes ${s} (even at zero)`);
+  // No extra statuses in the headline beyond the open ones.
+  const allInHeadline = headline.match(/\d+ (\w+)/g).map((x) => x.split(" ")[1]);
+  assert.deepEqual(allInHeadline, expectedOrder, "boardHeadline names exactly the open statuses, in STATUS_ORDER");
+}
+
+// Both derived shapes plus render coverage, over the live code and over each mutant.
+const MODULE = { COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts, STATUS_ORDER, SETTLEABLE, TRANSITIONS, transitionsFor, SECTIONS, boardHeadline };
+function checkCoverage(m) { checkColumnCoverage(m); checkTransitionCoverage(m); checkRenderCoverage(m); }
 checkCoverage(MODULE);
 
 // Mutants: each one adds a fifth column to the table and, except for the control, hands one of the
@@ -339,6 +365,10 @@ const MUTANTS = {
   // SETTLEABLE pinned to today's three: a settled Status would offer nothing but Reopen and an
   // unsettled one would quietly lose Done and Abandon.
   settleable_hand_written: { expect: "fail", edits: [ADD_PARKED, ADD_PARKED_STATUS, ['const SETTLEABLE = STATUS_ORDER.filter((s) => !CLOSED_STATUSES.includes(s));', 'const SETTLEABLE = ["draft", "ready", "active"];']] },
+  // SECTIONS written out by hand again: parked is fetched and counted but never gets a panel section.
+  extra_column_sections_hand_written: { expect: "fail", edits: [ADD_PARKED, ['const SECTIONS = [\n  ...STATUS_ORDER.filter((s) => BOARD_COLUMNS.includes(s)),\n  ...BOARD_COLUMNS.filter((s) => !STATUS_ORDER.includes(s)),\n];', 'const SECTIONS = ["active", "ready", "draft", "done"];']] },
+  // boardHeadline reverted to three-property accesses: parked shows in column headers but not the headline.
+  board_summary_hand_written: { expect: "fail", edits: [ADD_PARKED, ['function boardHeadline(counts) {\n  const ordered = [\n    ...STATUS_ORDER.filter((s) => OPEN_STATUSES.includes(s)),\n    ...OPEN_STATUSES.filter((s) => !STATUS_ORDER.includes(s)),\n  ];\n  return ordered.map((s) => `${counts[s]} ${s}`).join(", ");\n}', 'function boardHeadline(counts) {\n  return `${counts.active} active, ${counts.ready} ready, ${counts.draft} draft`;\n}']], },
 };
 
 // Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
@@ -416,26 +446,51 @@ const MUTANTS = {
     "section reads panel fold via Boolean (correct: no data-driven default)");
 }
 
+// Static checks on the render region that cannot be exercised through pureWith:
+// mark-<status>.svg files exist for every column, and the colour table in mark() names each status.
+{
+  const cols = COLUMNS.map(([s]) => s);
+  for (const s of cols)
+    assert(existsSync(new URL(`./mark-${s}.svg`, import.meta.url)), `mark-${s}.svg exists beside main.js`);
+  assert(existsSync(new URL("./mark-blocked.svg", import.meta.url)), "mark-blocked.svg exists beside main.js");
+  // The colour table in mark() must name every column (plus blocked).
+  const colorMatch = src.match(/const color = \{([^}]+)\}\[kind\]/);
+  assert(colorMatch, "colour table found in mark()");
+  for (const s of cols)
+    assert(new RegExp(`\\b${s}\\b`).test(colorMatch[1]), `colour table names ${s}`);
+  assert(/\bblocked\b/.test(colorMatch[1]), "colour table names blocked");
+}
+
 console.log("ok");
 
-// Run one mutant over the same coverage checks. An unexpected crash is reported as such, because a
-// mutant must fail a named assert instead.
-if (process.env.SCREE_MUTANT) {
-  const name = process.env.SCREE_MUTANT, spec = MUTANTS[name];
+// Run mutants: if SCREE_MUTANT is set, run just that one (for debugging). Otherwise run all
+// automatically so nix flake check exercises them and their teeth cannot rot.
+function runMutant(name) {
+  const spec = MUTANTS[name];
   assert(spec, `unknown mutant ${name}; known: ${Object.keys(MUTANTS).join(", ")}`);
-  let outcome, detail = "";
+  let outcome;
   try {
     checkCoverage(pureWith(...spec.edits));
     outcome = "passed";
   } catch (e) {
     if (!(e instanceof assert.AssertionError)) {
-      console.log(`${name}: CRASHED instead of failing an assert (${e.constructor.name}: ${e.message})`);
-      process.exit(1);
+      return { name, status: "crash", msg: `${name}: CRASHED instead of failing an assert (${e.constructor.name}: ${e.message})` };
     }
     outcome = "failed a named assert";
-    detail = `\n${String(e.message).split("\n").slice(0, 14).join("\n")}`;
   }
   const expected = spec.expect === "pass" ? "passed" : "failed a named assert";
-  console.log(`${name}: ${outcome}${detail} ${outcome === expected ? "(expected)" : `(EXPECTED ${spec.expect.toUpperCase()})`}`);
-  process.exit(outcome === expected ? 0 : 1);
+  return { name, status: outcome === expected ? "ok" : "unexpected", msg: `${name}: ${outcome} ${outcome === expected ? "(expected)" : `(EXPECTED ${spec.expect.toUpperCase()})`}` };
+}
+
+if (process.env.SCREE_MUTANT) {
+  const r = runMutant(process.env.SCREE_MUTANT);
+  console.log(r.msg);
+  process.exit(r.status === "ok" ? 0 : 1);
+} else {
+  let failures = 0;
+  for (const name of Object.keys(MUTANTS)) {
+    const r = runMutant(name);
+    if (r.status !== "ok") { console.log(r.msg); failures++; }
+  }
+  if (failures) { console.log(`${failures} mutant(s) misbehaved`); process.exit(1); }
 }
