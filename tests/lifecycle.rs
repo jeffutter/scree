@@ -176,11 +176,21 @@ fn edit_fields_and_append() {
     assert_eq!(t["title"], "new");
     assert_eq!(t["plan"], "p1");
     let t = e.ok(&["edit", &id, "--description", "two", "--append"]);
-    assert_eq!(t["description"], "one\ntwo");
+    assert_eq!(t["description"], "one\n\ntwo");
     let t = e.ok(&["edit", &id, "--description", "three"]);
     assert_eq!(t["description"], "three");
     let t = e.ok(&["edit", &id, "--plan", "p2", "--append"]);
-    assert_eq!(t["plan"], "p1\np2");
+    assert_eq!(t["plan"], "p1\n\np2");
+
+    // Append to an empty description: no leading blank line.
+    let id2 = e.ready(&[]);
+    let t = e.ok(&["edit", &id2, "--description", "d", "--append"]);
+    assert_eq!(t["description"], "d");
+
+    // Append to an empty plan: no leading blank line.
+    let id3 = e.ready(&[]);
+    let t = e.ok(&["edit", &id3, "--plan", "p", "--append"]);
+    assert_eq!(t["plan"], "p");
 }
 
 #[test]

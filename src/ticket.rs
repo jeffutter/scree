@@ -767,12 +767,17 @@ pub struct EditFields<'a> {
     pub for_who: Option<ForWho>,
 }
 
-/// `old` followed by `new`, one newline apart unless `old` is empty.
+/// `old` followed by `new`, separated by a blank line.
+/// Trims both sides; returns whichever is non-empty when the other is empty or whitespace-only.
 fn appended(old: &str, new: &str) -> String {
+    let old = old.trim();
+    let new = new.trim();
     if old.is_empty() {
         new.to_string()
+    } else if new.is_empty() {
+        old.to_string()
     } else {
-        format!("{old}\n{new}")
+        format!("{old}\n\n{new}")
     }
 }
 
@@ -1533,9 +1538,13 @@ mod tests {
     }
 
     #[test]
-    fn append_joins_with_newline() {
+    fn append_joins_with_blank_line() {
         assert_eq!(appended("", "b"), "b");
-        assert_eq!(appended("a", "b"), "a\nb");
+        assert_eq!(appended("a", "b"), "a\n\nb");
+        assert_eq!(appended("a\n \n", "b"), "a\n\nb");
+        assert_eq!(appended("  \n", "b"), "b");
+        assert_eq!(appended("a", ""), "a");
+        assert_eq!(appended("", ""), "");
     }
 
     #[test]
