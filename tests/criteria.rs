@@ -1,79 +1,9 @@
 //! Criteria and comments, run through the real binary.
 
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+mod common;
 
+use common::Env;
 use serde_json::Value;
-
-struct Env {
-    dir: tempfile::TempDir,
-}
-
-fn env() -> Env {
-    Env {
-        dir: tempfile::tempdir().unwrap(),
-    }
-}
-
-impl Env {
-    fn db(&self) -> PathBuf {
-        self.dir.path().join("scree.db")
-    }
-
-    fn cmd(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
-        for (k, _) in std::env::vars() {
-            if k.starts_with("SCREE_")
-                || k.starts_with("GIT_")
-                || k == "CLAUDECODE"
-                || k == "AI_AGENT"
-                || k == "NO_COLOR"
-                || k == "CLAUDE_CODE_SESSION_ID"
-            {
-                cmd.env_remove(k);
-            }
-        }
-        cmd.current_dir(self.dir.path())
-            .arg("--db")
-            .arg(self.db())
-            .args(args);
-        cmd
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.cmd(args).output().unwrap()
-    }
-
-    fn stdin(&self, args: &[&str], input: &str) -> Value {
-        use std::io::Write;
-        let mut child = self
-            .cmd(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
-        serde_json::from_slice(&out.stdout).unwrap()
-    }
-
-    fn ok(&self, args: &[&str]) -> Value {
-        let out = self.run(args);
-        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
-        serde_json::from_slice(&out.stdout).unwrap()
-    }
-
-    fn code(&self, args: &[&str]) -> i32 {
-        self.run(args).status.code().unwrap()
-    }
-}
 
 fn numbers(t: &Value) -> Vec<i64> {
     t["criteria"]
@@ -104,7 +34,7 @@ fn new_ticket(e: &Env) -> String {
 
 #[test]
 fn numbers_are_never_reused() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     let t = e.ok(&["criteria", "add", &id, "c"]);
     assert_eq!(numbers(&t), [1, 2, 3]);
@@ -118,7 +48,7 @@ fn numbers_are_never_reused() {
 
 #[test]
 fn list_and_next_carry_a_criteria_summary() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     let bare = e.ok(&["--role", "human", "add", "bare", "--status", "ready"])["id"]
         .as_str()
@@ -153,7 +83,7 @@ fn list_and_next_carry_a_criteria_summary() {
 
 #[test]
 fn check_and_uncheck() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     let r1 = format!("{id}#1");
     let t = e.ok(&[
@@ -173,14 +103,14 @@ fn check_and_uncheck() {
     assert_eq!(c["checked_by"]["session"], "s1");
     assert!(c["checked_at"].is_string());
 
-    let t = e.stdin(
+    let t = e.stdin_ok(
         &["check", &format!("{id}#2"), "--evidence", "-"],
         "from stdin",
     );
     assert_eq!(t["criteria"][1]["evidence"], "from stdin");
 
     let id3 = new_ticket(&e);
-    let t = e.stdin(&["check", &format!("{id3}#1"), "--evidence", "-"], "ok\n");
+    let t = e.stdin_ok(&["check", &format!("{id3}#1"), "--evidence", "-"], "ok\n");
     assert_eq!(t["criteria"][0]["evidence"], "ok");
     assert_eq!(e.code(&["check", &format!("{id3}#2"), "--evidence", ""]), 2);
     assert_eq!(
@@ -198,7 +128,7 @@ fn check_and_uncheck() {
 
 #[test]
 fn done_needs_checked_criteria() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     assert_eq!(e.code(&["done", &id]), 4);
     e.ok(&["check", &format!("{id}#1")]);
@@ -212,14 +142,14 @@ fn done_needs_checked_criteria() {
 
 #[test]
 fn comments() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     let t = e.ok(&["comment", "add", &id, "hello", "--author", "bob"]);
     assert_eq!(t["comments"][0]["body"], "hello");
     assert_eq!(t["comments"][0]["author"], "bob");
-    let t = e.stdin(&["comment", "add", &id, "-"], "piped");
+    let t = e.stdin_ok(&["comment", "add", &id, "-"], "piped");
     assert_eq!(t["comments"][1]["body"], "piped");
-    let t = e.stdin(&["comment", "add", &id, "-"], "note\n");
+    let t = e.stdin_ok(&["comment", "add", &id, "-"], "note\n");
     assert_eq!(t["comments"][2]["body"], "note");
     let first_id = t["comments"][2]["id"].to_string();
     e.ok(&["comment", "rm", &id, &first_id]);
@@ -240,7 +170,7 @@ fn comments() {
 
 #[test]
 fn bad_refs() {
-    let e = env();
+    let e = Env::new();
     let id = new_ticket(&e);
     assert_eq!(e.code(&["check", &id]), 2);
     assert_eq!(e.code(&["check", &format!("{id}#x")]), 2);

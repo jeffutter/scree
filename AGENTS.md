@@ -41,7 +41,7 @@ One package, library (`src/lib.rs`) plus a thin binary (`src/main.rs`). `main.rs
 
 ## Testing notes
 
-- `tests/cli.rs` and friends run the real binary (`CARGO_BIN_EXE_scree`) with `--db <temp>`. Each test clears `SCREE_*`, `CLAUDECODE`, `AI_AGENT` and `GIT_*` env vars and runs outside any repo unless testing scope; do the same in new tests so results do not depend on the host.
+- `tests/cli.rs` and friends run the real binary through the shared harness in `tests/common/mod.rs`, which clears `SCREE_*`, `CLAUDECODE`, `AI_AGENT` and `GIT_*` and launches in a temp dir outside any repo, so results do not depend on the host. A new test imports it (`mod common; use common::Env;`) instead of copying that setup; the scope and sweep tests hand in a cwd because they are testing scope.
 - Unit tests sit in the module they test, on an in-memory or temp-file database.
 - Output shapes and the generated skill are `insta` snapshots (`tests/golden/`, inline and file snapshots).
 

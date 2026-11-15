@@ -1,105 +1,23 @@
 //! Status transitions, claim and edit, run through the real binary.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+mod common;
 
-use serde_json::Value;
+use std::path::Path;
 
-struct Env {
-    dir: tempfile::TempDir,
-}
-
-fn env() -> Env {
-    Env {
-        dir: tempfile::tempdir().unwrap(),
-    }
-}
+use common::{Env, scree_cmd};
 
 impl Env {
-    fn db(&self) -> PathBuf {
-        self.dir.path().join("scree.db")
-    }
-
-    fn cmd(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
-        for (k, _) in std::env::vars() {
-            if k.starts_with("SCREE_")
-                || k.starts_with("GIT_")
-                || k == "CLAUDECODE"
-                || k == "AI_AGENT"
-                || k == "NO_COLOR"
-                || k == "CLAUDE_CODE_SESSION_ID"
-            {
-                cmd.env_remove(k);
-            }
-        }
-        cmd.current_dir(self.dir.path())
-            .arg("--db")
-            .arg(self.db())
-            .args(args);
-        cmd
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.cmd(args).output().unwrap()
-    }
-
-    /// Run with `input` on stdin; returns the exit code.
-    fn stdin_code(&self, args: &[&str], input: &str) -> i32 {
-        self.stdin_result(args, input).0
-    }
-
-    /// Run with `input` on stdin; returns (exit code, stderr string).
-    fn stdin_result(&self, args: &[&str], input: &str) -> (i32, String) {
-        let mut child = self
-            .cmd(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        (
-            out.status.code().unwrap(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        )
-    }
-
-    fn ok(&self, args: &[&str]) -> Value {
-        let out = self.run(args);
-        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
-        serde_json::from_slice(&out.stdout).unwrap()
-    }
-
-    fn code(&self, args: &[&str]) -> i32 {
-        self.run(args).status.code().unwrap()
-    }
-
     /// A ready ticket in the LOCAL Project; its id.
     fn ready(&self, extra: &[&str]) -> String {
         let mut a = vec!["--role", "human", "add", "t", "--status", "ready"];
         a.extend_from_slice(extra);
         self.ok(&a)["id"].as_str().unwrap().to_string()
     }
-
-    fn sql(&self, q: &str) {
-        rusqlite::Connection::open(self.db())
-            .unwrap()
-            .execute_batch(q)
-            .unwrap();
-    }
 }
 
 #[test]
 fn happy_path() {
-    let e = env();
+    let e = Env::new();
     let id = e.ok(&["--role", "human", "add", "t"])["id"]
         .as_str()
         .unwrap()
@@ -130,7 +48,7 @@ fn happy_path() {
 
 #[test]
 fn abandon_stores_reason_comment() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&[]);
     assert_eq!(e.code(&["abandon", &id, " "]), 2);
     let t = e.ok(&["abandon", &id, "not needed", "--author", "ann"]);
@@ -143,7 +61,7 @@ fn abandon_stores_reason_comment() {
 
 #[test]
 fn start_without_session_reads_null() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&[]);
     let t = e.ok(&["start", &id, "--author", "bob"]);
     assert_eq!(t["status"], "active");
@@ -154,7 +72,7 @@ fn start_without_session_reads_null() {
 
 #[test]
 fn start_exit_codes() {
-    let e = env();
+    let e = Env::new();
     let draft = e.ok(&["--role", "human", "add", "d"])["id"]
         .as_str()
         .unwrap()
@@ -171,7 +89,7 @@ fn start_exit_codes() {
     let blocked = e.ready(&[]);
     // LOCAL-numbered ids: ticket numbers equal row ids here.
     let n = |id: &str| id.rsplit('-').next().unwrap().to_string();
-    e.sql(&format!(
+    e.exec_batch(&format!(
         "INSERT INTO dependencies (ticket_id, blocked_by_id) VALUES ({}, {})",
         n(&blocked),
         n(&blocker)
@@ -189,7 +107,7 @@ fn start_exit_codes() {
 
 #[test]
 fn done_needs_criteria_checked_or_force() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&["--criterion", "works"]);
     assert_eq!(e.code(&["done", &id]), 4);
     assert_eq!(e.ok(&["done", &id, "--force"])["status"], "done");
@@ -197,7 +115,7 @@ fn done_needs_criteria_checked_or_force() {
 
 #[test]
 fn edit_fields_and_append() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&["--description", "one"]);
     assert_eq!(e.code(&["edit", &id]), 2);
     assert_eq!(e.code(&["edit", &id, "--append"]), 2);
@@ -243,7 +161,7 @@ fn edit_fields_and_append() {
 
 #[test]
 fn edit_for_follows_identity_rules() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&[]);
     assert_eq!(
         e.code(&["--role", "human", "edit", &id, "--for", "human"]),
@@ -278,22 +196,17 @@ fn edit_for_follows_identity_rules() {
 
 #[test]
 fn concurrent_start_has_one_winner() {
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&[]);
-    let exe = env!("CARGO_BIN_EXE_scree");
     let db = e.db();
-    let cwd: &Path = e.dir.path();
+    let cwd: &Path = e.path();
     let codes: Vec<i32> = std::thread::scope(|s| {
         let hs: Vec<_> = (0..8)
             .map(|i| {
                 let id = id.clone();
                 let db = db.clone();
                 s.spawn(move || {
-                    Command::new(exe)
-                        .current_dir(cwd)
-                        .env_remove("SCREE_DB")
-                        .arg("--db")
-                        .arg(db)
+                    scree_cmd(&db, cwd)
                         .args([
                             "--role",
                             "agent",
@@ -321,7 +234,7 @@ fn concurrent_start_has_one_winner() {
 fn empty_stdin_is_refused() {
     // Regression (SCR-28): every `-` flag must exit 2 on an empty stdin read,
     // naming the flag in the error message, and leaving stored data unchanged.
-    let e = env();
+    let e = Env::new();
     let id = e.ready(&[
         "--description",
         "keep",

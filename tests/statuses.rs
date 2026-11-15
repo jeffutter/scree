@@ -2,62 +2,12 @@
 //! returns, which subtasks hold a parent open, and which dependencies block.
 //! Run through the real binary against a throwaway database outside any repo.
 
-use std::path::PathBuf;
-use std::process::{Command, Output};
+mod common;
 
+use common::Env;
 use serde_json::Value;
 
-struct Env {
-    _dir: tempfile::TempDir,
-    base: PathBuf,
-    db: PathBuf,
-}
-
-fn env() -> Env {
-    let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
-    let db = base.join("scree.db");
-    Env {
-        _dir: dir,
-        base,
-        db,
-    }
-}
-
 impl Env {
-    fn run(&self, args: &[&str]) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
-        for (k, _) in std::env::vars() {
-            if k.starts_with("SCREE_")
-                || k.starts_with("GIT_")
-                || k == "CLAUDECODE"
-                || k == "AI_AGENT"
-                || k == "NO_COLOR"
-                || k == "CLAUDE_CODE_SESSION_ID"
-            {
-                cmd.env_remove(k);
-            }
-        }
-        // A directory that is no repository: the tickets are unscoped.
-        cmd.current_dir(&self.base)
-            .arg("--db")
-            .arg(&self.db)
-            .args(args)
-            .output()
-            .unwrap()
-    }
-
-    fn ok(&self, args: &[&str]) -> Value {
-        let out = self.run(args);
-        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
-        serde_json::from_slice(&out.stdout).unwrap()
-    }
-
-    /// Exit code of a command, with stdout and stderr dropped.
-    fn code(&self, args: &[&str]) -> i32 {
-        self.run(args).status.code().unwrap()
-    }
-
     fn add(&self, title: &str, extra: &[&str]) -> String {
         let mut a = vec!["--json", "add", title];
         a.extend_from_slice(extra);
@@ -81,17 +31,6 @@ impl Env {
         made
     }
 
-    fn ids(&self, args: &[&str]) -> Vec<String> {
-        let mut a = vec!["--json", "list"];
-        a.extend_from_slice(args);
-        self.ok(&a)["tickets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["id"].as_str().unwrap().to_string())
-            .collect()
-    }
-
     fn status_of(&self, id: &str) -> String {
         self.ok(&["--json", "show", id])["status"]
             .as_str()
@@ -111,7 +50,7 @@ impl Env {
 
 #[test]
 fn bare_list_returns_exactly_the_unfinished_tickets() {
-    let e = env();
+    let e = Env::new();
     let all = e.one_per_status();
     let names: Vec<&str> = all.iter().map(|(_, st)| *st).collect();
     assert_eq!(names, ["draft", "ready", "active", "done", "abandoned"]);
@@ -137,7 +76,7 @@ fn bare_list_returns_exactly_the_unfinished_tickets() {
 
 #[test]
 fn a_parent_waits_for_every_unfinished_subtask() {
-    let e = env();
+    let e = Env::new();
     let parent = e.add("parent", &["--status", "ready"]);
     // The active subtask comes first: only the first unsettled sibling can be
     // started, so creation order decides which one can reach `active`.
@@ -170,7 +109,7 @@ fn a_parent_waits_for_every_unfinished_subtask() {
 
 #[test]
 fn abandoning_a_parent_abandons_its_unfinished_subtasks() {
-    let e = env();
+    let e = Env::new();
     let parent = e.add("cascade parent", &["--status", "ready"]);
     let active = e.add(
         "cascade active",
@@ -189,7 +128,7 @@ fn abandoning_a_parent_abandons_its_unfinished_subtasks() {
 
 #[test]
 fn an_unfinished_dependency_blocks_and_a_done_one_does_not() {
-    let e = env();
+    let e = Env::new();
     let waiter = e.add("waiter", &["--status", "ready"]);
     let dep_draft = e.add("dep draft", &[]);
     let dep_active = e.add("dep active", &["--status", "ready"]);
@@ -230,7 +169,7 @@ fn an_unfinished_dependency_blocks_and_a_done_one_does_not() {
 
 #[test]
 fn each_status_reads_back_its_own_name() {
-    let e = env();
+    let e = Env::new();
     for (id, st) in e.one_per_status() {
         assert_eq!(e.status_of(&id), st, "{id} should read as {st}");
     }

@@ -1,72 +1,16 @@
 //! Position, `reorder`, `next` and `start --next`, through the real binary.
 
-use std::path::PathBuf;
-use std::process::{Command, Output};
+mod common;
 
+use common::{Env, scree_cmd};
 use serde_json::Value;
 
-struct Env {
-    dir: tempfile::TempDir,
-}
-
-fn env() -> Env {
-    Env {
-        dir: tempfile::tempdir().unwrap(),
-    }
-}
-
 impl Env {
-    fn db(&self) -> PathBuf {
-        self.dir.path().join("scree.db")
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
-        for (k, _) in std::env::vars() {
-            if k.starts_with("SCREE_")
-                || k.starts_with("GIT_")
-                || k == "CLAUDECODE"
-                || k == "AI_AGENT"
-                || k == "NO_COLOR"
-                || k == "CLAUDE_CODE_SESSION_ID"
-            {
-                cmd.env_remove(k);
-            }
-        }
-        cmd.current_dir(self.dir.path())
-            .arg("--db")
-            .arg(self.db())
-            .args(args)
-            .output()
-            .unwrap()
-    }
-
-    fn ok(&self, args: &[&str]) -> Value {
-        let out = self.run(args);
-        assert_eq!(out.status.code(), Some(0), "{args:?}: {out:?}");
-        serde_json::from_slice(&out.stdout).unwrap()
-    }
-
-    fn code(&self, args: &[&str]) -> i32 {
-        self.run(args).status.code().unwrap()
-    }
-
     /// Add a ticket as a human; its id.
     fn add(&self, title: &str, extra: &[&str]) -> String {
         let mut a = vec!["--role", "human", "add", title];
         a.extend_from_slice(extra);
         self.ok(&a)["id"].as_str().unwrap().to_string()
-    }
-
-    fn ids(&self, args: &[&str]) -> Vec<String> {
-        let mut a = vec!["list"];
-        a.extend_from_slice(args);
-        self.ok(&a)["tickets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["id"].as_str().unwrap().to_string())
-            .collect()
     }
 
     fn positions(&self) -> Vec<i64> {
@@ -78,13 +22,6 @@ impl Env {
             .unwrap()
             .map(Result::unwrap)
             .collect()
-    }
-
-    fn sql(&self, q: &str) {
-        rusqlite::Connection::open(self.db())
-            .unwrap()
-            .execute_batch(q)
-            .unwrap();
     }
 
     fn next_ids(&self, args: &[&str]) -> (Vec<String>, Value) {
@@ -103,7 +40,7 @@ impl Env {
 
 #[test]
 fn new_tickets_step_by_1000() {
-    let e = env();
+    let e = Env::new();
     e.add("a", &[]);
     e.add("b", &[]);
     e.add("c", &[]);
@@ -112,7 +49,7 @@ fn new_tickets_step_by_1000() {
 
 #[test]
 fn reorder_first_last_before_after() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &[]);
     let b = e.add("b", &[]);
     let c = e.add("c", &[]);
@@ -131,7 +68,7 @@ fn reorder_first_last_before_after() {
 
 #[test]
 fn repeated_first_exhausts_the_gap_and_renumbers() {
-    let e = env();
+    let e = Env::new();
     let mut expected = vec![e.add("t0", &[])];
     for i in 1..16 {
         let id = e.add(&format!("t{i}"), &[]);
@@ -147,11 +84,11 @@ fn repeated_first_exhausts_the_gap_and_renumbers() {
 
 #[test]
 fn reorder_renumbers_in_steps_of_1000() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &[]);
     let b = e.add("b", &[]);
     let c = e.add("c", &[]);
-    e.sql(
+    e.exec_batch(
         "UPDATE tickets SET position = 1 WHERE title = 'a';
            UPDATE tickets SET position = 2 WHERE title = 'b';
            UPDATE tickets SET position = 3 WHERE title = 'c'",
@@ -163,7 +100,7 @@ fn reorder_renumbers_in_steps_of_1000() {
 
 #[test]
 fn reorder_refusals() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &[]);
     let b = e.add("b", &[]);
     let done = e.add("done", &["--status", "ready"]);
@@ -184,16 +121,16 @@ fn reorder_refusals() {
 
 #[test]
 fn reorder_refuses_a_target_in_another_sibling_set() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &[]);
     let b = e.add("b", &[]);
-    e.sql("UPDATE tickets SET worktree_path = '/elsewhere' WHERE title = 'b'");
+    e.exec_batch("UPDATE tickets SET worktree_path = '/elsewhere' WHERE title = 'b'");
     assert_eq!(e.code(&["reorder", &a, "--before", &b]), 4);
 }
 
 #[test]
 fn next_skips_unavailable_and_reports_empty() {
-    let e = env();
+    let e = Env::new();
     let (ids, v) = e.next_ids(&[]);
     assert!(ids.is_empty());
     assert_eq!(v["human_pending"], 0);
@@ -222,10 +159,10 @@ fn next_skips_unavailable_and_reports_empty() {
 
 #[test]
 fn next_excludes_blocked_and_counts_them() {
-    let e = env();
+    let e = Env::new();
     let blocker = e.add("blocker", &[]);
     let waits = e.add("waits", &["--status", "ready"]);
-    e.sql(
+    e.exec_batch(
         "INSERT INTO dependencies (ticket_id, blocked_by_id)
            SELECT w.id, b.id FROM tickets w, tickets b
            WHERE w.title = 'waits' AND b.title = 'blocker'",
@@ -243,7 +180,7 @@ fn next_excludes_blocked_and_counts_them() {
 
 #[test]
 fn next_respects_role_and_for() {
-    let e = env();
+    let e = Env::new();
     let human = e.add("h", &["--status", "ready", "--for", "human"]);
     let agent = e.add("a", &["--status", "ready"]);
     let (ids, v) = e.next_ids(&["--role", "agent"]);
@@ -271,7 +208,7 @@ fn next_respects_role_and_for() {
 
 #[test]
 fn next_text_mentions_hidden_human_tickets() {
-    let e = env();
+    let e = Env::new();
     e.add("h", &["--status", "ready", "--for", "human"]);
     let out = e.run(&["--text", "--role", "agent", "next"]);
     assert_eq!(out.status.code(), Some(0));
@@ -281,7 +218,7 @@ fn next_text_mentions_hidden_human_tickets() {
 
 #[test]
 fn start_next_claims_in_order() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &["--status", "ready"]);
     let b = e.add("b", &["--status", "ready"]);
     let t = e.ok(&["start", "--next", "--author", "bob", "--session", "s"]);
@@ -294,7 +231,7 @@ fn start_next_claims_in_order() {
 
 #[test]
 fn start_next_argument_rules() {
-    let e = env();
+    let e = Env::new();
     let a = e.add("a", &["--status", "ready"]);
     assert_eq!(e.code(&["start"]), 2);
     assert_eq!(e.code(&["start", &a, "--next"]), 2);
@@ -303,21 +240,17 @@ fn start_next_argument_rules() {
 
 #[test]
 fn concurrent_start_next_claims_distinct_tickets() {
-    let e = env();
+    let e = Env::new();
     for i in 0..4 {
         e.add(&format!("t{i}"), &["--status", "ready"]);
     }
     let db = e.db();
-    let dir = e.dir.path().to_path_buf();
+    let dir = e.path().to_path_buf();
     let handles: Vec<_> = (0..4)
         .map(|_| {
             let (db, dir) = (db.clone(), dir.clone());
             std::thread::spawn(move || {
-                let out = Command::new(env!("CARGO_BIN_EXE_scree"))
-                    .current_dir(dir)
-                    .env_remove("SCREE_DB")
-                    .arg("--db")
-                    .arg(db)
+                let out = scree_cmd(&db, &dir)
                     .args(["start", "--next"])
                     .output()
                     .unwrap();

@@ -2,32 +2,13 @@
 //! serde_json has no `preserve_order`; the other tests parse into `Value`,
 //! which ignores key order, so only this file catches a reordering.
 //! Regenerate with `GOLDEN_BLESS=1 cargo nextest run --test golden`.
-use std::process::Command;
 
-fn run(dir: &std::path::Path, args: &[&str]) -> String {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scree"));
-    for (k, _) in std::env::vars() {
-        if k.starts_with("SCREE_")
-            || k.starts_with("GIT_")
-            || k == "CLAUDECODE"
-            || k == "AI_AGENT"
-            || k == "NO_COLOR"
-            || k == "CLAUDE_CODE_SESSION_ID"
-        {
-            cmd.env_remove(k);
-        }
-    }
-    let out = cmd
-        .current_dir(dir)
-        .arg("--db")
-        .arg(dir.join("s.db"))
-        .args(["--author", "bob", "--session", "sess1", "--role", "agent"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(0), "{args:?}: {:?}", out);
-    redact(&String::from_utf8(out.stdout).unwrap())
-}
+mod common;
+
+use common::Env;
+
+/// Every golden command carries these globals.
+const FLAGS: &[&str] = &["--author", "bob", "--session", "sess1", "--role", "agent"];
 
 /// Replace every `YYYY-MM-DDTHH:MM:SSZ` with `TS`.
 fn redact(s: &str) -> String {
@@ -65,47 +46,46 @@ fn check(name: &str, actual: &str) {
 
 #[test]
 fn json_key_order_is_stable() {
-    let dir = tempfile::tempdir().unwrap();
-    let d = dir.path();
-    run(
-        d,
-        &[
-            "add",
-            "Parent",
-            "--description",
-            "desc",
-            "--plan",
-            "the plan",
-            "--criterion",
-            "first",
-            "--criterion",
-            "second",
-        ],
-    );
-    run(
-        d,
-        &[
-            "add",
-            "Waits",
-            "--blocked-by",
-            "LOCAL-1",
-            "--status",
-            "ready",
-        ],
-    );
-    run(d, &["ready", "LOCAL-1"]);
-    run(d, &["start", "LOCAL-1"]);
-    run(d, &["check", "LOCAL-1#1", "--evidence", "ran it"]);
-    run(d, &["comment", "add", "LOCAL-1", "a note"]);
-    run(d, &["add", "Free", "--status", "ready"]);
-    run(d, &["add", "Sub", "--parent", "LOCAL-3"]);
-    run(d, &["add", "Open", "--status", "ready"]);
+    let e = Env::with_flags(FLAGS);
+    e.stdout(&[
+        "add",
+        "Parent",
+        "--description",
+        "desc",
+        "--plan",
+        "the plan",
+        "--criterion",
+        "first",
+        "--criterion",
+        "second",
+    ]);
+    e.stdout(&[
+        "add",
+        "Waits",
+        "--blocked-by",
+        "LOCAL-1",
+        "--status",
+        "ready",
+    ]);
+    e.stdout(&["ready", "LOCAL-1"]);
+    e.stdout(&["start", "LOCAL-1"]);
+    e.stdout(&["check", "LOCAL-1#1", "--evidence", "ran it"]);
+    e.stdout(&["comment", "add", "LOCAL-1", "a note"]);
+    e.stdout(&["add", "Free", "--status", "ready"]);
+    e.stdout(&["add", "Sub", "--parent", "LOCAL-3"]);
+    e.stdout(&["add", "Open", "--status", "ready"]);
 
-    check("show_detail.json", &run(d, &["show", "LOCAL-1"]));
-    check("show_blocked.json", &run(d, &["show", "LOCAL-2"]));
-    check("show_subtasks.json", &run(d, &["show", "LOCAL-3"]));
-    check("list.json", &run(d, &["list"]));
-    check("next.json", &run(d, &["next"]));
+    check("show_detail.json", &redact(&e.stdout(&["show", "LOCAL-1"])));
+    check(
+        "show_blocked.json",
+        &redact(&e.stdout(&["show", "LOCAL-2"])),
+    );
+    check(
+        "show_subtasks.json",
+        &redact(&e.stdout(&["show", "LOCAL-3"])),
+    );
+    check("list.json", &redact(&e.stdout(&["list"])));
+    check("next.json", &redact(&e.stdout(&["next"])));
 }
 
 #[test]
