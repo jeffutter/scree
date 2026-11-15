@@ -312,3 +312,113 @@ fn empty_stdin_is_refused() {
     let count_after = e.ok(&["list"])["tickets"].as_array().unwrap().len();
     assert_eq!(count_after, count_before, "no ticket should be created");
 }
+
+#[test]
+fn hyphen_leading_text_is_data() {
+    let e = Env::new();
+    let h = ["--role", "human"];
+    let run = |rest: &[&str]| -> serde_json::Value {
+        let a: Vec<&str> = h.iter().copied().chain(rest.iter().copied()).collect();
+        e.ok(&a)
+    };
+
+    // add: title, description, plan and criterion, all hyphen-leading, in the space form.
+    let t = run(&[
+        "add",
+        "- dash title",
+        "--description",
+        "- d",
+        "--plan",
+        "- p",
+        "--criterion",
+        "- c one",
+        "--status",
+        "ready",
+    ]);
+    let id = t["id"].as_str().unwrap().to_string();
+    assert_eq!(t["title"], "- dash title");
+    assert_eq!(t["description"], "- d");
+    assert_eq!(t["plan"], "- p");
+    assert_eq!(t["criteria"][0]["text"], "- c one");
+
+    // edit: title, description, plan.
+    let t = run(&[
+        "edit",
+        &id,
+        "--title",
+        "- T2",
+        "--description",
+        "- d2",
+        "--plan",
+        "- p2",
+    ]);
+    assert_eq!(t["title"], "- T2");
+    assert_eq!(t["description"], "- d2");
+    assert_eq!(t["plan"], "- p2");
+
+    // criteria add, comment body, check evidence.
+    let t = run(&["criteria", "add", &id, "- c two"]);
+    assert_eq!(t["criteria"][1]["text"], "- c two");
+    let t = run(&["comment", "add", &id, "- note"]);
+    assert_eq!(
+        t["comments"].as_array().unwrap().last().unwrap()["body"],
+        "- note"
+    );
+    let t = run(&["check", &format!("{id}#1"), "--evidence", "- ev"]);
+    assert_eq!(t["criteria"][0]["evidence"], "- ev");
+
+    // A description built by command substitution that starts with a bullet list.
+    let multi = "- first\n- second";
+    let t = run(&["add", "T", "--description", multi]);
+    assert_eq!(t["description"], multi);
+
+    // abandon reason.
+    let t = run(&["abandon", &id, "- gave up"]);
+    let last = t["comments"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["body"], "- gave up");
+}
+
+#[test]
+fn bare_dash_title_and_criterion_read_stdin() {
+    let e = Env::new();
+    let h = ["--role", "human"];
+    let t = e.stdin_ok(&[h[0], h[1], "add", "-"], "piped title\n");
+    assert_eq!(t["title"], "piped title");
+    let id = t["id"].as_str().unwrap().to_string();
+
+    let t = e.stdin_ok(&[h[0], h[1], "criteria", "add", &id, "-"], "hello\n");
+    assert_eq!(t["criteria"][0]["text"], "hello");
+
+    // An empty read is a usage error naming the argument, and adds nothing.
+    let (code, err) = e.stdin_result(&["--role", "human", "criteria", "add", &id, "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("criterion text"), "{err}");
+    let (code, err) = e.stdin_result(&["--role", "human", "add", "-"], "");
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains("title"), "{err}");
+    assert_eq!(
+        e.ok(&["show", &id])["criteria"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn option_value_never_swallows_the_next_flag() {
+    let e = Env::new();
+    let id = e.ready(&["--plan", "keep"]);
+    let before = e.ok(&["show", &id]);
+    let out = e.run(&[
+        "--role",
+        "human",
+        "edit",
+        &id,
+        "--description",
+        "--plan",
+        "p",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let after = e.ok(&["show", &id]);
+    assert_eq!(after["description"], before["description"]);
+    assert_eq!(after["plan"], before["plan"]);
+    assert_eq!(after["updated_at"], before["updated_at"]);
+}

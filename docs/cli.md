@@ -80,7 +80,7 @@ Every command that changes a ticket prints the updated ticket in the `show` shap
 
 ### Text arguments
 
-Multi-line text (description, plan, comment body, abandon reason, evidence) is a plain argument, or `-` for stdin. An empty stdin read is a usage error (exit 2); pass an empty literal (`""`) where clearing is intended. There is no `$EDITOR` mode and no file flag.
+Every text argument (title, description, plan, criterion text, comment body, abandon reason, evidence) is a plain argument, or exactly `-` for stdin, so a bare dash never reaches storage as content. An empty stdin read is a usage error (exit 2) naming the argument; pass an empty literal (`""`) where clearing is intended. Text may begin with a hyphen without escaping (`--description "- a"`, `comment add ID "- note"`); an option value that is itself a flag, such as `edit ID --description --plan p`, is not accepted as text. There is no `$EDITOR` mode and no file flag.
 
 ### Interactive UI
 

@@ -140,19 +140,20 @@ impl NewStatus {
 
 #[derive(Debug, Args)]
 pub struct AddArgs {
-    /// Ticket title
+    /// Ticket title, or `-` for stdin (an empty read is an error)
+    #[arg(allow_hyphen_values = true)]
     pub title: String,
     /// Make this a subtask of the given top-level ticket
     #[arg(long)]
     pub parent: Option<String>,
     /// Description text, or `-` for stdin (an empty read is an error)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub description: Option<String>,
     /// Plan text, or `-` for stdin (an empty read is an error)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub plan: Option<String>,
-    /// An acceptance criterion; repeatable
-    #[arg(long = "criterion")]
+    /// An acceptance criterion, or `-` for stdin; repeatable
+    #[arg(long = "criterion", allow_hyphen_values = true)]
     pub criteria: Vec<String>,
     #[arg(long = "for", value_enum, default_value_t = ForWho::Agent)]
     pub for_who: ForWho,
@@ -274,14 +275,14 @@ pub struct ListArgs {
 #[derive(Debug, Args)]
 pub struct EditArgs {
     pub id: String,
-    /// New title
-    #[arg(long)]
+    /// New title, or `-` for stdin (an empty read is an error)
+    #[arg(long, allow_hyphen_values = true)]
     pub title: Option<String>,
     /// Description text, or `-` for stdin (an empty read is an error)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub description: Option<String>,
     /// Plan text, or `-` for stdin (an empty read is an error)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub plan: Option<String>,
     /// Add to the end of --description / --plan instead of replacing it
     #[arg(long)]
@@ -299,8 +300,12 @@ pub enum ProjectCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CriteriaCommand {
-    /// Add an acceptance criterion; numbers are per ticket and never reused
-    Add { id: String, criterion: String },
+    /// Add an acceptance criterion (text, or `-` for stdin; an empty read is an error); numbers are per ticket and never reused
+    Add {
+        id: String,
+        #[arg(allow_hyphen_values = true)]
+        criterion: String,
+    },
     /// Remove a criterion by reference, e.g. SCR-12#2
     Rm { target: String },
 }
@@ -316,7 +321,11 @@ pub enum DepCommand {
 #[derive(Debug, Subcommand)]
 pub enum CommentCommand {
     /// Add a comment (text, or `-` for stdin; an empty read is an error)
-    Add { id: String, body: String },
+    Add {
+        id: String,
+        #[arg(allow_hyphen_values = true)]
+        body: String,
+    },
     /// Delete any comment by its id, including ones scree wrote
     Rm { id: String, comment_id: i64 },
 }
@@ -352,7 +361,11 @@ pub enum Command {
         force: bool,
     },
     /// Abandon with a reason (text, or `-` for stdin; an empty read is an error), stored as a comment
-    Abandon { id: String, reason: String },
+    Abandon {
+        id: String,
+        #[arg(allow_hyphen_values = true)]
+        reason: String,
+    },
     /// Done or abandoned back to ready
     Reopen { id: String },
     /// Add or remove acceptance criteria
@@ -362,7 +375,7 @@ pub enum Command {
     Check {
         target: String,
         /// Evidence text, or `-` for stdin (an empty read is an error)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         evidence: Option<String>,
     },
     /// Clear a criterion's check and its evidence

@@ -167,7 +167,7 @@ assert.deepEqual(editArgs(T, { title: "A", description: "E", plan: "P", for: "hu
   [...EDIT, "--title", "A", "--description", "E", "--plan", "P", "--for", "human"], "changed flags only, in order");
 assert.deepEqual(editArgs(T, { title: "Old", description: "" }), [...EDIT, "--description", ""], "a cleared description is sent as empty");
 assert.deepEqual(editArgs({ ...T, description: undefined }, { description: "" }), null, "a missing description equals empty");
-assert.deepEqual(editArgs(T, { plan: "-" }), [...EDIT, "--plan", " "], "a lone dash becomes a space");
+assert.equal(editArgs(T, { plan: "-" }), null, "a lone dash is omitted: it would mean stdin to scree");
 assert(isBuilt(editArgs(T, { title: "N" })), "editArgs output is built");
 assert(!editArgs(T, { title: "A" }).includes("--status"), "edit has no --status: a change is a transition");
 assert.deepEqual(editErrors({ title: "  ", description: "x" }), [{ field: "title", message: "title must not be empty" }], "names the missing field");
@@ -179,12 +179,13 @@ assert.deepEqual(addArgs({ title: "T", description: "d", criteria: "a\n\n b \n",
   "one --criterion per non-empty line");
 assert.deepEqual(addArgs({ title: "T", description: "", plan: "", criteria: "  \n" }), ["--json", "--role", "human", "add", "T"], "empty optional fields omitted");
 assert(!addArgs({ title: "T", for: "agent", status: "draft" }).includes("--project"), "scope comes from cwd, not --project");
-assert.deepEqual(criteriaLines("a\r\n\r\n-\n  b  "), ["a", "-", "b"], "CRLF, blanks, lone dash kept as a criterion");
+assert.deepEqual(criteriaLines("a\r\n\r\n-\n  b  "), ["a", "b"], "CRLF and blanks dropped, and a lone dash (stdin to scree)");
 assert.deepEqual(criteriaLines(""), []);
 assert.deepEqual(CREATE_STATUSES, ["draft", "ready"], "only draft and ready are legal at create");
 assert.deepEqual(editErrors({ title: " " }).map((e) => e.field), ["title"], "create reuses the title check");
 assert.deepEqual(addArgs({ title: "N", plan: "-" }, { parent: "SCR-2" }),
-  ["--json", "--role", "human", "add", "N", "--plan", " ", "--parent", "SCR-2"], "a lone dash becomes a space, not a stdin read");
+  ["--json", "--role", "human", "add", "N", "--parent", "SCR-2"], "a lone dash is omitted, not a stdin read");
+assert.deepEqual(editErrors({ title: "-" }).map((e) => e.field), ["title"], "a lone dash title is refused in the form");
 assert.deepEqual(textFlag("--description", null), []);
 assert.deepEqual(textFlag("--description", "x"), ["--description", "x"]);
 assert.deepEqual(tuiArgv("/bin/scree"), ["/bin/scree", "tui"]);

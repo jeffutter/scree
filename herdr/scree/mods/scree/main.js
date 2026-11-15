@@ -167,35 +167,36 @@ function statusArgs(id, target) {
 
 // The required text fields of a form and the message scree itself gives for each (src/ticket.rs:796
 // for title). One table so the create form can reuse it. Returns one {field, message} per missing
-// field, so a form can name every problem before any argv is built.
+// field, so a form can name every problem before any argv is built. A lone "-" counts as missing: scree
+// reads it as stdin, which the mod never feeds.
 const REQUIRED_FIELDS = [["title", "title must not be empty"]];
 function editErrors(fields = {}) {
-  return REQUIRED_FIELDS.filter(([k]) => String(fields[k] ?? "").trim() === "").map(([field, message]) => ({ field, message }));
+  return REQUIRED_FIELDS.filter(([k]) => ["", "-"].includes(String(fields[k] ?? "").trim())).map(([field, message]) => ({ field, message }));
 }
 
 // Change title, description, plan or assignee: only the flags whose value differs from the loaded
 // `ticket`, in that order, so an untouched box cannot be blanked and a cleared one is sent as "".
 // Returns null when nothing differs, because `scree edit` with no flag exits 2 (src/ticket.rs:786);
 // the caller then just leaves edit mode. There is no --status: `edit` has none (src/cli.rs
-// EditArgs), which is why a status change is a transition. A lone "-" would make scree read stdin,
-// so it is sent as a space.
+// EditArgs), which is why a status change is a transition. A lone "-" would make scree read stdin
+// (src/lib.rs text_arg), so that field is left out instead.
 function editArgs(ticket, fields = {}) {
   const t = ticket ?? {};
   const argv = [...WRITE_FLAGS, "edit", String(t.id)];
   const text = (name, key) => {
     if (fields[key] === undefined || fields[key] === (t[key] ?? "")) return;
     const s = String(fields[key]);
-    argv.push(name, s === "-" ? " " : s);
+    if (s !== "-") argv.push(name, s);
   };
   text("--title", "title"); text("--description", "description"); text("--plan", "plan");
   if (fields.for !== undefined && fields.for !== t.for) argv.push("--for", String(fields.for));
   return argv.length === WRITE_FLAGS.length + 2 ? null : build(argv);
 }
 
-// One criterion per non-empty line of the Acceptance Criteria box. `--criterion` is not read from
-// stdin (src/lib.rs text_arg only handles description and plan), so a "-" line is stored as typed.
+// One criterion per non-empty line of the Acceptance Criteria box. A "-" line is dropped:
+// scree reads a lone "-" criterion as stdin (src/lib.rs text_arg), which the mod never feeds.
 function criteriaLines(text) {
-  return String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l !== "-");
 }
 
 // The only Statuses `add` accepts (src/cli.rs NewStatus); `--status active` is a clap error.
@@ -207,7 +208,7 @@ const CREATE_STATUSES = ["draft", "ready"];
 function addArgs(form = {}, scope = {}) {
   const argv = [...WRITE_FLAGS, "add", String(form.title ?? "")];
   argv.push(...textFlag("--description", form.description), ...textFlag("--plan", form.plan));
-  const lines = Array.isArray(form.criteria) ? form.criteria.map(String) : criteriaLines(form.criteria);
+  const lines = Array.isArray(form.criteria) ? form.criteria.map(String).filter((l) => l !== "-") : criteriaLines(form.criteria);
   for (const c of lines) argv.push("--criterion", c);
   if (form.for !== undefined) argv.push("--for", String(form.for));
   if (form.status !== undefined) argv.push("--status", String(form.status));
@@ -217,11 +218,11 @@ function addArgs(form = {}, scope = {}) {
 
 // A flag carrying free text, or nothing when the value is absent. A lone "-" tells scree to read
 // stdin (src/lib.rs text_arg); an empty read exits 2 with a usage error. The mod must never block
-// on stdin, so a dash becomes a space (which text_arg trims to empty for the non-stdin path).
+// on stdin, so a lone dash is omitted and the field is left alone.
 function textFlag(name, v) {
   if (v === undefined || v === null || v === "") return [];
   const s = String(v);
-  return [name, s === "-" ? " " : s];
+  return s === "-" ? [] : [name, s];
 }
 
 // scree reports a failure on stderr as one JSON object {"error":{"code","message"}} (src/error.rs);

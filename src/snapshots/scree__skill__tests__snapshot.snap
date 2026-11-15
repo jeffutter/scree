@@ -93,11 +93,11 @@ Global flags, accepted by every command:
 
 Create a ticket
 
-- `<TITLE>`: Ticket title (required)
+- `<TITLE>`: Ticket title, or `-` for stdin (an empty read is an error) (required)
 - `--parent <PARENT>`: Make this a subtask of the given top-level ticket
 - `--description <DESCRIPTION>`: Description text, or `-` for stdin (an empty read is an error)
 - `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
-- `--criterion <CRITERIA>`: An acceptance criterion; repeatable
+- `--criterion <CRITERIA>`: An acceptance criterion, or `-` for stdin; repeatable
 - `--for <FOR_WHO>` (values: agent, human; default agent)
 - `--status <STATUS>` (values: draft, ready; default draft)
 - `--blocked-by <BLOCKED_BY>`: A ticket that must be done first; repeatable
@@ -131,7 +131,7 @@ List tickets
 Change a ticket's title, description, plan or assignee
 
 - `<ID>` (required)
-- `--title <TITLE>`: New title
+- `--title <TITLE>`: New title, or `-` for stdin (an empty read is an error)
 - `--description <DESCRIPTION>`: Description text, or `-` for stdin (an empty read is an error)
 - `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
 - `--append`: Add to the end of --description / --plan instead of replacing it
@@ -217,7 +217,7 @@ Add or remove acceptance criteria
 
 ### `scree criteria add [OPTIONS] <ID> <CRITERION>`
 
-Add an acceptance criterion; numbers are per ticket and never reused
+Add an acceptance criterion (text, or `-` for stdin; an empty read is an error); numbers are per ticket and never reused
 
 - `<ID>` (required)
 - `<CRITERION>` (required)

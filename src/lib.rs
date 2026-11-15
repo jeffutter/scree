@@ -209,16 +209,22 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
             let scope = scope::for_write(cwd, cli.project.as_deref())?;
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
+            let title = text_arg("title", Some(&a.title))?;
             let description = text_arg("--description", a.description.as_deref())?;
             let plan = text_arg("--plan", a.plan.as_deref())?;
+            let criteria = a
+                .criteria
+                .iter()
+                .map(|c| text_arg("--criterion", Some(c)))
+                .collect::<Result<Vec<_>>>()?;
             let t = ticket::add(
                 &mut conn,
                 &scope,
                 &ticket::NewTicket {
-                    title: &a.title,
+                    title: &title,
                     description: &description,
                     plan: &plan,
-                    criteria: &a.criteria,
+                    criteria: &criteria,
                     for_who: a.for_who,
                     status: a.status,
                     key: a.key.as_deref(),
@@ -230,6 +236,11 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         }
         Command::Edit(a) => {
             check_single_stdin(a.description.as_deref(), a.plan.as_deref())?;
+            let title = a
+                .title
+                .as_deref()
+                .map(|d| text_arg("--title", Some(d)))
+                .transpose()?;
             let description = a
                 .description
                 .as_deref()
@@ -244,7 +255,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 &mut conn,
                 &a.id,
                 &ticket::EditFields {
-                    title: a.title.as_deref(),
+                    title: title.as_deref(),
                     description: description.as_deref(),
                     plan: plan.as_deref(),
                     append: a.append,
@@ -351,6 +362,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Criteria(CriteriaCommand::Add { id, criterion }) => {
+            let criterion = text_arg("criterion text", Some(&criterion))?;
             let t = ticket::criteria_add(&mut conn, &id, &criterion)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
