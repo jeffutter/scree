@@ -120,6 +120,7 @@ const EXPECTED = {
   ready: ["--json", "--role", "human", "ready", "SCR-1"],
   start: ["--json", "--role", "human", "start", "SCR-1"],
   release: ["--json", "--role", "human", "release", "SCR-1"],
+  draft: ["--json", "--role", "human", "draft", "SCR-1"],
   done: ["--json", "--role", "human", "done", "SCR-1"],
   abandon: ["--json", "--role", "human", "abandon", "SCR-1", "abandoned from the scree mod"],
   reopen: ["--json", "--role", "human", "reopen", "SCR-1"],
@@ -128,7 +129,7 @@ assert.equal(ABANDON_REASON, "abandoned from the scree mod", "the reason the CLI
 assert.deepEqual(EXPECTED.abandon, statusArgs("SCR-1", { status: "abandoned", verb: "abandon" }));
 assert.deepEqual(TRANSITIONS, {
   active: [{ status: "ready", verb: "release" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
-  ready: [{ status: "active", verb: "start" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
+  ready: [{ status: "active", verb: "start" }, { status: "draft", verb: "draft" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
   draft: [{ status: "ready", verb: "ready" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
   done: [{ status: "ready", verb: "reopen" }],
   abandoned: [{ status: "ready", verb: "reopen" }],
@@ -138,7 +139,7 @@ for (const [from, targets] of Object.entries(TRANSITIONS))
   for (const target of targets) {
     assert.deepEqual(statusArgs("SCR-1", target), EXPECTED[target.verb], `${target.verb} from ${from}`);
     assert.notEqual(target.status, from, `${target.verb} does not offer ${from} its own status`);
-    assert.notEqual(target.status, "draft", "no command reaches draft: it is chosen at create");
+    if (target.status === "draft") assert.equal(from, "ready", "only ready can go back to draft");
   }
 assert.deepEqual(transitionsFor("nonexistent"), [], "an unknown status offers nothing");
 assert.equal(transitionsFor("done").length, 1);
@@ -299,13 +300,13 @@ function checkTransitionCoverage(m) {
   assert.deepEqual(m.SETTLEABLE, statuses.filter((s) => !["done", "abandoned"].includes(s)), "SETTLEABLE is every Status a command can still settle");
   assert.deepEqual(closed, statuses.filter((s) => ["done", "abandoned"].includes(s)));
   for (const s of statuses) {
-    const extra = s === "draft" ? ["ready"] : s === "ready" ? ["start"] : s === "active" ? ["release"] : [];
+    const extra = s === "draft" ? ["ready"] : s === "ready" ? ["start", "draft"] : s === "active" ? ["release"] : [];
     const expected = (closed.includes(s) ? ["reopen"] : ["abandon", "done", ...extra]).sort();
     assert.deepEqual(m.transitionsFor(s).map((t) => t.verb).sort(), expected, `${s} offers exactly the commands that work from it`);
     for (const t of m.transitionsFor(s)) {
       assert(statuses.includes(t.status), `${t.verb} reaches a Status the board knows`);
       assert.notEqual(t.status, s, `${t.verb} does not offer ${s} its own status`);
-      assert.notEqual(t.status, "draft", "no command reaches draft");
+      if (t.status === "draft") assert.equal(s, "ready", "only ready reaches draft");
     }
   }
 }
@@ -372,7 +373,7 @@ const MUTANTS = {
   // menu says "Nothing reachable" forever, whatever the CLI would accept.
   transitions_hand_written: { expect: "fail", edits: [ADD_PARKED, ADD_PARKED_STATUS, [
     'const TRANSITIONS = Object.fromEntries(STATUS_ORDER.map((s) => [s,\n  COMMANDS.filter((c) => c.from.includes(s)).map((c) => ({ status: c.to, verb: c.verb }))]));',
-    'const TRANSITIONS = { active: [{ status: "ready", verb: "release" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], ready: [{ status: "active", verb: "start" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], draft: [{ status: "ready", verb: "ready" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], done: [{ status: "ready", verb: "reopen" }], abandoned: [{ status: "ready", verb: "reopen" }] };']] },
+    'const TRANSITIONS = { active: [{ status: "ready", verb: "release" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], ready: [{ status: "active", verb: "start" }, { status: "draft", verb: "draft" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], draft: [{ status: "ready", verb: "ready" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], done: [{ status: "ready", verb: "reopen" }], abandoned: [{ status: "ready", verb: "reopen" }] };']] },
   // SETTLEABLE pinned to today's three: a settled Status would offer nothing but Reopen and an
   // unsettled one would quietly lose Done and Abandon.
   settleable_hand_written: { expect: "fail", edits: [ADD_PARKED, ADD_PARKED_STATUS, ['const SETTLEABLE = STATUS_ORDER.filter((s) => !CLOSED_STATUSES.includes(s));', 'const SETTLEABLE = ["draft", "ready", "active"];']] },

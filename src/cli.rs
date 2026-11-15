@@ -333,6 +333,8 @@ pub enum Command {
     Edit(EditArgs),
     /// Draft to ready
     Ready { id: String },
+    /// Ready back to draft
+    Draft { id: String },
     /// Claim a ready ticket atomically
     Start(StartArgs),
     /// The first Available ticket for the caller's Role

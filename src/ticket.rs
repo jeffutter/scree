@@ -385,6 +385,7 @@ pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<Ticket
 /// A status change `scree` offers as its own command.
 pub enum Action {
     Ready,
+    Draft,
     Start,
     Release,
     Done { force: bool },
@@ -448,6 +449,17 @@ pub fn transition(
                 tx.execute(
                     &format!(
                         "UPDATE tickets SET status = 'ready', updated_at = {NOW} WHERE id = ?1"
+                    ),
+                    [row],
+                )?;
+            }
+            Action::Draft => {
+                if status != "ready" {
+                    return refuse("draft");
+                }
+                tx.execute(
+                    &format!(
+                        "UPDATE tickets SET status = 'draft', updated_at = {NOW} WHERE id = ?1"
                     ),
                     [row],
                 )?;

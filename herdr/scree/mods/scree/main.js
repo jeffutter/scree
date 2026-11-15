@@ -26,13 +26,13 @@ const CLOSED_STATUSES = ["done", "abandoned"];
 const SETTLEABLE = STATUS_ORDER.filter((s) => !CLOSED_STATUSES.includes(s)); // draft, ready, active
 
 // Every way the CLI moves a Ticket, and the Statuses each works from (src/ticket.rs `transition`).
-// No command sets draft - src/cli.rs has Ready/Start/Release/Done/Abandon/Reopen and no Draft - so
-// draft is only ever a current Status, chosen at create. The order is the menu's: forward, up,
-// down, finish, quit, restart.
+// `draft` works from ready only (active must be released first). The order is the menu's: forward,
+// up, down, back to draft, finish, quit, restart.
 const COMMANDS = [
   { verb: "ready", from: ["draft"], to: "ready" },
   { verb: "start", from: ["ready"], to: "active" },
   { verb: "release", from: ["active"], to: "ready" },
+  { verb: "draft", from: ["ready"], to: "draft" },
   { verb: "done", from: SETTLEABLE, to: "done" },
   { verb: "abandon", from: SETTLEABLE, to: "abandoned" },
   { verb: "reopen", from: CLOSED_STATUSES, to: "ready" },

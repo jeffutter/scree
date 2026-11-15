@@ -59,6 +59,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 
 - `edit ID [--title T] [--description TEXT|-] [--plan TEXT|-] [--append] [--for agent|human]`. At least one field is required. Description and plan are replaced; passing an empty string for either clears the field. Reading `-` from stdin with nothing on the pipe is a usage error (exit 2). With `--append` (valid only with `--description` or `--plan`, and requires non-empty text) the new text is separated from the existing text by a blank line, and stands alone when the old text is empty or whitespace-only. Changing `for` follows the identity rules: a human either way, an agent only to `human`. Reassigning an `active` ticket releases the claim to `ready`.
 - `ready ID`: draft to ready.
+- `draft ID`: ready back to `draft`. Refused from active (release first), done and abandoned (reopen first).
 - `start ID | --next [--for ...]`: atomic claim; moves to `active` and records author and session. `--next` picks and claims in one transaction. Checks in order: exit 5 if already active; exit 4 for a ticket that is not `ready`, one with an open blocker, or an agent starting a `human` ticket.
 - `done ID [--force]`: allowed from draft, ready or active; refused while a criterion is unchecked unless `--force`, and while subtasks are open.
 - `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. An empty stdin read is a usage error (exit 2). Abandoning a parent abandons its open subtasks.

@@ -257,6 +257,9 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Ready { id } => {
             transition(&mut conn, format, &id, ticket::Action::Ready, &identity)
         }
+        Command::Draft { id } => {
+            transition(&mut conn, format, &id, ticket::Action::Draft, &identity)
+        }
         Command::Start(a) => {
             sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
             match a.id {

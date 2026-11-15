@@ -11,7 +11,7 @@ A [Herdr](https://herdr.dev) mod that shows scree tickets inside the window. One
 
 ## What it needs
 
-- `scree` (this repo's binary). Reads run `scree --json list` (open tickets, done tickets, or `--all-projects` for the board) and `scree --json show ID` in the space's folder, so scree's project scoping decides which tickets show. Writes are the six status commands - `ready`, `start`, `release`, `done`, `abandon`, `reopen` - each one run as `scree --json --role human <verb> ID` in the Project root the ticket lives in, from a ticket's status menu. An argv the mod did not build itself is refused before it reaches the binary. "tui" opens `scree tui` in a new pane.
+- `scree` (this repo's binary). Reads run `scree --json list` (open tickets, done tickets, or `--all-projects` for the board) and `scree --json show ID` in the space's folder, so scree's project scoping decides which tickets show. Writes are the seven status commands - `ready`, `start`, `release`, `draft`, `done`, `abandon`, `reopen` - each one run as `scree --json --role human <verb> ID` in the Project root the ticket lives in, from a ticket's status menu. An argv the mod did not build itself is refused before it reaches the binary. "tui" opens `scree tui` in a new pane.
 - `mod.json` sets `"focusable": true`.
 - A layout with the two blocks. For the panel, add a child to the stack `panel-body` inside the column `panel`; for the board, add a sibling of `work-body` in the stack `work-area`:
 

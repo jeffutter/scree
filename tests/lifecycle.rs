@@ -47,6 +47,26 @@ fn happy_path() {
 }
 
 #[test]
+fn draft_goes_back_from_ready_only() {
+    let e = Env::new();
+    let id = e.ready(&[]);
+    let t = e.ok(&["draft", &id]);
+    assert_eq!(t["status"], "draft");
+    assert_eq!(t["available"], false);
+    assert_eq!(e.code(&["start", &id]), 4);
+    assert_eq!(e.code(&["draft", &id]), 4);
+    assert_eq!(e.ok(&["ready", &id])["status"], "ready");
+
+    e.ok(&["start", &id]);
+    assert_eq!(e.code(&["draft", &id]), 4);
+    e.ok(&["done", &id]);
+    assert_eq!(e.code(&["draft", &id]), 4);
+    e.ok(&["reopen", &id]);
+    e.ok(&["abandon", &id, "no"]);
+    assert_eq!(e.code(&["draft", &id]), 4);
+}
+
+#[test]
 fn abandon_stores_reason_comment() {
     let e = Env::new();
     let id = e.ready(&[]);
