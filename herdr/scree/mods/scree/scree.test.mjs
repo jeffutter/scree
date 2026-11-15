@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "isWriteCommand", "tuiArgv", "WRITE_COMMANDS", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "addArgs", "textFlag", "parseScreeError"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, addArgs, textFlag, parseScreeError } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -21,8 +21,9 @@ function pureWith(...edits) {
   return new Function(`${pure}; return { ${PURE_NAMES.join(", ")} };`)();
 }
 
-// The statuses a list argv asks for, in the order they appear.
-const statusArgs = (argv) => argv.filter((_, i) => i > 0 && argv[i - 1] === "--status");
+// The statuses a *list* argv asks for, in the order they appear. Named apart from statusArgs below,
+// which builds the argv for one status change.
+const statusFlagsIn = (argv) => argv.filter((_, i) => i > 0 && argv[i - 1] === "--status");
 
 assert.deepEqual(STATUS_ORDER, ["active", "ready", "draft", "done", "abandoned"]);
 
@@ -82,6 +83,7 @@ const dm = detailModel({
   criteria: [{ number: 1, text: "c1", checked: true, evidence: "ran x" }, { number: 2, text: "c2", checked: false, evidence: null }],
   comments: [{ author: "agent", role: "agent", body: "hi", created_at: "2026-01-01" }],
   blocked_by: [{ id: "SCR-5", status: "done", title: "P", worktree: null }], subtasks: [{ id: "SCR-9", status: "ready", title: "S" }],
+  project: { key: "COV", root: "/cov" }, worktree: "/cov/wt",
 });
 assert.equal(dm.description, "desc"); assert.equal(dm.plan, "line1\nline2");
 assert.deepEqual(dm.criteria[0], { number: 1, text: "c1", checked: true, evidence: "ran x" });
@@ -90,26 +92,87 @@ assert.equal(dm.comments[0].body, "hi"); assert.equal(dm.comments[0].role, "agen
 assert.deepEqual(dm.blockedBy, [{ id: "SCR-5", status: "done", title: "P" }]);
 assert.deepEqual(dm.subtasks, [{ id: "SCR-9", status: "ready", title: "S" }]);
 assert.equal(dm.claimedBy, "01234567");
+assert.deepEqual(dm.project, { key: "COV", root: "/cov" }, "the detail keeps its Project so a write runs in the right root");
+assert.equal(dm.worktree, "/cov/wt");
 const empty = detailModel({});
 assert.deepEqual([empty.criteria, empty.comments, empty.blockedBy, empty.subtasks], [[], [], [], []]);
+assert.deepEqual([empty.project, empty.worktree], [null, null]);
 assert.equal(detailModel(null).description, "");
 
-// Command audit: only list/show/tui are ever built; every write command is refused.
-for (const a of [showArgs("X"), listArgs(false).open, listArgs(true).done]) assert(!isWriteCommand(a), a.join(" "));
+// The write gate is provenance, not a verb list: scree() runs an argv only if a builder handed it
+// back. Reads register too, so they keep working; anything assembled elsewhere is refused whatever
+// it contains.
+for (const a of [showArgs("X"), listArgs(false).open, listArgs(true).done, boardListArgs().open, boardListArgs().done])
+  assert(isBuilt(a), `a read builder's output is built: ${a.join(" ")}`);
+for (const a of [
+  statusArgs("SCR-1", { status: "active", verb: "start" }),
+  editArgs("SCR-1", { title: "T" }),
+  addArgs({ title: "New" }, {}),
+]) assert(isBuilt(a), `a write builder's output is built: ${a.join(" ")}`);
+for (const a of [["edit", "SCR-1", "--status", "x"], ["--json", "comment", "SCR-1", "hi"], ["--json", "--role", "human", "done", "SCR-1"], []])
+  assert(!isBuilt(a), `hand-written argv is refused: ${a.join(" ")}`);
+assert(!isBuilt(tuiArgv("scree")), "the tui argv goes to terminal.open, never through scree()");
+assert(!isBuilt(statusArgs("SCR-1", { status: "active", verb: "start" }).slice()), "a copy of a built argv is not built");
+
+// Every transition TRANSITIONS offers resolves to one exact command, written out here rather than
+// derived, so a change to COMMANDS that alters an argv fails first.
+const EXPECTED = {
+  ready: ["--json", "--role", "human", "ready", "SCR-1"],
+  start: ["--json", "--role", "human", "start", "SCR-1"],
+  release: ["--json", "--role", "human", "release", "SCR-1"],
+  done: ["--json", "--role", "human", "done", "SCR-1"],
+  abandon: ["--json", "--role", "human", "abandon", "SCR-1", "abandoned from the scree mod"],
+  reopen: ["--json", "--role", "human", "reopen", "SCR-1"],
+};
+assert.equal(ABANDON_REASON, "abandoned from the scree mod", "the reason the CLI records for a mod abandon");
+assert.deepEqual(EXPECTED.abandon, statusArgs("SCR-1", { status: "abandoned", verb: "abandon" }));
+assert.deepEqual(TRANSITIONS, {
+  active: [{ status: "ready", verb: "release" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
+  ready: [{ status: "active", verb: "start" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
+  draft: [{ status: "ready", verb: "ready" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }],
+  done: [{ status: "ready", verb: "reopen" }],
+  abandoned: [{ status: "ready", verb: "reopen" }],
+}, "one menu row per Status, in COMMANDS order");
+assert.deepEqual(Object.keys(TRANSITIONS), STATUS_ORDER, "TRANSITIONS has a row for every Status");
+for (const [from, targets] of Object.entries(TRANSITIONS))
+  for (const target of targets) {
+    assert.deepEqual(statusArgs("SCR-1", target), EXPECTED[target.verb], `${target.verb} from ${from}`);
+    assert.notEqual(target.status, from, `${target.verb} does not offer ${from} its own status`);
+    assert.notEqual(target.status, "draft", "no command reaches draft: it is chosen at create");
+  }
+assert.deepEqual(transitionsFor("nonexistent"), [], "an unknown status offers nothing");
+assert.equal(transitionsFor("done").length, 1);
+assert.equal(transitionsFor("abandoned")[0].verb, "reopen");
+assert.equal(statusLabel("abandoned"), "Abandoned", "a status with no column still gets a label");
+assert.equal(statusLabel("ready"), "Ready", "a column's label wins over capitalising");
+
+// Writes carry the caller's role: a GUI spawn has no tty and no agent marker, so without --role
+// human scree would resolve Role agent and refuse a human's click (src/identity.rs).
+for (const argv of [
+  statusArgs("SCR-1", { status: "active", verb: "start" }),
+  statusArgs("SCR-1", { status: "abandoned", verb: "abandon" }),
+  editArgs("SCR-1", { title: "T", description: "D", plan: "P", for: "human" }),
+  addArgs({ title: "N", criteria: ["a", "b"], status: "ready", for: "agent" }, { parent: "SCR-2" }),
+]) assert.deepEqual(argv.slice(0, 3), ["--json", "--role", "human"], argv.join(" "));
+assert.deepEqual(WRITE_FLAGS, ["--json", "--role", "human"]);
+
+// Builders pass only what the form holds, and never a bare "-" (which means stdin to scree).
+assert.deepEqual(editArgs("SCR-1", {}), ["--json", "--role", "human", "edit", "SCR-1"]);
+assert.deepEqual(editArgs("SCR-1", { description: "" }), ["--json", "--role", "human", "edit", "SCR-1"]);
+assert.deepEqual(editArgs("SCR-1", { title: "A", for: "human" }), ["--json", "--role", "human", "edit", "SCR-1", "--title", "A", "--for", "human"]);
+assert(!editArgs("SCR-1", { title: "A" }).includes("--status"), "edit has no --status: a change is a transition");
+assert.deepEqual(addArgs({ title: "N" }, {}), ["--json", "--role", "human", "add", "N"]);
+assert.deepEqual(addArgs({ title: "N", plan: "-" }, { parent: "SCR-2" }),
+  ["--json", "--role", "human", "add", "N", "--plan", " ", "--parent", "SCR-2"], "a lone dash becomes a space, not a stdin read");
+assert.deepEqual(textFlag("--description", null), []);
+assert.deepEqual(textFlag("--description", "x"), ["--description", "x"]);
 assert.deepEqual(tuiArgv("/bin/scree"), ["/bin/scree", "tui"]);
 assert.deepEqual(tuiArgv(null), ["scree", "tui"]);
-assert(!isWriteCommand(tuiArgv("scree").slice(1)));
-for (const w of ["add", "edit", "check", "start", "done", "release", "abandon", "comment", "dep", "reorder", "criteria"]) {
-  assert(isWriteCommand(["--json", w, "SCR-1"]), w);
-  assert(WRITE_COMMANDS.includes(w), w);
-}
-assert(!isWriteCommand([]));
 // Board.
 assert.deepEqual(boardListArgs().open, ["--json", "list", "--all-projects", "--status", "draft", "--status", "ready", "--status", "active", "--limit", "1000"]);
 assert.deepEqual(boardListArgs().done, ["--json", "list", "--all-projects", "--status", "done", "--done-since", "7d", "--limit", "1000"]);
 assert(listArgs(false).done.join(" ").includes("--done-since 7d --limit"), "panel done call passes the since bound");
 assert(!boardListArgs().open.includes("done"), "open board call must not include --status done");
-assert(!isWriteCommand(boardListArgs().open) && !isWriteCommand(boardListArgs().done));
 assert.equal(machineLabel(null), "this computer");
 assert.equal(machineLabel("box"), "box");
 assert.equal(worktreeLabel(null), "root");
@@ -175,6 +238,23 @@ assert.equal(nextBoardFold({ A: true }, { key: "A", onlyDone: true }), false, "c
 assert.equal(nextBoardFold({ A: false }, { key: "A", onlyDone: false }), true, "click on explicitly-expanded folds");
 assert.equal(nextBoardFold(undefined, { key: "A", onlyDone: true }), false, "missing store treated as empty");
 
+// scree's own failures arrive as one JSON object on stderr; clap's argv mistakes are plain text.
+assert.deepEqual(parseScreeError('{"error":{"code":"refused","message":"SCR-1 is for a human"}}', 4),
+  { kind: "error", message: "SCR-1 is for a human", screeCode: "refused" });
+assert.equal(parseScreeError('{"error":{"code":"conflict","message":"SCR-1 is already active"}}', 5).kind, "error");
+assert.equal(parseScreeError('prefix noise\n{"error":{"code":"usage","message":"an abandon reason is required"}}', 2).message,
+  "an abandon reason is required", "the JSON line is found after other output");
+assert.deepEqual(parseScreeError("error: unrecognized subcommand 'draft'", 2),
+  { kind: "error", message: "error: unrecognized subcommand 'draft'", screeCode: null }, "clap text falls back unchanged");
+// A refusal whose wording happens to name a missing repo keeps classifyError's verdict, which here
+// is "error": the pattern list matches "not in a git repo", not "is not inside a git repository".
+// Left alone on purpose - the notice strip prints scree's own message either way, and widening
+// classifyError would trade a precise sentence for "Not in a scree project".
+assert.equal(parseScreeError('{"error":{"code":"refused","message":"/x is not inside a git repository"}}', 4).kind,
+  "error");
+assert.equal(parseScreeError('{"error":{"code":"refused","message":"not in a scree project"}}', 4).kind, "no-project",
+  "the poll path still recognises a space with no project");
+
 // The board's statuses are declared once, as COLUMNS. Everything else - BOARD_COLUMNS, OPEN_STATUSES,
 // LABELS, a lane's cells, boardCounts and both open list calls - derives from that table, so every
 // check below compares a derived shape with COLUMNS itself, not with another hand-written list.
@@ -194,15 +274,46 @@ function checkColumnCoverage(m) {
   for (const [s, label] of m.COLUMNS) assert.equal(String(m.LABELS[s]), label, `${s} renders as "${label}", not undefined`);
   // Both open list calls ask for exactly the unfinished columns, one --status each, in that order.
   for (const [what, argv] of [["panel", m.listArgs(false).open], ["panel all-worktrees", m.listArgs(true).open], ["board", m.boardListArgs().open]])
-    assert.deepEqual(statusArgs(argv), unfinished, `${what} open call fetches exactly the unfinished columns`);
+    assert.deepEqual(statusFlagsIn(argv), unfinished, `${what} open call fetches exactly the unfinished columns`);
 }
-checkColumnCoverage({ COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts });
+
+// The same trick over the status menu: TRANSITIONS must be derived from STATUS_ORDER, so a Status
+// added to the one place gains a row instead of silently dropping out of the menu. `extra` below is
+// hand-written on purpose - it states what the CLI accepts per Status (src/ticket.rs) independently
+// of how main.js derives it, which is what gives these asserts their teeth.
+function checkTransitionCoverage(m) {
+  const statuses = m.STATUS_ORDER;
+  const closed = statuses.filter((s) => !m.SETTLEABLE.includes(s));
+  assert.deepEqual(Object.keys(m.TRANSITIONS), statuses, "TRANSITIONS has a row for every Status");
+  assert.deepEqual(m.SETTLEABLE, statuses.filter((s) => !["done", "abandoned"].includes(s)), "SETTLEABLE is every Status a command can still settle");
+  assert.deepEqual(closed, statuses.filter((s) => ["done", "abandoned"].includes(s)));
+  for (const s of statuses) {
+    const extra = s === "draft" ? ["ready"] : s === "ready" ? ["start"] : s === "active" ? ["release"] : [];
+    const expected = (closed.includes(s) ? ["reopen"] : ["abandon", "done", ...extra]).sort();
+    assert.deepEqual(m.transitionsFor(s).map((t) => t.verb).sort(), expected, `${s} offers exactly the commands that work from it`);
+    for (const t of m.transitionsFor(s)) {
+      assert(statuses.includes(t.status), `${t.verb} reaches a Status the board knows`);
+      assert.notEqual(t.status, s, `${t.verb} does not offer ${s} its own status`);
+      assert.notEqual(t.status, "draft", "no command reaches draft");
+    }
+  }
+}
+
+// Both derived shapes, over the live code and over each mutant.
+const MODULE = { COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts, STATUS_ORDER, SETTLEABLE, TRANSITIONS, transitionsFor };
+function checkCoverage(m) { checkColumnCoverage(m); checkTransitionCoverage(m); }
+checkCoverage(MODULE);
 
 // Mutants: each one adds a fifth column to the table and, except for the control, hands one of the
 // derived shapes back to a hand-written list. Running the same coverage checks over them proves the
 // asserts have teeth (SCR-20). SCREE_MUTANT=<name> node scree.test.mjs runs one after the suite:
 // exit 0 means it behaved as expected.
 const ADD_PARKED = ['["done", "Done"]]', '["done", "Done"], ["parked", "Parked"]]'];
+// A sixth Status in the one table that lists them, for the transitions checks: parked is unsettled,
+// so Done and Abandon must reach it without COMMANDS being edited.
+const ADD_PARKED_STATUS = [
+  'const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned"];',
+  'const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned", "parked"];'];
 const MUTANTS = {
   // The point of the change: the table is the only edit a new column needs.
   add_column_to_table: { expect: "pass", edits: [ADD_PARKED] },
@@ -216,6 +327,18 @@ const MUTANTS = {
   // before it started using OPEN_STATUSES.
   status_missing_from_panel_call: { expect: "fail", edits: [['...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s])', '...scope, ...OPEN_STATUSES.filter((s) => s !== "draft").flatMap((s) => ["--status", s])']] },
   status_missing_from_board_call: { expect: "fail", edits: [['"--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s])', '"--all-projects", ...OPEN_STATUSES.filter((s) => s !== "active").flatMap((s) => ["--status", s])']] },
+  // The point of the transitions table: a new Status gets a menu row from one edit. Unlike the column
+  // mutants this one needs both tables touched, because STATUS_ORDER and COLUMNS are separate lists
+  // that "must stay consistent on the four they share" (main.js).
+  new_status_gains_a_row: { expect: "pass", edits: [ADD_PARKED, ADD_PARKED_STATUS] },
+  // TRANSITIONS written out by hand again: the new Status has no row, so its card shows a mark whose
+  // menu says "Nothing reachable" forever, whatever the CLI would accept.
+  transitions_hand_written: { expect: "fail", edits: [ADD_PARKED, ADD_PARKED_STATUS, [
+    'const TRANSITIONS = Object.fromEntries(STATUS_ORDER.map((s) => [s,\n  COMMANDS.filter((c) => c.from.includes(s)).map((c) => ({ status: c.to, verb: c.verb }))]));',
+    'const TRANSITIONS = { active: [{ status: "ready", verb: "release" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], ready: [{ status: "active", verb: "start" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], draft: [{ status: "ready", verb: "ready" }, { status: "done", verb: "done" }, { status: "abandoned", verb: "abandon" }], done: [{ status: "ready", verb: "reopen" }], abandoned: [{ status: "ready", verb: "reopen" }] };']] },
+  // SETTLEABLE pinned to today's three: a settled Status would offer nothing but Reopen and an
+  // unsettled one would quietly lose Done and Abandon.
+  settleable_hand_written: { expect: "fail", edits: [ADD_PARKED, ADD_PARKED_STATUS, ['const SETTLEABLE = STATUS_ORDER.filter((s) => !CLOSED_STATUSES.includes(s));', 'const SETTLEABLE = ["draft", "ready", "active"];']] },
 };
 
 // Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
@@ -236,7 +359,7 @@ if (process.env.SCREE_MUTANT) {
   assert(spec, `unknown mutant ${name}; known: ${Object.keys(MUTANTS).join(", ")}`);
   let outcome, detail = "";
   try {
-    checkColumnCoverage(pureWith(...spec.edits));
+    checkCoverage(pureWith(...spec.edits));
     outcome = "passed";
   } catch (e) {
     if (!(e instanceof assert.AssertionError)) {

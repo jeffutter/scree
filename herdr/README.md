@@ -11,7 +11,7 @@ A [Herdr](https://herdr.dev) mod that shows scree tickets inside the window. One
 
 ## What it needs
 
-- `scree` (this repo's binary). The mod only reads: it runs `scree --json list` (open tickets, done tickets, or `--all-projects` for the board) and `scree --json show ID` in the space's folder, so scree's project scoping decides which tickets show. It refuses any write subcommand. "tui" opens `scree tui` in a new pane.
+- `scree` (this repo's binary). Reads run `scree --json list` (open tickets, done tickets, or `--all-projects` for the board) and `scree --json show ID` in the space's folder, so scree's project scoping decides which tickets show. Writes are the six status commands - `ready`, `start`, `release`, `done`, `abandon`, `reopen` - each one run as `scree --json --role human <verb> ID` in the Project root the ticket lives in, from a ticket's status menu. An argv the mod did not build itself is refused before it reaches the binary. "tui" opens `scree tui` in a new pane.
 - `mod.json` sets `"focusable": true`.
 - A layout with the two blocks. For the panel, add a child to the stack `panel-body` inside the column `panel`; for the board, add a sibling of `work-body` in the stack `work-area`:
 
@@ -54,6 +54,7 @@ Link the folder per file (`recursive = true`) so Herdr can write its own files b
 
 - Click the Scree button for the panel. Section headers fold; "This worktree" / "All worktrees" switches scope; the chips filter by All, Agent, Human and Blocked only. Click a row for the ticket detail, "Back" returns.
 - Click the Board button for the board. A project whose visible tickets are all done starts folded; one with any open ticket starts expanded. Clicking a project header pins your choice either way, and it survives polls and restarts. Click a card to open its detail, "+N more" to expand a long cell.
+- Click a ticket's status mark - a panel row, a board card, or the detail's status chip - for its status menu, which lists the statuses scree can move it to from where it stands. Choosing one runs the change and refetches at once, so the card moves without waiting for the next poll; Escape or a click anywhere else closes the menu. Abandon records a fixed reason ("abandoned from the scree mod"), and a refusal shows scree's own message in a strip under the header.
 - "tui" (panel header) and "Open in scree tui" (detail) open `scree tui` in a new pane on the right, for a space on this machine.
 - The mod polls every 3 s; no server is involved.
 

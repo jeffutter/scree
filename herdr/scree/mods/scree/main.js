@@ -1,5 +1,5 @@
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, Popup } from "gpui-base";
 import { spaces, panes, focused, exec, theme, run, props as layoutProps } from "herdr";
 
 // Scree pure helpers: no host calls. scree.test.mjs slices the text between the two markers
@@ -18,6 +18,40 @@ const BOARD_COLUMNS = COLUMNS.map(([s]) => s);
 const OPEN_STATUSES = BOARD_COLUMNS.filter((s) => s !== "done");
 // Display name per status ("Draft", "Ready", ...), for the board's column headers and the panel's sections.
 const LABELS = Object.fromEntries(COLUMNS);
+
+// A Status is "finished" when no command settles it: done and abandoned.
+const CLOSED_STATUSES = ["done", "abandoned"];
+// What a command can still settle. Derived from STATUS_ORDER, so a Status added there already
+// offers Done and Abandon in the menu without touching COMMANDS (the transitions mutant proves it).
+const SETTLEABLE = STATUS_ORDER.filter((s) => !CLOSED_STATUSES.includes(s)); // draft, ready, active
+
+// Every way the CLI moves a Ticket, and the Statuses each works from (src/ticket.rs `transition`).
+// No command sets draft - src/cli.rs has Ready/Start/Release/Done/Abandon/Reopen and no Draft - so
+// draft is only ever a current Status, chosen at create. The order is the menu's: forward, up,
+// down, finish, quit, restart.
+const COMMANDS = [
+  { verb: "ready", from: ["draft"], to: "ready" },
+  { verb: "start", from: ["ready"], to: "active" },
+  { verb: "release", from: ["active"], to: "ready" },
+  { verb: "done", from: SETTLEABLE, to: "done" },
+  { verb: "abandon", from: SETTLEABLE, to: "abandoned" },
+  { verb: "reopen", from: CLOSED_STATUSES, to: "ready" },
+];
+
+// status -> the entries its menu offers. Keyed off STATUS_ORDER so every Status gets a row even
+// when no command leaves it (an empty list renders "Nothing reachable").
+const TRANSITIONS = Object.fromEntries(STATUS_ORDER.map((s) => [s,
+  COMMANDS.filter((c) => c.from.includes(s)).map((c) => ({ status: c.to, verb: c.verb }))]));
+
+// The targets reachable from `status` by command, in COMMANDS order.
+function transitionsFor(status) { return TRANSITIONS[status] ?? []; }
+
+// Menu label for a Status: the board's column name where there is one, else the word capitalised.
+// Abandoned is never a column, so it needs the fallback.
+function statusLabel(status) {
+  const s = String(status);
+  return LABELS[s] ?? s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 // Share of criteria checked, 0..100. Accepts the list-shape summary {checked, total}
 // or a full criteria array [{checked}]. No criteria reads as 0.
@@ -80,6 +114,26 @@ function countsLine(groups) {
     .map((g) => `${g.tickets.length} ${g.status}`).join(", ");
 }
 
+// Provenance rather than a denylist: scree() runs an argv only when one of the builders below handed
+// it back. The reads register too, which is why listArgs/boardListArgs/showArgs keep working
+// unchanged apart from the build() around their returns. An array built anywhere else fails the gate
+// on identity alone, whatever verbs it contains.
+const BUILT = new WeakSet();
+const build = (argv) => {
+  BUILT.add(argv);
+  return argv;
+};
+// The gate, named so scree.test.mjs can interrogate it: the test loads this region as text and
+// cannot reach BUILT directly.
+function isBuilt(argv) { return BUILT.has(argv); }
+
+// Writes name the caller. A GUI spawn has no tty and no AI_AGENT marker, so scree would resolve Role
+// agent (src/identity.rs) and refuse a human's claim of a `for human` Ticket. Same choice the TUI
+// makes in code (src/lib.rs). Reads leave Role to inference.
+const WRITE_FLAGS = ["--json", "--role", "human"];
+// Mirrors the TUI's fixed reason (docs/tui.md); the CLI refuses a blank one (src/ticket.rs).
+const ABANDON_REASON = "abandoned from the scree mod";
+
 // Done tickets are fetched with --done-since so the server's position order cannot drop recent ones.
 const DONE_DAYS = 7;
 
@@ -87,8 +141,8 @@ const DONE_DAYS = 7;
 function listArgs(allWorktrees) {
   const scope = allWorktrees ? ["--all-worktrees"] : [];
   return {
-    open: ["--json", "list", ...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "200"],
-    done: ["--json", "list", ...scope, "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "500"],
+    open: build(["--json", "list", ...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "200"]),
+    done: build(["--json", "list", ...scope, "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "500"]),
   };
 }
 
@@ -98,17 +152,64 @@ function applyFilters(tickets, { forRole = "all", blockedOnly = false } = {}) {
 }
 
 // The detail call: read-only `scree --json show ID`.
-function showArgs(id) { return ["--json", "show", String(id)]; }
+function showArgs(id) { return build(["--json", "show", String(id)]); }
 
 // The "Open in scree tui" argv.
 function tuiArgv(bin) { return [bin || "scree", "tui"]; }
 
-// Subcommands that change the database. scree() refuses these; the mod only lists, shows and runs tui.
-const WRITE_COMMANDS = ["add", "edit", "check", "uncheck", "start", "done", "release", "abandon", "comment", "dep", "reorder", "criteria", "ready", "draft", "move", "reopen", "init", "sweep"];
-// First non-flag argument is the subcommand (the flags used here take no value).
-function isWriteCommand(args) {
-  const sub = (args ?? []).find((a) => !String(a).startsWith("-"));
-  return sub !== undefined && WRITE_COMMANDS.includes(sub);
+// One menu pick on ticket `id`: the command that reaches `target`, an entry of TRANSITIONS. It takes
+// the entry and not a bare status because `ready` is reached by three different verbs depending on
+// where the Ticket stands now.
+function statusArgs(id, target) {
+  const argv = [...WRITE_FLAGS, target.verb, String(id)];
+  return build(target.verb === "abandon" ? [...argv, ABANDON_REASON] : argv);
+}
+
+// Change title, description, plan or assignee. Only the keys present in `fields` are passed, so a
+// form that left a box alone cannot blank it. There is no --status: `edit` has none (src/cli.rs
+// EditArgs), which is why a status change is a transition. Built now for SCR-17.2's edit form.
+function editArgs(id, fields = {}) {
+  const argv = [...WRITE_FLAGS, "edit", String(id)];
+  argv.push(...textFlag("--title", fields.title), ...textFlag("--description", fields.description),
+    ...textFlag("--plan", fields.plan));
+  if (fields.for !== undefined) argv.push("--for", String(fields.for));
+  return build(argv);
+}
+
+// File a new Ticket. `form.status` is draft or ready, the only two `add` accepts (src/cli.rs
+// NewStatus); `scope.parent` files it as a subtask. Built now for SCR-17.3's create screen.
+function addArgs(form = {}, scope = {}) {
+  const argv = [...WRITE_FLAGS, "add", String(form.title ?? "")];
+  argv.push(...textFlag("--description", form.description), ...textFlag("--plan", form.plan));
+  for (const c of form.criteria ?? []) argv.push("--criterion", String(c));
+  if (form.for !== undefined) argv.push("--for", String(form.for));
+  if (form.status !== undefined) argv.push("--status", String(form.status));
+  if (scope.parent !== undefined && scope.parent !== null) argv.push("--parent", String(scope.parent));
+  return build(argv);
+}
+
+// A flag carrying free text, or nothing when the value is absent. A lone "-" tells scree to read
+// stdin (src/lib.rs text_arg) and exec gives it none, so a dash becomes a space, which the CLI
+// trims to empty.
+function textFlag(name, v) {
+  if (v === undefined || v === null || v === "") return [];
+  const s = String(v);
+  return [name, s === "-" ? " " : s];
+}
+
+// scree reports a failure on stderr as one JSON object {"error":{"code","message"}} (src/error.rs);
+// clap's own argv mistakes are plain text with exit 2, so fall back to the raw text. `kind` stays
+// classifyError's verdict, so no-binary and no-project read exactly as they did before.
+function parseScreeError(text, code) {
+  const raw = String(text ?? "");
+  for (const line of raw.split("\n")) {
+    let parsed;
+    try { parsed = JSON.parse(line); } catch { continue; }
+    const e = parsed?.error;
+    if (e && typeof e.message === "string")
+      return { kind: classifyError(e.message, code), message: e.message, screeCode: e.code ?? null };
+  }
+  return { kind: classifyError(raw, code), message: raw, screeCode: null };
 }
 
 // Normalises a `scree --json show` payload for rendering; tolerant of missing fields.
@@ -124,6 +225,8 @@ function detailModel(show) {
     comments: arr(s.comments).map((c) => ({ author: c.author ?? "", role: c.role ?? null, body: c.body ?? "", created_at: c.created_at ?? "" })),
     blockedBy: arr(s.blocked_by).map(ref),
     subtasks: arr(s.subtasks).map(ref),
+    // Where the Ticket lives, so a write from the detail view runs in its own Project's root.
+    project: s.project ?? null, worktree: s.worktree ?? null,
   };
 }
 
@@ -133,8 +236,8 @@ function detailModel(show) {
 // ordered by position, so boardModel cuts it to the last days client-side.
 function boardListArgs() {
   return {
-    open: ["--json", "list", "--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "1000"],
-    done: ["--json", "list", "--all-projects", "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "1000"],
+    open: build(["--json", "list", "--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "1000"]),
+    done: build(["--json", "list", "--all-projects", "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "1000"]),
   };
 }
 
@@ -148,7 +251,7 @@ function worktreeLabel(path) {
 function machineLabel(on) { return on ? String(on) : "this computer"; }
 
 // Projects as swimlanes: [{key, root, name, count, onlyDone, lanes: [{worktree, label, cells: one key per BOARD_COLUMNS}]}].
-// Filters apply first; abandoned, archived and done older than doneDays are dropped. Projects sort
+// Filters apply first; archived and done older than doneDays are dropped. Projects sort
 // by key with LOCAL (no root) last; lanes list the root checkout first, then worktrees by path.
 // Tickets keep list order (position) inside a cell. Empty lanes and projects are omitted.
 // onlyDone is true when every visible ticket in the project is done; the board folds such a
@@ -254,6 +357,13 @@ export default class Scree extends View {
     this.filterFor = ["all", "agent", "human"].includes(store.get("filterFor", "all")) ? store.get("filterFor", "all") : "all";
     this.blockedOnly = store.get("blockedOnly", false) === true;
     this.detail = null; // {id, data, error, loading} while a ticket's detail is open
+    // One status menu may be open at a time: {id, status}. notice is the last write's failure,
+    // which survives polls so it can be read, and goes when the next write works or the view changes.
+    this.menu = null;
+    this.notice = null;
+    this.refreshQueued = false;
+    // A handle lives longer than a render, so it is made here and never in render().
+    this.menuFocus = cx.focus_handle();
     this.refresh(cx);
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
   }
@@ -263,7 +373,7 @@ export default class Scree extends View {
 
   // Runs scree in the active space's folder (on its machine) so project scoping follows the space.
   async scree(args, { cwd, on }) {
-    if (isWriteCommand(args)) throw new ScreeError("error", `refusing write command: ${args.join(" ")}`);
+    if (!isBuilt(args)) throw new ScreeError("error", `refusing argv the mod did not build: ${args.join(" ")}`);
     const bins = this.bin ? [this.bin] : BINS;
     let last;
     for (const bin of bins) {
@@ -274,7 +384,8 @@ export default class Scree extends View {
       this.bin = bin;
       if (r.code !== 0) {
         const text = (r.stderr || r.stdout).trim();
-        throw new ScreeError(classifyError(text, r.code), text || `scree exited ${r.code}`);
+        const err = parseScreeError(text, r.code);
+        throw new ScreeError(err.kind, err.message || `scree exited ${r.code}`);
       }
       return r.stdout;
     }
@@ -283,7 +394,9 @@ export default class Scree extends View {
   }
 
   refresh(cx) {
-    if (this.loading) return;
+    // A write asked for a fresh board while a poll was in flight: run one as soon as it lands,
+    // rather than waiting out the next 3 s tick.
+    if (this.loading) { this.refreshQueued = true; return; }
     const loc = location(), context = this.key();
     if (context !== this.context) {
       // A different space, folder or scope: park this one's state and restore the target's.
@@ -292,6 +405,8 @@ export default class Scree extends View {
       this.context = context; this.open = s.open; this.done = s.done; this.board = s.board; this.error = s.error; this.loaded = s.loaded;
       this.bin = null;
       this.detail = null;
+      this.menu = null;
+      this.notice = null;
     }
     if (!loc.cwd && this.mode !== "board") { this.error = { kind: "no-project" }; this.loaded = true; cx.notify(); return; }
     this.loading = true;
@@ -309,7 +424,11 @@ export default class Scree extends View {
         }
       } catch (e) {
         if (this.key() === context) { this.error = { kind: e.kind ?? "error", message: String(e.message ?? e) }; this.loaded = true; }
-      } finally { this.loading = false; cx.notify(); }
+      } finally {
+        this.loading = false;
+        if (this.refreshQueued) { this.refreshQueued = false; this.refresh(cx); }
+        cx.notify();
+      }
       // Keep an open detail current (new evidence and comments) on every poll.
       // No branch above returns early, so this runs in board mode too.
       if (this.detail && this.key() === context) await this.fetchDetail(this.detail.id, loc, context, cx);
@@ -332,12 +451,86 @@ export default class Scree extends View {
   openDetail(id, cx) {
     this.selected = id;
     this.detail = { id, data: null, error: null, loading: true };
+    this.menu = null;
+    this.notice = null;
     cx.notify();
     const loc = location(), context = this.key();
     cx.spawn((cx) => this.fetchDetail(id, loc, context, cx));
   }
 
-  closeDetail(cx) { this.detail = null; cx.notify(); }
+  closeDetail(cx) { this.detail = null; this.menu = null; this.notice = null; cx.notify(); }
+
+  // Where a write runs: the Project root the Ticket belongs to, because scope::for_write ignores
+  // --project whenever cwd is inside any repo, and add/start/done sweep the cwd's Project
+  // (src/scope.rs, src/lib.rs). A LOCAL Ticket has no root, so fall back to the space's folder.
+  writeOpts(t) { const loc = location(); return { cwd: t?.project?.root ?? loc.cwd, on: loc.on }; }
+
+  // Runs a builder's argv and turns the outcome into view state: the notice strip on a refusal, and
+  // a fresh poll either way so the card moves now instead of on the next tick.
+  async runWrite(args, opts, cx) {
+    try { await this.scree(args, opts); this.notice = null; }
+    catch (e) { this.notice = { kind: e.kind ?? "error", message: String(e.message ?? e) }; }
+    this.menu = null;
+    this.refresh(cx);
+    cx.notify();
+  }
+
+  // The status menu for one Ticket. Only one is open: picking a mark toggles its own menu, opening
+  // another Ticket's replaces this one.
+  toggleStatusMenu(id, status, cx) {
+    this.menu = this.menu?.id === id ? null : { id, status };
+    if (this.menu) this.menuFocus.focus();
+    cx.notify();
+  }
+
+  dismissMenu(cx) { if (this.menu) { this.menu = null; cx.notify(); } }
+
+  // A menu row: build the command, run it where the Ticket lives, and let runWrite report.
+  chooseStatus(k, target, cx) {
+    cx.spawn(async (cx) => { await this.runWrite(statusArgs(k.id, target), this.writeOpts(k), cx); });
+  }
+
+  // The mark as a trigger. Deliberately not inside mark(): the panel legend draws marks for
+  // decoration and must stay inert. stop_propagation keeps the row's own click (open the detail)
+  // and the view's dismiss handler from firing underneath the menu.
+  markButton(t, k, status) {
+    return div().id(`scree-mark-${k.id}`).flex_none().cursor_pointer()
+      .on_click((_e, cx) => { cx.stop_propagation(); this.toggleStatusMenu(k.id, status, cx); })
+      .child(this.mark(t, k, status));
+  }
+
+  // The anchored surface over a trigger, filled only while that Ticket's menu is the open one. Popup
+  // owns no dismissal and no open state, so the body below carries the Escape handler and each view
+  // puts dismissMenu on its outermost container for the click-outside case.
+  statusMenu(t, k, status, trigger) {
+    const open = this.menu?.id === k.id;
+    return Popup.new(`scree-status-menu-${k.id}`, trigger).anchor("bottom_left")
+      .track_focus(this.menuFocus)
+      .on_key_down((e, cx) => { if (e.key === "escape") { cx.stop_propagation(); this.dismissMenu(cx); } })
+      .when(open, (el) => el.content(this.menuBody(t, k, status)));
+  }
+
+  menuBody(t, k, status) {
+    const targets = transitionsFor(status);
+    return v_flex().id(`scree-menu-${k.id}`).py(4).rounded(6).border_1().border_color(t.border).bg(t.popover ?? t.background)
+      .when(!targets.length, (el) => el.child(this.menuRow(t, k, null)))
+      .children(targets.map((target) => this.menuRow(t, k, target)));
+  }
+
+  menuRow(t, k, target) {
+    if (!target) return div().px(10).py(4).text_size(12).text_color(t.dim).child("Nothing reachable");
+    return div().id(`scree-menu-${k.id}-${target.verb}`).px(10).py(4).text_size(12).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.chooseStatus(k, target, cx); })
+      .child(statusLabel(target.status));
+  }
+
+  // The last write's failure, shown until the next write succeeds or the view changes. Polls leave it
+  // alone, so a refusal does not blink out before anyone reads it.
+  noticeStrip(t) {
+    return div().id("scree-notice").flex_none().px(10).py(5).text_size(11).text_color(t.blocked)
+      .border_b(1).border_color(t.border).child(this.notice.message ?? this.notice.kind);
+  }
 
   setFilterFor(v, cx) { this.filterFor = v; store.set("filterFor", v); cx.notify(); }
   toggleBlockedOnly(cx) { this.blockedOnly = !this.blockedOnly; store.set("blockedOnly", this.blockedOnly); cx.notify(); }
@@ -417,7 +610,7 @@ export default class Scree extends View {
       .bg(sel ? t.selected : "#00000000").hover((s) => s.bg(sel ? t.selected : t.hover))
       .on_click((_e, cx) => this.openDetail(k.id, cx))
       .child(h_flex().gap(8).items_center().min_w(0)
-        .child(this.mark(t, k, status))
+        .child(this.statusMenu(t, k, status, this.markButton(t, k, status)))
         .child(div().flex_none().font_family("monospace").text_size(11).text_color(t.dim).child(k.id))
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(k.title)))
       .child(second);
@@ -428,7 +621,7 @@ export default class Scree extends View {
     return v_flex().id(`scree-card-${k.id}`).px(8).py(6).gap(3).rounded(6).border_1().border_color(t.border).cursor_pointer()
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.openDetail(k.id, cx))
       .child(h_flex().gap(6).items_center().min_w(0)
-        .child(this.mark(t, k, status))
+        .child(this.statusMenu(t, k, status, this.markButton(t, k, status)))
         .child(div().flex_none().font_family("monospace").text_size(11).text_color(t.dim).child(k.id)))
       .child(div().min_w(0).text_size(12).child(k.title))
       .child(this.cardMeta(t, k, 0));
@@ -479,7 +672,9 @@ export default class Scree extends View {
     // scroll sideways instead of squeezing or clipping cards.
     const minW = 90 + BOARD_COLUMNS.length * (COL_W + 8) + 28;
     return v_flex().id("scree-board").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
+      .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .child(this.filterBar(t))
       .child(v_flex().id("scree-board-body").flex_1().min_h(0).overflow_scroll()
         .child(v_flex().min_w(minW).children(body)));
@@ -535,8 +730,14 @@ export default class Scree extends View {
     let body;
     if (!m) body = [div().p(10).text_color(d.error ? t.blocked : t.dim).child(d.error ?? "Loading...")];
     else {
-      const chipEls = [m.status, m.for ? `for ${m.for}` : null, m.blocked ? "blocked" : null, m.claimedBy ? `claimed ${m.claimedBy}` : null].filter(Boolean)
-        .map((x) => div().flex_none().px(6).py(1).rounded(4).text_size(11).border_1().border_color(t.border).text_color(x === "blocked" ? t.blocked : t.muted).child(x));
+      // The status chip doubles as the menu trigger; the rest stay decoration.
+      const statusChip = this.statusMenu(t, m, m.status, div().id(`scree-mark-${m.id}`).flex_none().px(6).py(1).rounded(4)
+        .text_size(11).border_1().border_color(t.border).cursor_pointer().text_color(t.muted)
+        .on_click((_e, cx) => { cx.stop_propagation(); this.toggleStatusMenu(m.id, m.status, cx); })
+        .child(m.status));
+      const chipEls = [statusChip].concat([m.for ? `for ${m.for}` : null, m.blocked ? "blocked" : null, m.claimedBy ? `claimed ${m.claimedBy}` : null]
+        .filter(Boolean)
+        .map((x) => div().flex_none().px(6).py(1).rounded(4).text_size(11).border_1().border_color(t.border).text_color(x === "blocked" ? t.blocked : t.muted).child(x)));
       body = [
         d.error ? div().px(12).py(4).text_size(11).text_color(t.blocked).child(d.error) : null,
         h_flex().px(12).py(6).gap(6).flex_wrap().children(chipEls),
@@ -557,7 +758,9 @@ export default class Scree extends View {
       ].filter(Boolean);
     }
     return v_flex().id("scree-detail").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
+      .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .child(v_flex().id("scree-body-detail").flex_1().min_h(0).overflow_y_scroll().children(body));
   }
 
@@ -599,7 +802,9 @@ export default class Scree extends View {
           .child(this.mark(t, { blocked: kind === "blocked" }, kind))
           .child(label)));
     return v_flex().id("scree-panel").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .on_click((_e, cx) => this.dismissMenu(cx))
       .child(header)
+      .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .when(!fatal, (el) => el.child(this.filterBar(t)))
       .child(v_flex().id("scree-body-panel").flex_1().min_h(0).overflow_y_scroll().children(body))
       .when(!state, (el) => el.child(legend));
