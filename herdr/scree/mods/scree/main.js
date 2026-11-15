@@ -1112,7 +1112,7 @@ export default class Scree extends View {
       .when(!fatal && this.canOpenTui(), (el) => el.child(div().id("scree-open-tui").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, _cx) => this.openTui()).child("tui")));
     const body = state
-      ? [div().p(10).text_color(this.error || viewError ? t.blocked : t.dim).child(state)]
+      ? [div().p(10).text_color(this.error ? t.blocked : t.dim).child(state)]
       : sections.map((x) => this.section(t, x.g, x.total, cx));
     // The legend is panel-only and lists the marks Active-first; its statuses are COLUMNS' plus "blocked".
     const legend = h_flex().flex_none().px(10).py(6).gap(12).gap_y(4).items_center().flex_wrap().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
