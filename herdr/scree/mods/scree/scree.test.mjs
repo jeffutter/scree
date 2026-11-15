@@ -6,8 +6,23 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
-  `${src.slice(from, to)}; return { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, OPEN_STATUSES, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT };`)();
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "isWriteCommand", "tuiArgv", "WRITE_COMMANDS", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, isWriteCommand, tuiArgv, WRITE_COMMANDS, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT } = new Function(
+  `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
+
+// Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
+// edit matches nothing, so a mutant cannot silently stop mutating.
+function pureWith(...edits) {
+  let pure = src.slice(from, to);
+  for (const [find, replace] of edits) {
+    assert(pure.includes(find), `mutant did not match: ${find}`);
+    pure = pure.replace(find, replace);
+  }
+  return new Function(`${pure}; return { ${PURE_NAMES.join(", ")} };`)();
+}
+
+// The statuses a list argv asks for, in the order they appear.
+const statusArgs = (argv) => argv.filter((_, i) => i > 0 && argv[i - 1] === "--status");
 
 assert.deepEqual(STATUS_ORDER, ["active", "ready", "draft", "done", "abandoned"]);
 
@@ -160,6 +175,49 @@ assert.equal(nextBoardFold({ A: true }, { key: "A", onlyDone: true }), false, "c
 assert.equal(nextBoardFold({ A: false }, { key: "A", onlyDone: false }), true, "click on explicitly-expanded folds");
 assert.equal(nextBoardFold(undefined, { key: "A", onlyDone: true }), false, "missing store treated as empty");
 
+// The board's statuses are declared once, as COLUMNS. Everything else - BOARD_COLUMNS, OPEN_STATUSES,
+// LABELS, a lane's cells, boardCounts and both open list calls - derives from that table, so every
+// check below compares a derived shape with COLUMNS itself, not with another hand-written list.
+function checkColumnCoverage(m) {
+  const cols = m.COLUMNS.map(([s]) => s), unfinished = cols.filter((s) => s !== "done");
+  const tick = (id, s) => ({ id, status: s, for: "agent", blocked: false, archived_at: null, done_at: s === "done" ? "2026-11-12T00:00:00Z" : null, worktree: null, project: { key: "COV", root: "/cov" } });
+  assert.deepEqual(m.BOARD_COLUMNS, cols, "BOARD_COLUMNS is the table's statuses");
+  assert.deepEqual(m.OPEN_STATUSES, unfinished, "OPEN_STATUSES is every column but Done");
+  // A lane carries one cell per column. Probed with a ticket in the FIRST column, so a cells map that
+  // fell behind shows up as a wrong key list here rather than as a TypeError further down.
+  assert.deepEqual(Object.keys(m.boardModel([tick("C-1", cols[0])], { now: NOW })[0].lanes[0].cells), cols, "a lane has exactly one cell per column");
+  // One ticket in every column survives boardModel and lands in its own cell.
+  const full = m.boardModel(cols.map((s) => tick(`C-${s}`, s)), { now: NOW });
+  assert.deepEqual(cols.map((s) => full[0].lanes[0].cells[s].map((x) => x.id)), cols.map((s) => [`C-${s}`]), "one ticket in every column survives boardModel, each in its own cell");
+  assert.deepEqual(Object.keys(m.boardCounts(full)), cols, "boardCounts covers every column");
+  assert.deepEqual(Object.keys(m.LABELS), cols, "LABELS names every column");
+  for (const [s, label] of m.COLUMNS) assert.equal(String(m.LABELS[s]), label, `${s} renders as "${label}", not undefined`);
+  // Both open list calls ask for exactly the unfinished columns, one --status each, in that order.
+  for (const [what, argv] of [["panel", m.listArgs(false).open], ["panel all-worktrees", m.listArgs(true).open], ["board", m.boardListArgs().open]])
+    assert.deepEqual(statusArgs(argv), unfinished, `${what} open call fetches exactly the unfinished columns`);
+}
+checkColumnCoverage({ COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, listArgs, boardListArgs, boardModel, boardCounts });
+
+// Mutants: each one adds a fifth column to the table and, except for the control, hands one of the
+// derived shapes back to a hand-written list. Running the same coverage checks over them proves the
+// asserts have teeth (SCR-20). SCREE_MUTANT=<name> node scree.test.mjs runs one after the suite:
+// exit 0 means it behaved as expected.
+const ADD_PARKED = ['["done", "Done"]]', '["done", "Done"], ["parked", "Parked"]]'];
+const MUTANTS = {
+  // The point of the change: the table is the only edit a new column needs.
+  add_column_to_table: { expect: "pass", edits: [ADD_PARKED] },
+  // A lane's cells written out by hand again. Before SCR-20 this died in renderBoard with
+  // TypeError: Cannot read properties of undefined (reading 'push'); see main.js at 4a23353.
+  extra_column_cells_left_behind: { expect: "fail", edits: [ADD_PARKED, ["cells: Object.fromEntries(BOARD_COLUMNS.map((s) => [s, []]))", "cells: { draft: [], ready: [], active: [], done: [] }"]] },
+  // OPEN_STATUSES written out by hand again: parked tickets are never fetched, so a Project whose
+  // open work is parked reads as onlyDone and starts folded with live work behind a ▸.
+  extra_column_open_statuses_hand_written: { expect: "fail", edits: [ADD_PARKED, ['const OPEN_STATUSES = BOARD_COLUMNS.filter((s) => s !== "done");', 'const OPEN_STATUSES = ["draft", "ready", "active"];']] },
+  // One open call missing a status while the rest agree it is unfinished - how listArgs read
+  // before it started using OPEN_STATUSES.
+  status_missing_from_panel_call: { expect: "fail", edits: [['...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s])', '...scope, ...OPEN_STATUSES.filter((s) => s !== "draft").flatMap((s) => ["--status", s])']] },
+  status_missing_from_board_call: { expect: "fail", edits: [['"--all-projects", ...OPEN_STATUSES.flatMap((s) => ["--status", s])', '"--all-projects", ...OPEN_STATUSES.filter((s) => s !== "active").flatMap((s) => ["--status", s])']] },
+};
+
 // Regression: refresh() must reach the post-finally fetchDetail in board mode (no early return
 // inside the try), so an open detail updates on poll.
 {
@@ -170,3 +228,25 @@ assert.equal(nextBoardFold(undefined, { key: "A", onlyDone: true }), false, "mis
 }
 
 console.log("ok");
+
+// Run one mutant over the same coverage checks. An unexpected crash is reported as such, because a
+// mutant must fail a named assert instead.
+if (process.env.SCREE_MUTANT) {
+  const name = process.env.SCREE_MUTANT, spec = MUTANTS[name];
+  assert(spec, `unknown mutant ${name}; known: ${Object.keys(MUTANTS).join(", ")}`);
+  let outcome, detail = "";
+  try {
+    checkColumnCoverage(pureWith(...spec.edits));
+    outcome = "passed";
+  } catch (e) {
+    if (!(e instanceof assert.AssertionError)) {
+      console.log(`${name}: CRASHED instead of failing an assert (${e.constructor.name}: ${e.message})`);
+      process.exit(1);
+    }
+    outcome = "failed a named assert";
+    detail = `\n${String(e.message).split("\n").slice(0, 14).join("\n")}`;
+  }
+  const expected = spec.expect === "pass" ? "passed" : "failed a named assert";
+  console.log(`${name}: ${outcome}${detail} ${outcome === expected ? "(expected)" : `(EXPECTED ${spec.expect.toUpperCase()})`}`);
+  process.exit(outcome === expected ? 0 : 1);
+}

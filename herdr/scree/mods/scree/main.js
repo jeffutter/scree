@@ -5,7 +5,19 @@ import { spaces, panes, focused, exec, theme, run, props as layoutProps } from "
 // Scree pure helpers: no host calls. scree.test.mjs slices the text between the two markers
 // below, so keep this section free of imports and host globals.
 // --- pure begin ---
+// Panel grouping order over every status scree knows, abandoned included. The board's columns are
+// the separate COLUMNS table below; the two must stay consistent on the four they share.
 const STATUS_ORDER = ["active", "ready", "draft", "done", "abandoned"];
+
+// The board's columns, left to right, as [status, label]. One table holds the fact "these are the
+// board's statuses": BOARD_COLUMNS, OPEN_STATUSES and LABELS derive from it, so a new column is
+// fetched, rendered and counted without editing anywhere else in this file.
+const COLUMNS = [["draft", "Draft"], ["ready", "Ready"], ["active", "Active"], ["done", "Done"]];
+const BOARD_COLUMNS = COLUMNS.map(([s]) => s);
+// The statuses that mean "not finished": both open list calls and the all-done fold check read this.
+const OPEN_STATUSES = BOARD_COLUMNS.filter((s) => s !== "done");
+// Display name per status ("Draft", "Ready", ...), for the board's column headers and the panel's sections.
+const LABELS = Object.fromEntries(COLUMNS);
 
 // Share of criteria checked, 0..100. Accepts the list-shape summary {checked, total}
 // or a full criteria array [{checked}]. No criteria reads as 0.
@@ -62,9 +74,9 @@ function chips(t) {
   return out;
 }
 
-// "3 active, 5 ready, 2 draft" from groupByStatus output; done and empty groups are skipped.
+// "3 active, 5 ready, 2 draft" from groupByStatus output; finished and empty groups are skipped.
 function countsLine(groups) {
-  return (groups ?? []).filter((g) => ["active", "ready", "draft"].includes(g.status) && g.tickets.length)
+  return (groups ?? []).filter((g) => OPEN_STATUSES.includes(g.status) && g.tickets.length)
     .map((g) => `${g.tickets.length} ${g.status}`).join(", ");
 }
 
@@ -75,7 +87,7 @@ const DONE_DAYS = 7;
 function listArgs(allWorktrees) {
   const scope = allWorktrees ? ["--all-worktrees"] : [];
   return {
-    open: ["--json", "list", ...scope, "--status", "draft", "--status", "ready", "--status", "active", "--limit", "200"],
+    open: ["--json", "list", ...scope, ...OPEN_STATUSES.flatMap((s) => ["--status", s]), "--limit", "200"],
     done: ["--json", "list", ...scope, "--status", "done", "--done-since", `${DONE_DAYS}d`, "--limit", "500"],
   };
 }
@@ -115,11 +127,6 @@ function detailModel(show) {
   };
 }
 
-// Board columns, left to right.
-const BOARD_COLUMNS = ["draft", "ready", "active", "done"];
-// The columns that mean "not finished": the open board call and the all-done check share this.
-const OPEN_STATUSES = BOARD_COLUMNS.filter((c) => c !== "done");
-
 // The board's two calls: every Project and Worktree (`--all-projects` already means both; it
 // conflicts with `--all-worktrees`). The default limit is 50, so pass a large one. Open and done
 // are separate so accumulated done tickets cannot crowd open ones out of the limit. Done is
@@ -140,7 +147,7 @@ function worktreeLabel(path) {
 // "this computer" for the local machine, else the machine name.
 function machineLabel(on) { return on ? String(on) : "this computer"; }
 
-// Projects as swimlanes: [{key, root, name, count, onlyDone, lanes: [{worktree, label, cells: {draft, ready, active, done}}]}].
+// Projects as swimlanes: [{key, root, name, count, onlyDone, lanes: [{worktree, label, cells: one key per BOARD_COLUMNS}]}].
 // Filters apply first; abandoned, archived and done older than doneDays are dropped. Projects sort
 // by key with LOCAL (no root) last; lanes list the root checkout first, then worktrees by path.
 // Tickets keep list order (position) inside a cell. Empty lanes and projects are omitted.
@@ -159,7 +166,8 @@ function boardModel(tickets, { forRole = "all", blockedOnly = false, now = Date.
     if (!projects.has(key)) projects.set(key, { key, root, name: key, count: 0, lanes: new Map() });
     const p = projects.get(key);
     const wt = t.worktree ?? null;
-    if (!p.lanes.has(wt)) p.lanes.set(wt, { worktree: wt, label: worktreeLabel(wt), cells: { draft: [], ready: [], active: [], done: [] } });
+    if (!p.lanes.has(wt))
+      p.lanes.set(wt, { worktree: wt, label: worktreeLabel(wt), cells: Object.fromEntries(BOARD_COLUMNS.map((s) => [s, []])) });
     p.lanes.get(wt).cells[t.status].push(t);
     p.count++;
   }
@@ -185,7 +193,7 @@ function cellVisible(cards, expanded, limit = CELL_LIMIT) {
 
 // Per-column totals across all projects in a boardModel result.
 function boardCounts(model) {
-  const out = { draft: 0, ready: 0, active: 0, done: 0 };
+  const out = Object.fromEntries(BOARD_COLUMNS.map((s) => [s, 0]));
   for (const p of model) for (const l of p.lanes) for (const c of BOARD_COLUMNS) out[c] += l.cells[c].length;
   return out;
 }
@@ -228,8 +236,9 @@ class ScreeError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
 }
 
+// Panel sections, Active first (the board's COLUMNS are Draft first); their labels come from LABELS,
+// so every status named here must be a column in COLUMNS.
 const SECTIONS = ["active", "ready", "draft", "done"];
-const LABELS = { active: "Active", ready: "Ready", draft: "Draft", done: "Done" };
 
 export default class Scree extends View {
   init(props, cx) {
@@ -380,6 +389,8 @@ export default class Scree extends View {
   }
 
   mark(t, ticket, status) {
+    // Status marks, keyed by the board's columns plus "blocked". A new column needs an entry here,
+    // a mark-<kind>.svg, and nothing else: COLUMNS covers fetching, labelling and counting it.
     const kind = ticket.blocked ? "blocked" : status;
     const color = { blocked: t.blocked, active: t.working, ready: t.idle, draft: t.dim, done: t.done }[kind] ?? t.dim;
     return svg(`mods/scree/mark-${kind}.svg`).size(14).flex_none().text_color(color);
@@ -581,6 +592,7 @@ export default class Scree extends View {
     const body = state
       ? [div().p(10).text_color(this.error ? t.blocked : t.dim).child(state)]
       : sections.map((x) => this.section(t, x.g, x.total, cx));
+    // The legend is panel-only and lists the marks Active-first; its statuses are COLUMNS' plus "blocked".
     const legend = h_flex().flex_none().px(10).py(6).gap(12).gap_y(4).items_center().flex_wrap().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
       .children([["active", "Active"], ["ready", "Ready"], ["draft", "Draft"], ["done", "Done"], ["blocked", "Blocked"]].map(([kind, label]) =>
         h_flex().gap(4).items_center().flex_none()
