@@ -8,6 +8,7 @@ mod effects;
 mod markdown;
 mod state;
 mod terminal;
+mod text;
 mod theme;
 mod view;
 mod watch;

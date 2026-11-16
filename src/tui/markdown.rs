@@ -6,24 +6,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::text::{cell, clean};
 use super::theme::Theme;
-
-/// Terminal cells one character takes.
-fn cell(c: char) -> usize {
-    Span::raw(c.to_string()).width()
-}
-
-/// Tabs become spaces; other control chars would reach the terminal raw, so
-/// drop them.
-fn clean(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            '\t' => vec![' '; 4],
-            c if c.is_control() => vec![],
-            c => vec![c],
-        })
-        .collect()
-}
 
 /// One line: the prefix (indent and block markers) as the first span, then the
 /// styled characters with equal neighbours merged into one span.
@@ -357,7 +341,13 @@ impl Renderer<'_> {
             }
             Event::Code(s) => {
                 let st = self.theme.code_style();
-                self.text.extend(clean(&s).chars().map(|c| (c, st)));
+                // NBSP is not a wrap point, so the span stays in one piece and
+                // keeps runs of spaces.
+                self.text.extend(
+                    clean(&s)
+                        .chars()
+                        .map(|c| (if c == ' ' { '\u{a0}' } else { c }, st)),
+                );
             }
             // Ticket text is plain and line-structured; keep its newlines.
             Event::SoftBreak | Event::HardBreak => self.flush(),
@@ -474,6 +464,18 @@ mod tests {
         assert!(ital.style.add_modifier.contains(Modifier::ITALIC));
         let code = lines[2].spans.iter().find(|s| s.content == "c").unwrap();
         assert_eq!(code.style, Theme::default().code_style());
+    }
+
+    #[test]
+    fn inline_code_keeps_runs_of_spaces() {
+        let lines = markdown_lines("x `a   b` y", "", 40, &Theme::default());
+        assert_eq!(texts(&lines), ["x a\u{a0}\u{a0}\u{a0}b y"]);
+    }
+
+    #[test]
+    fn inline_code_is_not_split_at_its_spaces() {
+        let lines = markdown_lines("aaaa `bb cc`", "", 8, &Theme::default());
+        assert_eq!(texts(&lines), ["aaaa", "bb\u{a0}cc"]);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use super::markdown::markdown_lines;
 use super::state::{
     Avail, Detail, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
 };
+use super::text::{cell, clean};
 use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
@@ -117,22 +118,12 @@ const HINTS_DETAIL: [(&str, &str); 11] = [
 /// `indent`. Newlines in `text` start new lines; words wider than the room are
 /// split. Always returns at least one line.
 fn wrap(text: &str, indent: &str, width: usize) -> Vec<String> {
-    let cell = |c: char| Span::raw(c.to_string()).width();
     let room = width
         .saturating_sub(indent.chars().map(cell).sum::<usize>())
         .max(1);
     let mut out = vec![];
     for para in text.split('\n') {
-        // Tabs become spaces; CR and other control chars would reach the
-        // terminal raw (zero cell width), so drop them.
-        let para: String = para
-            .chars()
-            .flat_map(|c| match c {
-                '\t' => vec![' '; 4],
-                c if c.is_control() => vec![],
-                c => vec![c],
-            })
-            .collect();
+        let para = clean(para);
         // Leading indentation is content: keep it on the first line.
         let lead_n = para.chars().take_while(|&c| c == ' ').count().min(room - 1);
         let mut line = " ".repeat(lead_n);

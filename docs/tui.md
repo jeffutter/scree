@@ -8,7 +8,7 @@ It runs as Role human with author `human` unless `--role`, `--author` or their `
 
 - Board: one column per status (draft, ready, active, done, abandoned). Empty columns collapse to a strip that still shows the full status name. When the terminal is too narrow for the columns to stay readable side by side (each expanded column needs 22 cells, each strip 11, wide enough for the full status name), the columns are stacked top to bottom instead, each using the full width; empty ones collapse to a short pane, and the focused column is guaranteed at least 5 rows (less only when the whole area is shorter) and the other panes shrink first, populated ones keeping their border rows before empty ones, so its selected row stays visible on short terminals. The layout is chosen on every draw, so resizing switches it without a restart. `h`/`l` still move to the previous/next column, which is up/down on screen in the stacked layout.
 - List: one row per ticket. `Tab` switches between board and list.
-- Detail: `Enter` opens the selected ticket full-pane: every field, blocked-by, subtasks, criteria with evidence and comments. Description, Plan and comment bodies render as Markdown (headings, emphasis, code, lists, quotes); titles, criteria and ids stay plain. Esc, `q`, `h` or Left return to the board or list.
+- Detail: `Enter` opens the selected ticket full-pane: every field, blocked-by, subtasks, criteria with evidence and comments. Description, Plan and comment bodies render as Markdown (headings, emphasis, code, lists, quotes; inline code keeps its spaces); titles, criteria and ids stay plain. Esc, `q`, `h` or Left return to the board or list.
 
 The header shows the scope, the caller and the ticket count.
 
