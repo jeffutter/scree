@@ -225,9 +225,10 @@ impl Renderer<'_> {
 
     /// Emit a verbatim code block, split at the pane width but never re-flowed.
     fn code_block(&mut self, body: &str) {
-        if body.trim_end_matches('\n').is_empty() {
+        if body.trim().is_empty() {
             return;
         }
+        self.gap(false);
         let style = self.theme.code_style();
         let (mut first, rest) = self.prefixes();
         let room = self
@@ -277,7 +278,6 @@ impl Renderer<'_> {
             }
             Tag::CodeBlock(_) => {
                 self.flush();
-                self.gap(false);
                 self.code = Some(String::new());
             }
             Tag::List(start) => {
@@ -692,6 +692,24 @@ mod tests {
         assert!(plain("", "    ", 20).is_empty());
         assert!(plain("  \n ", "    ", 20).is_empty());
         assert!(plain("```\n```", "    ", 20).is_empty());
+    }
+
+    /// Intended: a whitespace-only fenced block renders nothing and leaves no
+    /// gap before or after it.
+    #[test]
+    fn whitespace_only_fenced_blocks_leave_no_gap() {
+        assert!(plain("```\n   \n\n```", "    ", 20).is_empty());
+        assert!(plain("```\n \t\n```", "    ", 20).is_empty());
+        assert_eq!(
+            plain("para\n\n```\n  \n```\n\nafter", "  ", 20),
+            ["  para", "  ", "  after"]
+        );
+        assert_eq!(plain("para\n\n```\n \n```", "  ", 20), ["  para"]);
+        assert_eq!(
+            plain("- item\n  ```\n  \n  ```\n- next", "  ", 40),
+            ["  - item", "  - next"]
+        );
+        assert_eq!(plain("> q\n>\n> ```\n>  \n> ```", "  ", 40), ["  > q"]);
     }
 
     /// Intended: a fenced block in a list item keeps its blank-line
