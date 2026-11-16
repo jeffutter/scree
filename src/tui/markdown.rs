@@ -359,8 +359,8 @@ impl Renderer<'_> {
                 let st = self.theme.code_style();
                 self.text.extend(clean(&s).chars().map(|c| (c, st)));
             }
-            Event::SoftBreak => self.push_text(" "),
-            Event::HardBreak => self.flush(),
+            // Ticket text is plain and line-structured; keep its newlines.
+            Event::SoftBreak | Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.flush();
                 self.gap(false);
@@ -453,8 +453,15 @@ mod tests {
     fn paragraphs_are_separated_by_one_blank_line() {
         assert_eq!(
             plain("one\n\ntwo\nthree", "  ", 40),
-            ["  one", "  ", "  two three"]
+            ["  one", "  ", "  two", "  three"]
         );
+    }
+
+    #[test]
+    fn soft_breaks_keep_their_lines() {
+        assert_eq!(plain("Step 1\nStep 2", "", 40), ["Step 1", "Step 2"]);
+        assert_eq!(plain("a\nb", "  ", 40), ["  a", "  b"]);
+        assert_eq!(plain("- a\n  b", "  ", 40), ["  - a", "    b"]);
     }
 
     #[test]

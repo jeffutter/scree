@@ -21,7 +21,8 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  o SCR-12 [ready] Scroll keys                                                |
 |                                                                              |
 |Description                                                                   |
-|  Enter opens the detail view. Esc closes it.                                 |
+|  Enter opens the detail view.                                                |
+|  Esc closes it.                                                              |
 |                                                                              |
 |  Notes                                                                       |
 |                                                                              |
@@ -47,7 +48,6 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  human/bob  2026-11-13T05:40:00Z                                             |
 |    Looks good, please keep the long lines wrapping so nothing is clipped at  |
 |    the pane edge.                                                            |
-|                                                                              |
 |                                                                              |
 |                                                                              |
 |                                                                              |
