@@ -8,6 +8,8 @@ license = "MIT"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 pulldown-cmark = { version = "0.13.6", default-features = false }
 ratatui = "0.30.2"
+# Per-character terminal width for TUI wrapping; ratatui already pulls it in,
+# this only names it so the code can call it directly.
 unicode-width = "0.2"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

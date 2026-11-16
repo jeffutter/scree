@@ -9,6 +9,9 @@ use ratatui::text::{Line, Span};
 use super::text::{cell, clean};
 use super::theme::Theme;
 
+/// A space that does not separate words; stands for a space inside inline code.
+const NBSP: char = '\u{a0}';
+
 /// One line: the prefix (indent and block markers) as the first span, then the
 /// styled characters with equal neighbours merged into one span.
 fn build_line(prefix: &str, chars: &[(char, Style)]) -> Line<'static> {
@@ -20,7 +23,7 @@ fn build_line(prefix: &str, chars: &[(char, Style)]) -> Line<'static> {
             spans.push(Span::styled(std::mem::take(&mut run), run_style));
         }
         run_style = st;
-        run.push(c);
+        run.push(if c == NBSP { ' ' } else { c });
     }
     if !run.is_empty() {
         spans.push(Span::styled(run, run_style));
@@ -84,9 +87,23 @@ fn wrap_spans(text: &[(char, Style)], first: &str, rest: &str, width: usize) -> 
             used = 0;
         }
         for (c, st) in word {
-            if used > 0 && used + cell(c) > room {
+            while used > 0 && used + cell(c) > room {
+                // Prefer breaking an over-long code span at one of its spaces.
+                let tail = match line
+                    .iter()
+                    .rposition(|&(ch, _)| ch == NBSP)
+                    .filter(|&i| i > 0)
+                {
+                    Some(i) => {
+                        let t = line.split_off(i + 1);
+                        line.pop();
+                        t
+                    }
+                    None => vec![],
+                };
                 flush(&mut lines, &mut line);
-                used = 0;
+                used = tail.iter().map(|&(ch, _)| cell(ch)).sum();
+                line = tail;
             }
             line.push((c, st));
             used += cell(c);
@@ -116,8 +133,9 @@ struct Renderer<'a> {
     /// Styles of the open inline elements; the last one applies.
     styles: Vec<Style>,
     /// Open links: target (appended in parentheses at the end unless the link
-    /// text already is the target) and where their text starts in `text`.
-    links: Vec<(String, usize)>,
+    /// text already is the target) and the text seen so far inside the link.
+    /// Kept apart from `text`, which a soft break empties.
+    links: Vec<(String, String)>,
     /// Index in `out` of the latest gap line, which counts as blank even
     /// though a quote container gives it a `>` marker.
     gap_line: Option<usize>,
@@ -126,6 +144,10 @@ struct Renderer<'a> {
     code: Option<String>,
     /// Cells seen so far in the open table row, to place the " | " separators.
     cells: usize,
+    /// Open headings: a soft break there is a space, not a new line.
+    joined: usize,
+    /// Where the open table's header lines start in `out`.
+    head_start: usize,
 }
 
 impl Renderer<'_> {
@@ -135,7 +157,11 @@ impl Renderer<'_> {
 
     fn push_text(&mut self, s: &str) {
         let st = self.style();
-        self.text.extend(clean(s).chars().map(|c| (c, st)));
+        let s = clean(s);
+        for l in &mut self.links {
+            l.1.push_str(&s);
+        }
+        self.text.extend(s.chars().map(|c| (c, st)));
     }
 
     /// First-line and continuation prefixes of the next line, consuming the
@@ -223,6 +249,7 @@ impl Renderer<'_> {
             Tag::Heading { .. } => {
                 self.flush();
                 self.gap(false);
+                self.joined += 1;
                 let st = self.theme.key_style().add_modifier(Modifier::BOLD);
                 self.styles.push(st);
             }
@@ -266,6 +293,9 @@ impl Renderer<'_> {
             Tag::TableHead | Tag::TableRow => {
                 self.flush();
                 self.cells = 0;
+                if matches!(tag, Tag::TableHead) {
+                    self.head_start = self.out.len();
+                }
             }
             Tag::TableCell => {
                 if self.cells > 0 {
@@ -288,7 +318,7 @@ impl Renderer<'_> {
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                 let st = self.style().add_modifier(Modifier::UNDERLINED);
                 self.styles.push(st);
-                self.links.push((dest_url.to_string(), self.text.len()));
+                self.links.push((dest_url.to_string(), String::new()));
             }
             _ => {}
         }
@@ -299,6 +329,7 @@ impl Renderer<'_> {
             TagEnd::Paragraph => self.flush(),
             TagEnd::Heading(_) => {
                 self.flush();
+                self.joined -= 1;
                 self.styles.pop();
             }
             TagEnd::BlockQuote(_) => {
@@ -326,26 +357,25 @@ impl Renderer<'_> {
             TagEnd::TableRow => self.flush(),
             TagEnd::TableHead => {
                 self.flush();
-                // Rule under the header, as wide as the header line.
-                let w = self.out.last().map_or(1, |l| l.width());
-                let (first, _) = self.prefixes();
-                let n = w
-                    .saturating_sub(first.chars().map(cell).sum())
-                    .clamp(1, self.width.max(1));
-                self.out
-                    .push(Line::from(format!("{first}{}", "-".repeat(n))));
+                // Rule under the header, as wide as its widest line; none when
+                // the header rendered nothing.
+                let head = &self.out[self.head_start.min(self.out.len())..];
+                if let Some(w) = head.iter().map(|l| l.width()).max() {
+                    let (first, _) = self.prefixes();
+                    let n = w
+                        .saturating_sub(first.chars().map(cell).sum())
+                        .clamp(1, self.width.max(1));
+                    self.out
+                        .push(Line::from(format!("{first}{}", "-".repeat(n))));
+                }
             }
             TagEnd::Table => self.flush(),
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                 self.styles.pop();
             }
             TagEnd::Link | TagEnd::Image => {
-                let (url, start) = self.links.pop().unwrap_or_default();
+                let (url, label) = self.links.pop().unwrap_or_default();
                 self.styles.pop();
-                let label: String = self.text[start.min(self.text.len())..]
-                    .iter()
-                    .map(|&(c, _)| c)
-                    .collect();
                 if !url.is_empty() && label != url {
                     self.push_text(&format!(" ({url})"));
                 }
@@ -373,15 +403,18 @@ impl Renderer<'_> {
             }
             Event::Code(s) => {
                 let st = self.theme.code_style();
-                // NBSP is not a wrap point, so the span stays in one piece and
-                // keeps runs of spaces.
-                self.text.extend(
-                    clean(&s)
-                        .chars()
-                        .map(|c| (if c == ' ' { '\u{a0}' } else { c }, st)),
-                );
+                let s = clean(&s);
+                for l in &mut self.links {
+                    l.1.push_str(&s);
+                }
+                // NBSP is not a wrap point, so the span keeps runs of spaces;
+                // wrap_spans breaks an over-long span at one and build_line
+                // turns it back into a plain space for the terminal.
+                self.text
+                    .extend(s.chars().map(|c| (if c == ' ' { NBSP } else { c }, st)));
             }
             // Ticket text is plain and line-structured; keep its newlines.
+            Event::SoftBreak if self.joined > 0 => self.push_text(" "),
             Event::SoftBreak | Event::HardBreak => self.flush(),
             Event::Rule => {
                 self.flush();
@@ -415,6 +448,8 @@ pub fn markdown_lines(text: &str, indent: &str, width: usize, theme: &Theme) -> 
         text: vec![],
         code: None,
         cells: 0,
+        joined: 0,
+        head_start: 0,
     };
     for ev in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
         r.event(ev);
@@ -502,13 +537,47 @@ mod tests {
     #[test]
     fn inline_code_keeps_runs_of_spaces() {
         let lines = markdown_lines("x `a   b` y", "", 40, &Theme::default());
-        assert_eq!(texts(&lines), ["x a\u{a0}\u{a0}\u{a0}b y"]);
+        assert_eq!(texts(&lines), ["x a   b y"]);
     }
 
     #[test]
     fn inline_code_is_not_split_at_its_spaces() {
         let lines = markdown_lines("aaaa `bb cc`", "", 8, &Theme::default());
-        assert_eq!(texts(&lines), ["aaaa", "bb\u{a0}cc"]);
+        assert_eq!(texts(&lines), ["aaaa", "bb cc"]);
+    }
+
+    #[test]
+    fn long_inline_code_breaks_at_its_spaces() {
+        let lines = markdown_lines(
+            "`cargo nextest run --test lifecycle`",
+            "",
+            12,
+            &Theme::default(),
+        );
+        assert_eq!(
+            texts(&lines),
+            ["cargo", "nextest run", "--test", "lifecycle"]
+        );
+        assert!(lines.iter().all(|l| !l.to_string().contains('\u{a0}')));
+    }
+
+    #[test]
+    fn soft_break_inside_link_text_keeps_the_label() {
+        assert_eq!(
+            plain("[see\nhttp://x](http://x)", "", 40).concat(),
+            "seehttp://x (http://x)"
+        );
+    }
+
+    #[test]
+    fn soft_break_in_a_heading_is_a_space() {
+        assert_eq!(plain("Title\nmore\n===", "", 40), ["Title more"]);
+    }
+
+    #[test]
+    fn table_rule_spans_the_widest_header_line() {
+        let out = plain("| aaaa | bbbb |\n|---|---|\n| 1 | 2 |", "", 40);
+        assert_eq!(out[1], "-".repeat(out[0].len()));
     }
 
     #[test]
