@@ -2,7 +2,7 @@
 //! the theme, and wrap to the pane width so callers can count the returned
 //! lines for scroll and selection exactly as they do for plain text.
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -131,8 +131,12 @@ struct Renderer<'a> {
     lists: Vec<Option<u64>>,
     /// Styles of the open inline elements; the last one applies.
     styles: Vec<Style>,
-    /// Link targets of the open links, appended in parentheses at their end.
-    links: Vec<String>,
+    /// Open links: target (appended in parentheses at the end unless the link
+    /// text already is the target) and where their text starts in `text`.
+    links: Vec<(String, usize)>,
+    /// Index in `out` of the latest gap line, which counts as blank even
+    /// though a quote container gives it a `>` marker.
+    gap_line: Option<usize>,
     text: Vec<(char, Style)>,
     /// Inside a fenced or indented code block: text is kept verbatim.
     code: Option<String>,
@@ -165,9 +169,7 @@ impl Renderer<'_> {
     }
 
     fn ends_blank(&self) -> bool {
-        self.out
-            .last()
-            .is_none_or(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
+        self.out.is_empty() || self.gap_line == Some(self.out.len() - 1)
     }
 
     /// One blank line between blocks. Not before the first block, directly
@@ -176,7 +178,12 @@ impl Renderer<'_> {
         if self.ends_blank() || self.marker_pending() || (nested_list && !self.lists.is_empty()) {
             return;
         }
-        self.out.push(Line::from(self.indent.to_string()));
+        // The gap keeps the quote markers of its containers so a quote that
+        // spans paragraphs stays one quote.
+        let conts: String = self.containers.iter().map(|c| c.cont.as_str()).collect();
+        self.out
+            .push(Line::from(format!("{}{}", self.indent, conts.trim_end())));
+        self.gap_line = Some(self.out.len() - 1);
     }
 
     /// Emit the collected inline text as wrapped lines.
@@ -278,7 +285,7 @@ impl Renderer<'_> {
             Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                 let st = self.style().add_modifier(Modifier::UNDERLINED);
                 self.styles.push(st);
-                self.links.push(dest_url.to_string());
+                self.links.push((dest_url.to_string(), self.text.len()));
             }
             _ => {}
         }
@@ -317,9 +324,13 @@ impl Renderer<'_> {
                 self.styles.pop();
             }
             TagEnd::Link | TagEnd::Image => {
-                let url = self.links.pop().unwrap_or_default();
+                let (url, start) = self.links.pop().unwrap_or_default();
                 self.styles.pop();
-                if !url.is_empty() {
+                let label: String = self.text[start.min(self.text.len())..]
+                    .iter()
+                    .map(|&(c, _)| c)
+                    .collect();
+                if !url.is_empty() && label != url {
                     self.push_text(&format!(" ({url})"));
                 }
             }
@@ -378,10 +389,11 @@ pub fn markdown_lines(text: &str, indent: &str, width: usize, theme: &Theme) -> 
         lists: vec![],
         styles: vec![],
         links: vec![],
+        gap_line: None,
         text: vec![],
         code: None,
     };
-    for ev in Parser::new(text) {
+    for ev in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH) {
         r.event(ev);
     }
     r.flush();
@@ -485,6 +497,28 @@ mod tests {
     #[test]
     fn links_show_their_target() {
         assert_eq!(plain("[docs](http://x.y)", "", 40), ["docs (http://x.y)"]);
+    }
+
+    #[test]
+    fn quote_gap_keeps_the_marker() {
+        assert_eq!(plain("> a\n>\n> b", "  ", 20), ["  > a", "  >", "  > b"]);
+    }
+
+    #[test]
+    fn autolinks_do_not_repeat_their_target() {
+        assert_eq!(plain("<http://x.y>", "", 40), ["http://x.y"]);
+    }
+
+    #[test]
+    fn strikethrough_is_styled() {
+        let lines = markdown_lines("~~x~~", "", 40, &Theme::default());
+        assert_eq!(texts(&lines), ["x"]);
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::CROSSED_OUT))
+        );
     }
 
     #[test]
