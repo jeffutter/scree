@@ -88,6 +88,20 @@ pub struct Detail {
     pub sel: Option<DetailSel>,
     /// Set when `sel` changed; the view scrolls it into range and clears it.
     pub reveal: bool,
+    /// Wrapped lines from the last draw. The ticket never changes inside a
+    /// `Detail` (a reload builds a new one, dropping this), so width, theme and
+    /// selection are the whole key.
+    pub cache: Option<DetailCache>,
+}
+
+/// The rendered detail lines and what they were rendered for.
+#[derive(Debug, Clone)]
+pub struct DetailCache {
+    pub width: usize,
+    pub theme: Theme,
+    pub sel: Option<DetailSel>,
+    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub sel_line: Option<(usize, usize)>,
 }
 
 /// A selectable item of the detail view; indexes into the ticket's
@@ -105,6 +119,7 @@ impl Detail {
             scroll: 0,
             sel: None,
             reveal: false,
+            cache: None,
         }
     }
 

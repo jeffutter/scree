@@ -8,7 +8,8 @@ use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
 use super::markdown::markdown_lines;
 use super::state::{
-    Avail, Detail, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
+    Avail, Detail, DetailCache, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State,
+    View, allowed,
 };
 use super::text::{cell, clean};
 use super::theme::Theme;
@@ -345,7 +346,25 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &mut State) {
     };
     let block = widgets::bordered_pane(&d.ticket.ticket.id, true, &theme);
     let inner = block.inner(area);
-    let (lines, sel_line) = detail_lines(d, usize::from(inner.width), &theme);
+    let width = usize::from(inner.width);
+    let fresh = d
+        .cache
+        .as_ref()
+        .is_some_and(|c| c.width == width && c.theme == theme && c.sel == d.sel);
+    if !fresh {
+        let (lines, sel_line) = detail_lines(d, width, &theme);
+        d.cache = Some(DetailCache {
+            width,
+            theme,
+            sel: d.sel,
+            lines,
+            sel_line,
+        });
+    }
+    let Some(cache) = d.cache.as_ref() else {
+        return;
+    };
+    let (lines, sel_line) = (&cache.lines, cache.sel_line);
     let height = usize::from(inner.height);
     let max = lines.len().saturating_sub(height);
     d.scroll = d.scroll.min(max);
@@ -360,11 +379,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &mut State) {
         }
     }
     d.reveal = false;
-    let visible: Vec<Line> = lines
-        .into_iter()
-        .skip(d.scroll)
-        .take(usize::from(inner.height))
-        .collect();
+    let visible: Vec<Line> = lines.iter().skip(d.scroll).take(height).cloned().collect();
     frame.render_widget(Paragraph::new(visible).block(block), area);
 }
 
@@ -1405,6 +1420,54 @@ mod tests {
             )),
         );
         assert_eq!(s.detail.as_ref().unwrap().scroll, at - 1);
+    }
+
+    #[test]
+    fn detail_cache_reused_until_key_changes() {
+        use crate::tui::state::DetailSel;
+        let mut s = detail_state();
+        assert!(s.detail.as_ref().unwrap().cache.is_none());
+        render(&mut s, 60, 12);
+        assert!(s.detail.as_ref().unwrap().cache.is_some());
+
+        // Poison the cached lines: a draw that reuses them shows the marker.
+        let poison = |s: &mut State| {
+            s.detail.as_mut().unwrap().cache.as_mut().unwrap().lines[0] = Line::from("CACHED");
+        };
+        poison(&mut s);
+        assert!(render(&mut s, 60, 12).iter().any(|r| r.contains("CACHED")));
+        s.detail.as_mut().unwrap().scroll = 3;
+        render(&mut s, 60, 12);
+        assert_eq!(
+            s.detail.as_ref().unwrap().cache.as_ref().unwrap().lines[0].to_string(),
+            "CACHED"
+        );
+
+        // A different width rebuilds.
+        assert!(!render(&mut s, 70, 12).iter().any(|r| r.contains("CACHED")));
+        poison(&mut s);
+
+        // A different selection rebuilds.
+        s.detail.as_mut().unwrap().sel = Some(DetailSel::Criterion(0));
+        render(&mut s, 70, 12);
+        assert_ne!(
+            s.detail.as_ref().unwrap().cache.as_ref().unwrap().lines[0].to_string(),
+            "CACHED"
+        );
+        poison(&mut s);
+
+        // A different theme rebuilds.
+        s.theme = Theme::new(true, false);
+        render(&mut s, 70, 12);
+        assert_ne!(
+            s.detail.as_ref().unwrap().cache.as_ref().unwrap().lines[0].to_string(),
+            "CACHED"
+        );
+
+        // A newly loaded ticket starts with no cache.
+        let d = s.detail.as_ref().unwrap().ticket.clone();
+        crate::tui::state::update(&mut s, Event::DetailLoaded(Ok(Box::new(d))));
+        assert!(s.detail.as_ref().unwrap().cache.is_none());
     }
 
     #[test]
