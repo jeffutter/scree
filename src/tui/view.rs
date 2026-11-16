@@ -6,6 +6,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 
+use super::markdown::markdown_lines;
 use super::state::{
     Avail, Detail, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State, View, allowed,
 };
@@ -215,7 +216,7 @@ fn item_lines(prefix: String, style: Style, title: &str, width: usize) -> Vec<Li
     lines
 }
 
-/// Every field of the ticket as plain wrapped lines, in reading order, and
+/// Every field of the ticket as wrapped lines (Markdown for bodies), in reading order, and
 /// the line range of the selected item.
 fn detail_lines(
     d: &Detail,
@@ -286,11 +287,11 @@ fn detail_lines(
         ("Plan", &d.ticket.plan),
     ] {
         heading(&mut out, name);
-        plain(
-            &mut out,
-            if body.trim().is_empty() { "none" } else { body },
-            "  ",
-        );
+        if body.trim().is_empty() {
+            plain(&mut out, "none", "  ");
+        } else {
+            out.extend(markdown_lines(body, "  ", width, theme));
+        }
     }
     heading(&mut out, "Criteria");
     if d.ticket.criteria.is_empty() {
@@ -336,7 +337,7 @@ fn detail_lines(
             &format!("{role}{}{sess}  {}", c.author, c.created_at),
             "  ",
         );
-        plain(&mut out, &c.body, "    ");
+        out.extend(markdown_lines(&c.body, "    ", width, theme));
         if d.sel == Some(DetailSel::Comment(i)) {
             sel_line = Some((start, out.len()));
             mark_selected(&mut out[start..], theme);
@@ -1377,7 +1378,7 @@ mod tests {
                 {"checked": true, "checked_at": "2026-11-13T05:50:00Z", "checked_by": {"author": "jeff", "session": null}, "evidence": "cargo test passed", "number": 1, "ref": "SCR-6#1", "text": "Renders every field"},
                 {"checked": false, "checked_at": null, "checked_by": null, "evidence": null, "number": 2, "ref": "SCR-6#2", "text": "Scrolls"}
             ],
-            "description": "Enter opens the detail view.\nEsc closes it.",
+            "description": "Enter opens the detail view.\nEsc closes it.\n\n## Notes\n\n- **bold** item with `code`\n- second item that is long enough to wrap onto another line of the pane\n\n> quoted words\n\n```\nlet x = 1;\n```",
             "plan": "Add a full pane screen."
         }))
         .unwrap();
@@ -1388,7 +1389,7 @@ mod tests {
     #[test]
     fn detail_sample() {
         let mut s = detail_state();
-        insta::assert_snapshot!(render(&mut s, 80, 40).join("\n"));
+        insta::assert_snapshot!(render(&mut s, 80, 56).join("\n"));
     }
 
     #[test]
@@ -1571,6 +1572,28 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("bob")), "{rows:?}");
         assert!(rows.iter().any(|r| r.contains("pane edge")), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains("> [x]")));
+    }
+
+    #[test]
+    fn selected_multiline_markdown_comment_spans_its_rendered_lines() {
+        let mut s = detail_state();
+        {
+            let d = s.detail.as_mut().unwrap();
+            d.ticket.comments[1].body =
+                "- one **two** three four five six seven\n- eight\n\n```\ncode\n```".into();
+        }
+        for _ in 0..4 {
+            key(&mut s, ']');
+        }
+        let d = s.detail.as_ref().unwrap();
+        let (lines, sel) = detail_lines(d, 30, &s.theme);
+        let (start, end) = sel.unwrap();
+        assert_eq!(end, lines.len(), "comment is last, so it runs to the end");
+        let text: Vec<String> = lines[start..end].iter().map(|l| l.to_string()).collect();
+        // header, wrapped item, second item, gap, code
+        assert_eq!(text.len(), 7, "{text:?}");
+        assert!(text[0].starts_with("> "), "{text:?}");
+        assert_eq!(text[6].trim(), "code");
     }
 
     #[test]

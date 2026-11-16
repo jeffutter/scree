@@ -5,6 +5,7 @@
 //! raw mode and the alternate screen.
 
 mod effects;
+mod markdown;
 mod state;
 mod terminal;
 mod theme;

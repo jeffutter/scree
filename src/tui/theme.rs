@@ -94,6 +94,15 @@ impl Theme {
     pub fn key_style(&self) -> Style {
         self.fg(Color::Cyan)
     }
+
+    /// Inline and fenced code in Markdown bodies: yellow, or dim without color.
+    pub fn code_style(&self) -> Style {
+        if self.color {
+            Style::new().fg(Color::Yellow)
+        } else {
+            Style::new().add_modifier(Modifier::DIM)
+        }
+    }
 }
 
 #[cfg(test)]

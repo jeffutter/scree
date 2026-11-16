@@ -21,8 +21,8 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  o SCR-12 [re|                                                          |              |
 |              |Enter select | Esc cancel                                 |              |
 |Description   +----------------------------------------------------------+              |
-|  Enter opens the detail view.                                                          |
-|  Esc closes it.                                                                        |
+|  Enter opens the detail view. Esc closes it.                                           |
+|                                                                                        |
 +----------------------------------------------------------------------------------------+
 [Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom | [[/]] select
 [Space] check | [n] criterion | [m/M] comment | [X] remove | [b/B] add/rm blocker

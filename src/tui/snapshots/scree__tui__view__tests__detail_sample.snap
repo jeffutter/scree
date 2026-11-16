@@ -1,6 +1,6 @@
 ---
 source: src/tui/view.rs
-expression: "render(&mut s, 80, 40).join(\"\\n\")"
+expression: "render(&mut s, 80, 56).join(\"\\n\")"
 ---
 scree  |  all Projects  |  agent/jeff  |  8 tickets
 +SCR-6-------------------------------------------------------------------------+
@@ -21,8 +21,16 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  o SCR-12 [ready] Scroll keys                                                |
 |                                                                              |
 |Description                                                                   |
-|  Enter opens the detail view.                                                |
-|  Esc closes it.                                                              |
+|  Enter opens the detail view. Esc closes it.                                 |
+|                                                                              |
+|  Notes                                                                       |
+|                                                                              |
+|  - bold item with code                                                       |
+|  - second item that is long enough to wrap onto another line of the pane     |
+|                                                                              |
+|  > quoted words                                                              |
+|                                                                              |
+|  let x = 1;                                                                  |
 |                                                                              |
 |Plan                                                                          |
 |  Add a full pane screen.                                                     |
@@ -39,6 +47,14 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |  human/bob  2026-11-13T05:40:00Z                                             |
 |    Looks good, please keep the long lines wrapping so nothing is clipped at  |
 |    the pane edge.                                                            |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
 +------------------------------------------------------------------------------+
 [Esc/q] back | [j/k] scroll | [PgUp/PgDn] page | [g/G] top/bottom | [[/]] select
 [Space] check | [n] criterion | [m/M] comment | [X] remove
