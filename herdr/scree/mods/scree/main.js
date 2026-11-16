@@ -284,6 +284,21 @@ function worktreeLabel(path) {
   return parts[parts.length - 1] ?? String(path);
 }
 
+// What the panel header names next to the mod: the Project and Worktree the listed tickets belong
+// to. Scree has no "current scope" command, so both come from the tickets and the space's cwd.
+// worktree is null when it cannot be learned (no tickets, no cwd). Truncation is a render concern.
+function scopeLabel(tickets, cwd, allWorktrees) {
+  const first = (tickets ?? []).find((t) => t?.project?.key);
+  const base = String(cwd ?? "").split("/").filter(Boolean).pop() ?? "";
+  const project = first?.project?.key ?? base;
+  if (allWorktrees) return { project, worktree: "all worktrees" };
+  if (first) {
+    const root = first.project.root;
+    return { project, worktree: !first.worktree || (root && cwd === root) ? "root" : worktreeLabel(first.worktree) };
+  }
+  return { project, worktree: base || null };
+}
+
 // "this computer" for the local machine, else the machine name.
 function machineLabel(on) { return on ? String(on) : "this computer"; }
 
@@ -1101,9 +1116,12 @@ export default class Scree extends View {
     const filteredAbandoned = this.showAbandoned ? applyFilters(this.abandoned, this.filters()) : [];
     if (filteredAbandoned.length) sections.push({ g: { status: "abandoned", tickets: filteredAbandoned }, total: filteredAbandoned.length });
     const counts = countsLine([...groups.values()]);
+    const scope = scopeLabel([...this.open, ...this.done], location().cwd, this.allWorktrees);
     const header = h_flex().flex_none().px(10).py(8).gap(8).items_center().border_b(1).border_color(t.border)
       .child(svg("mods/scree/scree.svg").size(14).flex_none().text_color(t.muted))
-      .child(div().font_weight(600).child("Scree"))
+      .child(div().flex_none().font_weight(600).child("Scree"))
+      .when(!fatal && Boolean(scope.project), (el) => el.child(div().id("scree-scope-label").min_w(0).max_w(160).truncate().text_size(11).text_color(t.muted)
+        .child(scope.worktree ? `${scope.project} / ${scope.worktree}` : scope.project)))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(fatal ? "" : counts))
       .when(!fatal, (el) => el.child(div().id("scree-scope").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
         .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.toggleScope(cx))

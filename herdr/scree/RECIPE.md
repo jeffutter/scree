@@ -8,7 +8,7 @@ A Herdr mod that shows scree tickets: a side panel for the focused space's proje
 
 Panel: a rounded 10px card, `theme().background`, 1px `border`, 13px text, in the layout's right column beside Files, Changes and Cairn.
 
-- **Header:** scree icon, "Scree", the counts line ("N active, N ready, N draft"), a scope button ("This worktree" or "All worktrees"), a "New" button and a "tui" button.
+- **Header:** scree icon, "Scree", a muted "project / worktree" label (Project key; "root", the worktree folder name, or "all worktrees"; truncated at 160px; only the project when no tickets say which worktree), the counts line ("N active, N ready, N draft"), a scope button ("This worktree" or "All worktrees"), a "New" button and a "tui" button.
 - **Filter bar:** chips All, Agent, Human, Blocked only, Show abandoned.
 - **Body:** sections Active, Ready, Draft, Done (Done shows the 5 newest), plus an Abandoned section after Done (folded by default) only while "Show abandoned" is on, each with a fold arrow and "Label (count)". Rows: status mark (14px svg), monospace id (11px, dim), title (truncated); second line: 48x4 criteria bar plus "checked/total", then chips in the order blocked, human, "N subtasks", claimer (session or author, cut to 8 chars when longer than 12).
 - **Legend:** a bottom strip marking Active, Ready, Draft, Done, Blocked.

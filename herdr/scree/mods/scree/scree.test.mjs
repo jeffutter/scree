@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline", "boardColumns", "OPTIONAL_COLUMNS"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline, boardColumns, OPTIONAL_COLUMNS } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "scopeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline", "boardColumns", "OPTIONAL_COLUMNS"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, scopeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline, boardColumns, OPTIONAL_COLUMNS } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -199,6 +199,21 @@ assert.equal(machineLabel(null), "this computer");
 assert.equal(machineLabel("box"), "box");
 assert.equal(worktreeLabel(null), "root");
 assert.equal(worktreeLabel("/a/b/feat-x"), "feat-x");
+
+{
+  const root = { project: { key: "SCR", root: "/r/scree" }, worktree: null };
+  const wt = { project: { key: "SCR", root: "/r/scree" }, worktree: "/r/wt/feat-x" };
+  assert.deepEqual(scopeLabel([root], "/r/scree", false), { project: "SCR", worktree: "root" });
+  assert.deepEqual(scopeLabel([wt], "/r/wt/feat-x", false), { project: "SCR", worktree: "feat-x" });
+  assert.deepEqual(scopeLabel([wt], "/r/wt/feat-x", true), { project: "SCR", worktree: "all worktrees" });
+  assert.deepEqual(scopeLabel([], "/r/other", false), { project: "other", worktree: "other" });
+  assert.deepEqual(scopeLabel([], null, false), { project: "", worktree: null });
+  const long = "p".repeat(80);
+  assert.equal(scopeLabel([{ project: { key: long, root: "/x" }, worktree: null }], "/x", false).project, long);
+  // The panel header renders the label, truncated and bounded.
+  assert(/id\("scree-scope-label"\)[^\n]*\.truncate\(\)/.test(src), "panel header renders a truncating scope label");
+  assert(src.includes("scopeLabel([...this.open, ...this.done]"), "panel header computes the scope label from its tickets");
+}
 const NOW = Date.parse("2026-11-13T12:00:00Z");
 const bt = (id, status, key, wt, extra = {}) => ({ id, status, for: "agent", blocked: false, archived_at: null, done_at: null, worktree: wt, project: { key, root: key === "LOC" ? null : `/r/${key}` }, ...extra });
 const tickets = [
