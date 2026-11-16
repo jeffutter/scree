@@ -909,6 +909,26 @@ mod tests {
             .collect()
     }
 
+    /// Non-issue: only the header line (indent "  ") gets the ">" marker; a
+    /// body that starts with a quote or rule sits on a later line under a
+    /// deeper indent and keeps it.
+    #[test]
+    fn selection_marker_is_not_confused_with_a_quote_or_rule_body() {
+        let theme = Theme::default();
+        for body in ["> quoted", "---", ""] {
+            let mut lines = vec![Line::from("  me  now")];
+            lines.extend(crate::tui::markdown::markdown_lines(
+                body, "    ", 40, &theme,
+            ));
+            mark_selected(&mut lines, &theme);
+            let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+            assert_eq!(text[0], "> me  now");
+            for l in &text[1..] {
+                assert!(l.starts_with("    "), "{l:?}");
+            }
+        }
+    }
+
     fn ticket(id: &str, status: &str, title: &str, who: &str, blocked: bool) -> Ticket {
         serde_json::from_value(serde_json::json!({
             "archived_at": null, "available": false, "blocked": blocked, "blocked_by": [],

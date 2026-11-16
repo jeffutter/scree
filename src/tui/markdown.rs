@@ -124,6 +124,8 @@ struct Renderer<'a> {
     text: Vec<(char, Style)>,
     /// Inside a fenced or indented code block: text is kept verbatim.
     code: Option<String>,
+    /// Cells seen so far in the open table row, to place the " | " separators.
+    cells: usize,
 }
 
 impl Renderer<'_> {
@@ -183,6 +185,9 @@ impl Renderer<'_> {
 
     /// Emit a verbatim code block, split at the pane width but never re-flowed.
     fn code_block(&mut self, body: &str) {
+        if body.trim_end_matches('\n').is_empty() {
+            return;
+        }
         let style = self.theme.code_style();
         let (mut first, rest) = self.prefixes();
         let room = self
@@ -254,6 +259,20 @@ impl Renderer<'_> {
                     marker: Some(marker),
                 });
             }
+            Tag::Table(_) => {
+                self.flush();
+                self.gap(false);
+            }
+            Tag::TableHead | Tag::TableRow => {
+                self.flush();
+                self.cells = 0;
+            }
+            Tag::TableCell => {
+                if self.cells > 0 {
+                    self.push_text(" | ");
+                }
+                self.cells += 1;
+            }
             Tag::Emphasis => {
                 let st = self.style().add_modifier(Modifier::ITALIC);
                 self.styles.push(st);
@@ -304,6 +323,19 @@ impl Renderer<'_> {
                 }
                 self.containers.pop();
             }
+            TagEnd::TableRow => self.flush(),
+            TagEnd::TableHead => {
+                self.flush();
+                // Rule under the header, as wide as the header line.
+                let w = self.out.last().map_or(1, |l| l.width());
+                let (first, _) = self.prefixes();
+                let n = w
+                    .saturating_sub(first.chars().map(cell).sum())
+                    .clamp(1, self.width.max(1));
+                self.out
+                    .push(Line::from(format!("{first}{}", "-".repeat(n))));
+            }
+            TagEnd::Table => self.flush(),
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                 self.styles.pop();
             }
@@ -382,8 +414,9 @@ pub fn markdown_lines(text: &str, indent: &str, width: usize, theme: &Theme) -> 
         gap_line: None,
         text: vec![],
         code: None,
+        cells: 0,
     };
-    for ev in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH) {
+    for ev in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
         r.event(ev);
     }
     r.flush();
@@ -527,6 +560,49 @@ mod tests {
                 .spans
                 .iter()
                 .any(|s| s.style.add_modifier.contains(Modifier::CROSSED_OUT))
+        );
+    }
+
+    #[test]
+    fn tables_render_one_line_per_row_with_a_header_rule() {
+        assert_eq!(
+            plain("| a | b |\n|---|---|\n| 1 | 2 |", "  ", 20),
+            ["  a | b", "  -----", "  1 | 2"]
+        );
+        assert_eq!(
+            plain("- | a | b |\n  |---|---|\n  | 1 | 2 |", "  ", 20),
+            ["  - a | b", "    -----", "    1 | 2"]
+        );
+        assert_eq!(
+            plain("> | a | b |\n> |---|---|\n> | 1 | 2 |", "", 20),
+            ["> a | b", "> -----", "> 1 | 2"]
+        );
+        // Narrow widths wrap and never panic.
+        let _ = plain("| aaaa | bbbb |\n|---|---|\n| 1 | 2 |", "  ", 3);
+        let _ = plain("| a |\n|---|\n|  |", "  ", 1);
+    }
+
+    /// Intended: an empty or whitespace-only body has no lines (a comment
+    /// shows only its header); an empty fenced block has no lines either.
+    #[test]
+    fn empty_bodies_render_no_lines() {
+        assert!(plain("", "    ", 20).is_empty());
+        assert!(plain("  \n ", "    ", 20).is_empty());
+        assert!(plain("```\n```", "    ", 20).is_empty());
+    }
+
+    /// Intended: a fenced block in a list item keeps its blank-line
+    /// separation from the item text, tight or loose.
+    #[test]
+    fn fenced_block_in_a_list_item_keeps_its_gap() {
+        let want = ["  - item", "  ", "    code", "  - next"];
+        assert_eq!(
+            plain("- item\n  ```\n  code\n  ```\n- next", "  ", 40),
+            want
+        );
+        assert_eq!(
+            plain("- item\n\n  ```\n  code\n  ```\n\n- next", "  ", 40),
+            want
         );
     }
 
