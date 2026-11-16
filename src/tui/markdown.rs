@@ -209,6 +209,20 @@ impl Renderer<'_> {
             .extend(wrap_spans(&text, &first, &rest, self.width));
     }
 
+    /// Flush a table row: trailing placeholder NBSPs are dropped, and a row
+    /// with nothing else still emits a (blank) line.
+    fn flush_table_row(&mut self) {
+        while matches!(self.text.last(), Some(&(NBSP, _))) {
+            self.text.pop();
+        }
+        if self.text.is_empty() {
+            let (first, _) = self.prefixes();
+            self.out.push(Line::from(first.trim_end().to_string()));
+        } else {
+            self.flush();
+        }
+    }
+
     /// Emit a verbatim code block, split at the pane width but never re-flowed.
     fn code_block(&mut self, body: &str) {
         if body.trim_end_matches('\n').is_empty() {
@@ -299,7 +313,10 @@ impl Renderer<'_> {
             }
             Tag::TableCell => {
                 if self.cells > 0 {
-                    self.push_text(" | ");
+                    // Space, bar, then an NBSP so the gap after the bar
+                    // survives wrap_spans even when the cell is empty.
+                    let st = self.style();
+                    self.text.extend([(' ', st), ('|', st), (NBSP, st)]);
                 }
                 self.cells += 1;
             }
@@ -354,9 +371,16 @@ impl Renderer<'_> {
                 }
                 self.containers.pop();
             }
-            TagEnd::TableRow => self.flush(),
+            TagEnd::TableCell => {
+                // An empty leading cell keeps its column.
+                if self.cells == 1 && self.text.is_empty() {
+                    let st = self.style();
+                    self.text.push((NBSP, st));
+                }
+            }
+            TagEnd::TableRow => self.flush_table_row(),
             TagEnd::TableHead => {
-                self.flush();
+                self.flush_table_row();
                 // Rule under the header, as wide as its widest line; none when
                 // the header rendered nothing.
                 let head = &self.out[self.head_start.min(self.out.len())..];
@@ -648,7 +672,17 @@ mod tests {
         );
         // Narrow widths wrap and never panic.
         let _ = plain("| aaaa | bbbb |\n|---|---|\n| 1 | 2 |", "  ", 3);
-        let _ = plain("| a |\n|---|\n|  |", "  ", 1);
+        assert_eq!(plain("| a |\n|---|\n|  |", "  ", 1).len(), 3);
+    }
+
+    #[test]
+    fn tables_keep_empty_cells_and_rows() {
+        let t = |row: &str| plain(&format!("| h | h | h |\n|---|---|---|\n{row}"), "  ", 20);
+        assert_eq!(t("| | b | c |")[2], "    | b | c");
+        assert_eq!(t("| b | | |")[2], "  b |  |");
+        assert_eq!(t("| a | | c |")[2], "  a |  | c");
+        assert_eq!(t("| | | |")[2], "    |  |");
+        assert_eq!(plain("| a |\n|---|\n| |", "  ", 20), ["  a", "  -", ""]);
     }
 
     /// Intended: an empty or whitespace-only body has no lines (a comment
