@@ -206,7 +206,7 @@ assert.equal(worktreeLabel("/a/b/feat-x"), "feat-x");
   assert.deepEqual(scopeLabel([root], "/r/scree", false), { project: "SCR", worktree: "root" });
   assert.deepEqual(scopeLabel([wt], "/r/wt/feat-x", false), { project: "SCR", worktree: "feat-x" });
   assert.deepEqual(scopeLabel([wt], "/r/wt/feat-x", true), { project: "SCR", worktree: "all worktrees" });
-  assert.deepEqual(scopeLabel([], "/r/other", false), { project: "other", worktree: "other" });
+  assert.deepEqual(scopeLabel([], "/r/other", false), { project: "other", worktree: null });
   assert.deepEqual(scopeLabel([], null, false), { project: "", worktree: null });
   const long = "p".repeat(80);
   assert.equal(scopeLabel([{ project: { key: long, root: "/x" }, worktree: null }], "/x", false).project, long);

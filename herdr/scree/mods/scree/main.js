@@ -296,7 +296,7 @@ function scopeLabel(tickets, cwd, allWorktrees) {
     const root = first.project.root;
     return { project, worktree: !first.worktree || (root && cwd === root) ? "root" : worktreeLabel(first.worktree) };
   }
-  return { project, worktree: base || null };
+  return { project, worktree: null };
 }
 
 // "this computer" for the local machine, else the machine name.
