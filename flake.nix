@@ -100,6 +100,19 @@
           ] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.mold ];
         } // envVars);
 
+        # `nix develop .#demo`: tools to seed and record the demo in demo/.
+        # scree comes from this flake's package so the recording matches a release build.
+        devShells.demo = pkgs.mkShell {
+          packages = [
+            scree
+            pkgs.vhs
+            pkgs.ffmpeg
+            pkgs.ttyd
+            pkgs.jq
+            pkgs.git
+          ];
+        };
+
         formatter = pkgs.nixpkgs-fmt;
       }
     );
