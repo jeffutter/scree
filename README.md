@@ -6,6 +6,15 @@ Everything runs on your machine. Scree is one binary with one sqlite file. It ha
 
 Tickets are scoped to the git repository and worktree they were created in. An agent working in one worktree sees that worktree's tickets, and the claim on a ticket is atomic, so several agents can work one repository without taking the same ticket.
 
+## Demo
+
+Short silent clips, recorded from the real binary by the scripts in [`demo/`](demo/README.md):
+
+- [The backlog](docs/videos/01-backlog.mp4): listing, adding a ticket that waits on another, showing a ticket.
+- [An agent works a ticket](docs/videos/02-agent.mp4): claim, check criteria with evidence, comment, done.
+- [The terminal UI](docs/videos/03-tui.mp4): board, detail, search, and a live update from another process.
+- [Claude Code with the skill](docs/videos/04-claude.mp4): asking Claude what is available and to file a ticket.
+
 ## Install
 
 With Nix:
