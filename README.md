@@ -8,12 +8,23 @@ Tickets are scoped to the git repository and worktree they were created in. An a
 
 ## Demo
 
-Short silent clips, recorded from the real binary by the scripts in [`demo/`](demo/README.md):
+Short silent clips, recorded from the real binary by the scripts in [`demo/`](demo/README.md).
 
-- [The backlog](docs/videos/01-backlog.mp4): listing, adding a ticket that waits on another, showing a ticket.
-- [An agent works a ticket](docs/videos/02-agent.mp4): claim, check criteria with evidence, comment, done.
-- [The terminal UI](docs/videos/03-tui.mp4): board, detail, search, and a live update from another process.
-- [Claude Code with the skill](docs/videos/04-claude.mp4): asking Claude what is available and to file a ticket.
+**The backlog.** Listing, adding a ticket that waits on another, showing a ticket.
+
+https://github.com/user-attachments/assets/d2606f04-1335-4752-b476-6db044cbc67a
+
+**An agent works a ticket.** Claim, check criteria with evidence, comment, done.
+
+https://github.com/user-attachments/assets/aa876224-4659-492e-aaf4-28174df6880e
+
+**The terminal UI.** Board, detail, search, and a live update from another process.
+
+https://github.com/user-attachments/assets/7c8bbd4f-e715-47e4-ad94-f509de5598b4
+
+**Claude Code with the skill.** Asking Claude what is available and to file a ticket.
+
+https://github.com/user-attachments/assets/ea753449-323a-4084-a51d-fda9cf69515d
 
 ## Install
 
