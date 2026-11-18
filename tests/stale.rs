@@ -211,3 +211,22 @@ fn sessionless_reclaim_still_locks_out_the_previous_holder() {
         );
     }
 }
+
+#[test]
+fn sessionless_reclaim_by_the_same_author_locks_out_the_previous_holder() {
+    let e = Env::new();
+    let id = e.ok(&["--role", "human", "add", "t", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["start", &id, "--author", "agent", "--session", "s1"]);
+    backdate(&e, &id, 5);
+    e.ok(&["start", &id, "--reclaim", "--author", "agent"]);
+    for cmd in ["done", "release"] {
+        assert_eq!(
+            e.code(&[cmd, &id, "--author", "agent", "--session", "s1"]),
+            5,
+            "{cmd}"
+        );
+    }
+}

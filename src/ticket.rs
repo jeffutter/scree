@@ -431,15 +431,15 @@ fn require_claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<
     let Some(mine) = who.session.as_deref() else {
         return Ok(());
     };
-    let (held, held_author): (Option<String>, Option<String>) = tx.query_row(
-        "SELECT claimed_by_session, claimed_by_author FROM tickets WHERE id = ?1",
+    let held: Option<String> = tx.query_row(
+        "SELECT claimed_by_session FROM tickets WHERE id = ?1",
         [row],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| r.get(0),
     )?;
-    // A sessionless holder (empty session, e.g. a human reclaim) still owns
-    // the claim against a session-carrying caller with a different author.
+    // A sessionless holder (empty session, e.g. a reclaim) owns the claim
+    // against every session-carrying caller, whatever its author: authors
+    // default to the role name, so two agents share one.
     let lost = match held.as_deref() {
-        Some("") => held_author.as_deref().is_some_and(|a| a != who.author),
         Some(h) => h != mine,
         None => false,
     };
