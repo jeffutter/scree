@@ -20,7 +20,9 @@ If you cannot finish, give the ticket back, or abandon it with a reason:
     scree release SCR-12
     scree abandon SCR-12 "Superseded by SCR-14"
 
-Exit 5 means your claim was lost: pick another ticket. Exit 4 means scree refused: read the message and do not retry with `--force`. `--force` is for humans, or for an agent only when the human said to use it.
+If a session crashed, its ticket stays `active`. `scree list --stale` shows active tickets whose claim has not been touched (comment, check, edit) for 4 hours; `--older-than 30m` or `2h` changes the threshold. Take one over with `scree start SCR-12 --reclaim`: it works only on a stale claim, and it comments the previous holder's name on the ticket. Read the comments before continuing the earlier work.
+
+Exit 5 means your claim was lost, for example another session reclaimed it: pick another ticket. Exit 4 means scree refused: read the message and do not retry with `--force`. `--force` is for humans, or for an agent only when the human said to use it.
 
 A new ticket needs a title and at least one criterion. Leave `--plan` empty unless the human asked you to plan now; a later planning phase writes it.
 

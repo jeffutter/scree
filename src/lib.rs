@@ -282,6 +282,16 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 Some(_) if a.for_who.is_some() => {
                     Err(Error::Usage("--for applies only to start --next".into()))
                 }
+                Some(id) if a.reclaim => {
+                    let cutoff = ticket::stale_cutoff(&conn, a.older_than.as_deref())?;
+                    transition(
+                        &mut conn,
+                        format,
+                        &id,
+                        ticket::Action::Reclaim { cutoff },
+                        &identity,
+                    )
+                }
                 Some(id) => transition(&mut conn, format, &id, ticket::Action::Start, &identity),
                 None => {
                     let mut scope = cli::ScopeArgs::default();

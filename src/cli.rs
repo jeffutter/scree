@@ -237,6 +237,13 @@ pub struct StartArgs {
     /// With --next: whose tickets to pick from; defaults to the caller's Role
     #[arg(long = "for", value_enum)]
     pub for_who: Option<ForWho>,
+    /// Take over this ticket if its claim is stale (untouched for --older-than)
+    #[arg(long, requires = "id", conflicts_with = "next")]
+    pub reclaim: bool,
+    /// With --reclaim: how long a claim must be untouched, as `Nd`, `Nh`, `Nm` or an RFC 3339
+    /// timestamp. Default 4h
+    #[arg(long, value_name = "WHEN", requires = "reclaim")]
+    pub older_than: Option<String>,
 }
 
 #[derive(Debug, Args, Default)]
@@ -270,6 +277,12 @@ pub struct ListArgs {
     /// Only Available tickets: ready, unblocked and first among siblings
     #[arg(long)]
     pub available: bool,
+    /// Only active tickets whose claim has not been touched for --older-than
+    #[arg(long)]
+    pub stale: bool,
+    /// With --stale: `Nd`, `Nh`, `Nm` or an RFC 3339 timestamp. Default 4h
+    #[arg(long, value_name = "WHEN", requires = "stale")]
+    pub older_than: Option<String>,
 }
 
 #[derive(Debug, Args)]

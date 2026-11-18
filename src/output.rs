@@ -126,6 +126,9 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
             c.author,
             c.session.as_deref().unwrap_or("")
         );
+        if let Some(at) = &t.claim_touched_at {
+            let _ = writeln!(out, "claim touched: {at}");
+        }
     }
     let _ = writeln!(out, "created: {}  updated: {}", t.created_at, t.updated_at);
     for (label, body) in [("Description", &d.description), ("Plan", &d.plan)] {
@@ -219,6 +222,7 @@ mod tests {
             available: false,
             blocked: false,
             blocked_by: vec![],
+            claim_touched_at: None,
             claimed_by: None,
             created_at: String::new(),
             criteria: Default::default(),

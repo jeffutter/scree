@@ -6,7 +6,10 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 use crate::error::{Error, Result};
 
 /// Ordered, forward-only migrations. `user_version` equals the number applied.
-const MIGRATIONS: &[&str] = &[include_str!("migrations/001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/001_init.sql"),
+    include_str!("migrations/002_claim_touched.sql"),
+];
 
 /// Pick the database path: flag, then `SCREE_DB`, then `$XDG_DATA_HOME`,
 /// then `$HOME/.local/share`. Pure so tests need no global env mutation.
@@ -154,7 +157,7 @@ mod tests {
         let uv: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(uv, 1);
+        assert_eq!(uv, 2);
     }
 
     #[test]

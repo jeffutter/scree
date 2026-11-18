@@ -387,9 +387,18 @@ pub enum Action {
     Ready,
     Draft,
     Start,
+    /// Take over an active ticket whose claim was last touched before `cutoff`
+    /// (an `YYYY-MM-DDTHH:MM:SSZ` timestamp).
+    Reclaim {
+        cutoff: String,
+    },
     Release,
-    Done { force: bool },
-    Abandon { reason: String },
+    Done {
+        force: bool,
+    },
+    Abandon {
+        reason: String,
+    },
     Reopen,
 }
 
@@ -401,7 +410,7 @@ fn claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<()> {
     let n = tx.execute(
         &format!(
             "UPDATE tickets SET status = 'active', claimed_by_author = ?2,
-                claimed_by_session = ?3, updated_at = {NOW}
+                claimed_by_session = ?3, claim_touched_at = {NOW}, updated_at = {NOW}
              WHERE id = ?1 AND status = 'ready'"
         ),
         params![row, who.author, who.session.as_deref().unwrap_or("")],
@@ -412,6 +421,27 @@ fn claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Refuse (Conflict, exit 5) when `who` carries a session and the active
+/// claim on `row` belongs to a different one: the claim was reclaimed.
+/// Callers without a session (humans, plain shells) may release or finish
+/// any ticket.
+fn require_claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<()> {
+    let Some(mine) = who.session.as_deref() else {
+        return Ok(());
+    };
+    let held: Option<String> = tx.query_row(
+        "SELECT claimed_by_session FROM tickets WHERE id = ?1",
+        [row],
+        |r| r.get(0),
+    )?;
+    match held.as_deref() {
+        Some(h) if !h.is_empty() && h != mine => Err(Error::Conflict(format!(
+            "{id} is claimed by another session; your claim was lost"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Apply one status transition atomically and return the updated ticket.
@@ -497,14 +527,70 @@ pub fn transition(
                 }
                 claim(tx, row, id, who)?;
             }
+            Action::Reclaim { cutoff } => {
+                if status != "active" {
+                    return refuse("reclaim");
+                }
+                if who.role == crate::identity::Role::Agent && for_who == "human" {
+                    return Err(Error::Refused(format!("{id} is for a human")));
+                }
+                let (author, session, touched): (String, String, Option<String>) = tx.query_row(
+                    "SELECT claimed_by_author, claimed_by_session, claim_touched_at
+                     FROM tickets WHERE id = ?1",
+                    [row],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                if !touched.as_deref().is_some_and(|t| t < cutoff.as_str()) {
+                    return Err(Error::Refused(format!("{id}: claim is not stale")));
+                }
+                // The guard repeats the staleness test so the update, not the
+                // read above, decides a race.
+                let n = tx.execute(
+                    &format!(
+                        "UPDATE tickets SET claimed_by_author = ?2, claimed_by_session = ?3,
+                            claim_touched_at = {NOW}, updated_at = {NOW}
+                         WHERE id = ?1 AND status = 'active' AND claim_touched_at < ?4"
+                    ),
+                    params![
+                        row,
+                        who.author,
+                        who.session.as_deref().unwrap_or(""),
+                        cutoff
+                    ],
+                )?;
+                if n == 0 {
+                    return Err(Error::Conflict(format!(
+                        "{id} was reclaimed by another caller"
+                    )));
+                }
+                let prev = if session.is_empty() {
+                    author
+                } else {
+                    format!("{author}/{session}")
+                };
+                tx.execute(
+                    &format!(
+                        "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
+                    ),
+                    params![
+                        row,
+                        who.author,
+                        who.session,
+                        who.role.as_str(),
+                        format!("reclaimed stale claim from {prev}")
+                    ],
+                )?;
+            }
             Action::Release => {
                 if status != "active" {
                     return refuse("release");
                 }
+                require_claim(tx, row, id, who)?;
                 tx.execute(
                     &format!(
                         "UPDATE tickets SET status = 'ready', claimed_by_author = NULL,
-                            claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                            claimed_by_session = NULL, claim_touched_at = NULL, updated_at = {NOW} WHERE id = ?1"
                     ),
                     [row],
                 )?;
@@ -512,6 +598,9 @@ pub fn transition(
             Action::Done { force } => {
                 if !open {
                     return refuse("finish");
+                }
+                if status == "active" {
+                    require_claim(tx, row, id, who)?;
                 }
                 let open_children: i64 = tx.query_row(
                     &format!(
@@ -540,7 +629,7 @@ pub fn transition(
                 tx.execute(
                     &format!(
                         "UPDATE tickets SET status = 'done', done_at = {NOW},
-                            claimed_by_author = NULL, claimed_by_session = NULL,
+                            claimed_by_author = NULL, claimed_by_session = NULL, claim_touched_at = NULL,
                             updated_at = {NOW} WHERE id = ?1"
                     ),
                     [row],
@@ -584,7 +673,7 @@ pub fn transition(
                     tx.execute(
                         &format!(
                             "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
-                                claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                                claimed_by_session = NULL, claim_touched_at = NULL, updated_at = {NOW} WHERE id = ?1"
                         ),
                         [target],
                     )?;
@@ -651,7 +740,11 @@ fn display_id(conn: &Connection, row: i64) -> Result<String> {
 
 fn touch(tx: &Connection, row: i64) -> Result<()> {
     tx.execute(
-        &format!("UPDATE tickets SET updated_at = {NOW} WHERE id = ?1"),
+        &format!(
+            "UPDATE tickets SET updated_at = {NOW},
+                claim_touched_at = CASE WHEN status = 'active' THEN {NOW} ELSE claim_touched_at END
+             WHERE id = ?1"
+        ),
         [row],
     )?;
     Ok(())
@@ -867,6 +960,8 @@ pub fn edit(
                     status = CASE WHEN ?6 THEN 'ready' ELSE status END,
                     claimed_by_author = CASE WHEN ?6 THEN NULL ELSE claimed_by_author END,
                     claimed_by_session = CASE WHEN ?6 THEN NULL ELSE claimed_by_session END,
+                    claim_touched_at = CASE WHEN ?6 THEN NULL
+                        WHEN status = 'active' THEN {NOW} ELSE claim_touched_at END,
                     updated_at = {NOW}
                  WHERE id = ?1"
             ),
@@ -980,25 +1075,44 @@ fn select_ids(
         .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-/// Resolve `--done-since` (`Nd` or an RFC 3339 timestamp) to the
-/// `YYYY-MM-DDTHH:MM:SSZ` form `done_at` is stored in, using SQLite's date
-/// functions so no time dependency is needed.
-fn done_since_bound(conn: &Connection, when: &str) -> Result<String> {
+/// Resolve a time bound (`Nd`, `Nh`, `Nm` ago, or an RFC 3339 timestamp) to
+/// the `YYYY-MM-DDTHH:MM:SSZ` form timestamps are stored in, using SQLite's
+/// date functions so no time dependency is needed. `flag` names the option
+/// in the error.
+fn time_bound(conn: &Connection, flag: &str, when: &str) -> Result<String> {
     let bad = || {
         Error::Usage(format!(
-            "invalid --done-since {when:?}: use an RFC 3339 timestamp or Nd (N days ago)"
+            "invalid {flag} {when:?}: use an RFC 3339 timestamp or Nd, Nh or Nm (ago)"
         ))
     };
     let when = when.trim();
-    let (expr, arg) = match when.strip_suffix('d').map(str::parse::<u32>) {
-        Some(Ok(days)) => (
-            "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)",
-            format!("-{days} days"),
-        ),
-        _ => ("strftime('%Y-%m-%dT%H:%M:%SZ', ?)", when.to_string()),
+    let ago = ['d', 'h', 'm'].iter().find_map(|&u| {
+        let n: u32 = when.strip_suffix(u)?.parse().ok()?;
+        let unit = match u {
+            'd' => "days",
+            'h' => "hours",
+            _ => "minutes",
+        };
+        Some(format!("-{n} {unit}"))
+    });
+    let (expr, arg) = match ago {
+        Some(a) => ("strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)", a),
+        None => ("strftime('%Y-%m-%dT%H:%M:%SZ', ?)", when.to_string()),
     };
     let bound: Option<String> = conn.query_row(&format!("SELECT {expr}"), [arg], |r| r.get(0))?;
     bound.ok_or_else(bad)
+}
+
+/// A claim untouched for this long is stale unless `--older-than` says otherwise.
+pub const DEFAULT_STALE_AFTER: &str = "4h";
+
+/// The cutoff before which a claim counts as stale.
+pub fn stale_cutoff(conn: &Connection, older_than: Option<&str>) -> Result<String> {
+    time_bound(
+        conn,
+        "--older-than",
+        older_than.unwrap_or(DEFAULT_STALE_AFTER),
+    )
 }
 
 pub fn list(
@@ -1037,7 +1151,11 @@ pub fn list(
     }
     if let Some(when) = &a.done_since {
         conds.push("t.done_at >= ?".into());
-        args.push(Sql::Text(done_since_bound(conn, when)?));
+        args.push(Sql::Text(time_bound(conn, "--done-since", when)?));
+    }
+    if a.stale {
+        conds.push("t.status = 'active' AND t.claim_touched_at < ?".into());
+        args.push(Sql::Text(stale_cutoff(conn, a.older_than.as_deref())?));
     }
     if a.blocked {
         conds.push(blocked_sql());
@@ -1438,6 +1556,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         project_root: Option<String>,
         author: Option<String>,
         session: Option<String>,
+        touched: Option<String>,
         created: String,
         updated: String,
         done: Option<String>,
@@ -1448,7 +1567,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
     let row = conn.query_row(
         &format!(
             "SELECT {ID_EXPR}, p.key || '-' || pt.number, t.title, t.status, t.\"for\",
-                    t.worktree_path, p.key, p.root_path, t.claimed_by_author, t.claimed_by_session,
+                    t.worktree_path, p.key, p.root_path, t.claimed_by_author, t.claimed_by_session, t.claim_touched_at,
                     t.created_at, t.updated_at, t.done_at, t.archived_at,
                     t.description, t.plan
              FROM tickets t JOIN projects p ON p.id = t.project_id
@@ -1467,12 +1586,13 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
                 project_root: r.get(7)?,
                 author: r.get(8)?,
                 session: r.get(9)?,
-                created: r.get(10)?,
-                updated: r.get(11)?,
-                done: r.get(12)?,
-                archived: r.get(13)?,
-                description: r.get(14)?,
-                plan: r.get(15)?,
+                touched: r.get(10)?,
+                created: r.get(11)?,
+                updated: r.get(12)?,
+                done: r.get(13)?,
+                archived: r.get(14)?,
+                description: r.get(15)?,
+                plan: r.get(16)?,
             })
         },
     )?;
@@ -1554,6 +1674,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
             session: row.session.filter(|s| !s.is_empty()),
         }),
         worktree: row.worktree,
+        claim_touched_at: row.touched,
         created_at: row.created,
         updated_at: row.updated,
         done_at: row.done,
