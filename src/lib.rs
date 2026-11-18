@@ -90,6 +90,24 @@ fn transition(
     emit(format, &t, || output::render_text_ticket(&t))
 }
 
+/// Resolve user-given revisions to full commit shas through git. A commit that
+/// is the current HEAD carries its branch; others carry none. An unknown
+/// revision is a usage error.
+fn resolve_links(
+    cwd: &Path,
+    revs: &[String],
+    head: Option<&scope::Head>,
+) -> Result<Vec<ticket::CommitLink>> {
+    revs.iter()
+        .map(|r| {
+            let sha = scope::resolve_commit(cwd, r)
+                .ok_or_else(|| Error::Usage(format!("{r} is not a commit in this repository")))?;
+            let branch = head.filter(|h| h.sha == sha).and_then(|h| h.branch.clone());
+            Ok(ticket::CommitLink { sha, branch })
+        })
+        .collect()
+}
+
 /// The global --project picks the Project unless cwd is already inside it.
 fn apply_project_override(scope: &mut cli::ScopeArgs, project: Option<&Path>, cwd: &Path) {
     if scope.project_root.is_none()
@@ -363,15 +381,33 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 &identity,
             )
         }
-        Command::Done { id, force } => {
+        Command::Done { id, force, commits } => {
             sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;
+            let head = scope::head(cwd);
+            let mut links: Vec<ticket::CommitLink> = head
+                .iter()
+                .map(|h| ticket::CommitLink {
+                    sha: h.sha.clone(),
+                    branch: h.branch.clone(),
+                })
+                .collect();
+            links.extend(resolve_links(cwd, &commits, head.as_ref())?);
             transition(
                 &mut conn,
                 format,
                 &id,
-                ticket::Action::Done { force },
+                ticket::Action::Done {
+                    force,
+                    commits: links,
+                },
                 &identity,
             )
+        }
+        Command::Link { id, shas } => {
+            let head = scope::head(cwd);
+            let links = resolve_links(cwd, &shas, head.as_ref())?;
+            let t = ticket::link(&mut conn, &id, &links)?;
+            emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Tui => unreachable!("handled before identity resolves"),
         Command::Skill { .. } => unreachable!("handled before the database opens"),

@@ -409,6 +409,15 @@ pub enum Command {
         id: String,
         #[arg(long)]
         force: bool,
+        /// Also link this commit (repeatable); HEAD is linked automatically inside a git repo
+        #[arg(long = "commit", value_name = "SHA")]
+        commits: Vec<String>,
+    },
+    /// Link commits to a ticket after the fact
+    Link {
+        id: String,
+        #[arg(required = true, num_args = 1.., value_name = "SHA")]
+        shas: Vec<String>,
     },
     /// Abandon with a reason (text, or `-` for stdin; an empty read is an error), stored as a comment
     Abandon {

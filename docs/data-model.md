@@ -83,6 +83,14 @@ The display id (`SCR-12`, `SCR-12.3`) is composed at read time from the Key, the
 - Checking records the checker and the evidence given. It is a claim, not a fact Scree established.
 - Ids are never reused after a delete.
 
+### ticket_commits
+
+`ticket_commits(ticket_id, sha, branch, linked_at)`, primary key `(ticket_id, sha)`.
+
+- One row per commit linked to a ticket, written by `done` (the checkout's HEAD plus any `--commit`) and by `link`. Both go through the git CLI; `.git` is never parsed.
+- `sha` is the full commit sha. `branch` is what the checkout was on when linked, null when detached or unknown, so it is stored per link rather than per ticket.
+- Linking a sha twice keeps the first row. Rows are removed with their ticket by the cascade.
+
 ### comments
 
 `comments(id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id, author, session, role, body, created_at)`.

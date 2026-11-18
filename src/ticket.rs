@@ -10,8 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, Claimer, Comment, CriteriaSummary, Criterion, ListResult, NextResult, ProjectRef,
-    Subtask, Ticket, TicketDetail,
+    Blocker, Claimer, Comment, Commit, CriteriaSummary, Criterion, ListResult, NextResult,
+    ProjectRef, Subtask, Ticket, TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -382,6 +382,41 @@ pub fn archive(conn: &mut Connection, id: &str, archived: bool) -> Result<Ticket
     })
 }
 
+/// A commit to link to a ticket; the caller has already resolved `sha` to a
+/// full sha through git.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitLink {
+    pub sha: String,
+    pub branch: Option<String>,
+}
+
+/// Link commits to a ticket. Linking a sha again keeps the first link.
+fn insert_commits(tx: &Connection, row: i64, links: &[CommitLink]) -> Result<()> {
+    for l in links {
+        tx.execute(
+            &format!(
+                "INSERT OR IGNORE INTO ticket_commits (ticket_id, sha, branch, linked_at)
+                 VALUES (?1, ?2, ?3, {NOW})"
+            ),
+            params![row, l.sha, l.branch],
+        )?;
+    }
+    Ok(())
+}
+
+/// Link commits to a ticket in any state.
+pub fn link(conn: &mut Connection, id: &str, links: &[CommitLink]) -> Result<TicketDetail> {
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        insert_commits(tx, row, links)?;
+        tx.execute(
+            &format!("UPDATE tickets SET updated_at = {NOW} WHERE id = ?1"),
+            [row],
+        )?;
+        build(tx, row)
+    })
+}
+
 /// A status change `scree` offers as its own command.
 pub enum Action {
     Ready,
@@ -398,6 +433,7 @@ pub enum Action {
     },
     Done {
         force: bool,
+        commits: Vec<CommitLink>,
     },
     Abandon {
         reason: String,
@@ -606,7 +642,7 @@ pub fn transition(
                     params![row, handoff],
                 )?;
             }
-            Action::Done { force } => {
+            Action::Done { force, commits } => {
                 if !open {
                     return refuse("finish");
                 }
@@ -645,6 +681,7 @@ pub fn transition(
                     ),
                     [row],
                 )?;
+                insert_commits(tx, row, &commits)?;
             }
             Action::Abandon { reason } => {
                 if !open {
@@ -1555,9 +1592,23 @@ fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
             })
         })?
         .collect::<std::result::Result<_, _>>()?;
+    let commits = conn
+        .prepare(
+            "SELECT sha, branch, linked_at FROM ticket_commits
+             WHERE ticket_id = ?1 ORDER BY linked_at, rowid",
+        )?
+        .query_map([id], |r| {
+            Ok(Commit {
+                sha: r.get(0)?,
+                branch: r.get(1)?,
+                linked_at: r.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
     Ok(TicketDetail {
         ticket,
         comments,
+        commits,
         criteria,
         description,
         handoff,

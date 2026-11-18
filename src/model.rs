@@ -98,6 +98,15 @@ pub struct Ticket {
     pub worktree: Option<String>,
 }
 
+/// A commit linked to a ticket. `branch` is what the checkout was on when the
+/// link was made (`null` when detached or unknown).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Commit {
+    pub branch: Option<String>,
+    pub linked_at: String,
+    pub sha: String,
+}
+
 /// The `show` shape, also returned by every mutation.
 ///
 /// Its `criteria` key is the full array, not the list shape's
@@ -108,6 +117,7 @@ pub struct Ticket {
 pub struct TicketDetail {
     pub ticket: Ticket,
     pub comments: Vec<Comment>,
+    pub commits: Vec<Commit>,
     pub criteria: Vec<Criterion>,
     pub description: String,
     pub handoff: String,
@@ -119,6 +129,8 @@ struct RawDetail {
     #[serde(flatten)]
     ticket: Ticket,
     comments: Vec<Comment>,
+    #[serde(default)]
+    commits: Vec<Commit>,
     criteria: Vec<Criterion>,
     description: String,
     #[serde(default)]
@@ -135,6 +147,7 @@ impl From<RawDetail> for TicketDetail {
         TicketDetail {
             ticket: r.ticket,
             comments: r.comments,
+            commits: r.commits,
             criteria: r.criteria,
             description: r.description,
             handoff: r.handoff,
@@ -156,6 +169,10 @@ impl Serialize for TicketDetail {
         all.insert(
             "comments".into(),
             to_value(serde_json::to_value(&self.comments))?,
+        );
+        all.insert(
+            "commits".into(),
+            to_value(serde_json::to_value(&self.commits))?,
         );
         all.insert(
             "criteria".into(),

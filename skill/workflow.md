@@ -15,6 +15,8 @@ When every criterion is checked, finish:
 
     scree done SCR-12
 
+Commit first, then `done`: it links the checkout's HEAD commit and branch to the ticket. Link any other commit with `--commit SHA` on `done`, or afterwards with `scree link SCR-12 SHA`.
+
 If you cannot finish, give the ticket back with a handoff note: what is done, what you tried, and what is next. The next worker sees it in `show` and `start`, before the comments, and each release replaces the earlier note. `done` clears it.
 
     scree release SCR-12 --handoff "Done: parser fix in src/parse.rs. Tried: a regex, too slow. Next: add the benchmark."
