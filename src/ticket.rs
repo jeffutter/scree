@@ -310,7 +310,12 @@ fn waits_for(tx: &Connection, from: i64, target: i64) -> Result<bool> {
 /// `id` becomes blocked by `blocker`. Refused (exit 4) for a self edge, a
 /// different Project, or a cycle. Worktrees of one Project may be mixed.
 /// Adding an existing edge changes nothing.
-pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketDetail> {
+pub fn dep_add(
+    conn: &mut Connection,
+    id: &str,
+    blocker: &str,
+    who: &Identity,
+) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
         if row == b {
@@ -322,13 +327,18 @@ pub fn dep_add(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketD
                 "{id} blocked by {blocker} would make a dependency cycle"
             )));
         }
-        touch(tx, row)?;
+        touch(tx, row, who)?;
         build(tx, row)
     })
 }
 
 /// Remove the edge; removing one that does not exist is a no-op.
-pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketDetail> {
+pub fn dep_rm(
+    conn: &mut Connection,
+    id: &str,
+    blocker: &str,
+    who: &Identity,
+) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let (row, b) = (resolve(tx, id)?, resolve(tx, blocker)?);
         if tx.execute(
@@ -336,7 +346,7 @@ pub fn dep_rm(conn: &mut Connection, id: &str, blocker: &str) -> Result<TicketDe
             [row, b],
         )? > 0
         {
-            touch(tx, row)?;
+            touch(tx, row, who)?;
         }
         build(tx, row)
     })
@@ -796,15 +806,20 @@ fn bump_updated(tx: &Connection, row: i64) -> Result<()> {
     Ok(())
 }
 
-/// Bump `updated_at` and, for an active ticket, refresh `claim_touched_at`.
-fn touch(tx: &Connection, row: i64) -> Result<()> {
+/// Bump `updated_at`. `claim_touched_at` is refreshed only when the ticket is
+/// active and `who` is the claim holder (same author and session, a missing
+/// session being `''`); anyone else's change leaves the stale clock alone, so a
+/// crashed agent's ticket stays reclaimable.
+fn touch(tx: &Connection, row: i64, who: &Identity) -> Result<()> {
     tx.execute(
         &format!(
             "UPDATE tickets SET updated_at = {NOW},
-                claim_touched_at = CASE WHEN status = 'active' THEN {NOW} ELSE claim_touched_at END
+                claim_touched_at = CASE WHEN status = 'active'
+                    AND claimed_by_author = ?2 AND coalesce(claimed_by_session, '') = ?3
+                    THEN {NOW} ELSE claim_touched_at END
              WHERE id = ?1"
         ),
-        [row],
+        params![row, who.author, who.session.as_deref().unwrap_or("")],
     )?;
     Ok(())
 }
@@ -812,7 +827,12 @@ fn touch(tx: &Connection, row: i64) -> Result<()> {
 /// Append a criterion. The ticket's counter only grows, so a removed
 /// number is never handed out again. Allowed on closed tickets: criteria
 /// and comments are notes.
-pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<TicketDetail> {
+pub fn criteria_add(
+    conn: &mut Connection,
+    id: &str,
+    text: &str,
+    who: &Identity,
+) -> Result<TicketDetail> {
     if text.trim().is_empty() {
         return Err(Error::Usage("criterion text must not be empty".into()));
     }
@@ -830,7 +850,7 @@ pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<Ticke
                               FROM acceptance_criteria WHERE ticket_id = ?1), ?3)",
             params![row, n, text.trim()],
         )?;
-        touch(tx, row)?;
+        touch(tx, row, who)?;
         build(tx, row)
     })
 }
@@ -840,6 +860,7 @@ pub fn criteria_add(conn: &mut Connection, id: &str, text: &str) -> Result<Ticke
 fn on_criterion(
     conn: &mut Connection,
     target: &str,
+    who: &Identity,
     f: impl FnOnce(&Connection, i64, i64) -> Result<usize>,
 ) -> Result<TicketDetail> {
     let (id, n) = parse_criterion_ref(target)?;
@@ -848,13 +869,13 @@ fn on_criterion(
         if f(tx, row, n)? == 0 {
             return Err(Error::NotFound(format!("no criterion {target}")));
         }
-        touch(tx, row)?;
+        touch(tx, row, who)?;
         build(tx, row)
     })
 }
 
-pub fn criteria_rm(conn: &mut Connection, target: &str) -> Result<TicketDetail> {
-    on_criterion(conn, target, |tx, row, n| {
+pub fn criteria_rm(conn: &mut Connection, target: &str, who: &Identity) -> Result<TicketDetail> {
+    on_criterion(conn, target, who, |tx, row, n| {
         Ok(tx.execute(
             "DELETE FROM acceptance_criteria WHERE ticket_id = ?1 AND number = ?2",
             params![row, n],
@@ -872,7 +893,7 @@ pub fn check(
     if evidence.is_some_and(|e| e.trim().is_empty()) {
         return Err(Error::Usage("evidence must not be empty".into()));
     }
-    on_criterion(conn, target, |tx, row, n| {
+    on_criterion(conn, target, who, |tx, row, n| {
         Ok(tx.execute(
             &format!(
                 "UPDATE acceptance_criteria SET checked = 1, evidence = ?3,
@@ -884,8 +905,8 @@ pub fn check(
     })
 }
 
-pub fn uncheck(conn: &mut Connection, target: &str) -> Result<TicketDetail> {
-    on_criterion(conn, target, |tx, row, n| {
+pub fn uncheck(conn: &mut Connection, target: &str, who: &Identity) -> Result<TicketDetail> {
+    on_criterion(conn, target, who, |tx, row, n| {
         Ok(tx.execute(
             "UPDATE acceptance_criteria SET checked = 0, evidence = NULL,
                 checked_by_author = NULL, checked_by_session = NULL, checked_at = NULL
@@ -913,13 +934,18 @@ pub fn comment_add(
             ),
             params![row, who.author, who.session, who.role.as_str(), body],
         )?;
-        touch(tx, row)?;
+        touch(tx, row, who)?;
         build(tx, row)
     })
 }
 
 /// Any caller may delete any comment, including ones scree wrote.
-pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<TicketDetail> {
+pub fn comment_rm(
+    conn: &mut Connection,
+    id: &str,
+    comment_id: i64,
+    who: &Identity,
+) -> Result<TicketDetail> {
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
         let n = tx.execute(
@@ -929,7 +955,7 @@ pub fn comment_rm(conn: &mut Connection, id: &str, comment_id: i64) -> Result<Ti
         if n == 0 {
             return Err(Error::NotFound(format!("no comment {comment_id} on {id}")));
         }
-        touch(tx, row)?;
+        touch(tx, row, who)?;
         build(tx, row)
     })
 }
@@ -1020,7 +1046,9 @@ pub fn edit(
                     claimed_by_author = CASE WHEN ?6 THEN NULL ELSE claimed_by_author END,
                     claimed_by_session = CASE WHEN ?6 THEN NULL ELSE claimed_by_session END,
                     claim_touched_at = CASE WHEN ?6 THEN NULL
-                        WHEN status = 'active' THEN {NOW} ELSE claim_touched_at END,
+                        WHEN status = 'active' AND claimed_by_author = ?7
+                            AND coalesce(claimed_by_session, '') = ?8 THEN {NOW}
+                        ELSE claim_touched_at END,
                     updated_at = {NOW}
                  WHERE id = ?1"
             ),
@@ -1031,6 +1059,8 @@ pub fn edit(
                 pick(&plan, f.plan),
                 new_for,
                 release,
+                who.author,
+                who.session.as_deref().unwrap_or(""),
             ],
         )?;
         build(tx, row)

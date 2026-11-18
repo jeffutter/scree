@@ -82,13 +82,128 @@ fn comment_check_and_edit_refresh_the_claim() {
         backdate(&e, &id, 5);
         assert_eq!(stale_ids(&e, &[]).len(), 1);
         match step {
-            0 => e.ok(&["comment", "add", &id, "still going"]),
-            1 => e.ok(&["check", &format!("{id}#1"), "--evidence", "x"]),
-            _ => e.ok(&["edit", &id, "--title", "renamed"]),
+            0 => e.ok(&[
+                "comment",
+                "add",
+                &id,
+                "still going",
+                "--author",
+                "old",
+                "--session",
+                "s1",
+            ]),
+            1 => e.ok(&[
+                "check",
+                &format!("{id}#1"),
+                "--evidence",
+                "x",
+                "--author",
+                "old",
+                "--session",
+                "s1",
+            ]),
+            _ => e.ok(&[
+                "edit",
+                &id,
+                "--title",
+                "renamed",
+                "--author",
+                "old",
+                "--session",
+                "s1",
+            ]),
         };
         assert!(stale_ids(&e, &[]).is_empty(), "step {step}");
         assert!(!touched().is_empty());
     }
+}
+
+#[test]
+fn other_callers_do_not_refresh_the_claim() {
+    let e = Env::new();
+    let id = e.ok(&[
+        "--role",
+        "human",
+        "add",
+        "t",
+        "--status",
+        "ready",
+        "--criterion",
+        "c",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let blocker = e.ok(&["--role", "human", "add", "b", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["start", &id, "--author", "old", "--session", "s1"]);
+    backdate(&e, &id, 5);
+    let touched = || {
+        e.ok(&["show", &id])["claim_touched_at"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let before = touched();
+    let c1 = format!("{id}#1");
+    // A different session, a different author, and a sessionless human.
+    let callers: [&[&str]; 3] = [
+        &["--author", "old", "--session", "s2"],
+        &["--author", "other", "--session", "s1"],
+        &["--role", "human", "--author", "jeff"],
+    ];
+    for who in callers {
+        let run = |args: &[&str]| {
+            let mut a: Vec<&str> = args.to_vec();
+            a.extend_from_slice(who);
+            e.ok(&a);
+        };
+        run(&["comment", "add", &id, "hello"]);
+        run(&["check", &c1, "--evidence", "x"]);
+        run(&["uncheck", &c1]);
+        run(&["criteria", "add", &id, "more"]);
+        run(&["dep", "add", &id, &blocker]);
+        run(&["dep", "rm", &id, &blocker]);
+        run(&["edit", &id, "--title", "renamed"]);
+        assert_eq!(touched(), before, "{who:?}");
+        assert_eq!(stale_ids(&e, &[]), std::slice::from_ref(&id), "{who:?}");
+    }
+    // The holder still refreshes it, and a dependency change counts.
+    e.ok(&[
+        "dep",
+        "add",
+        &id,
+        &blocker,
+        "--author",
+        "old",
+        "--session",
+        "s1",
+    ]);
+    assert!(stale_ids(&e, &[]).is_empty());
+    backdate(&e, &id, 5);
+    // Reclaim still works while the stale clock was left alone.
+    e.ok(&[
+        "dep",
+        "rm",
+        &id,
+        &blocker,
+        "--author",
+        "old",
+        "--session",
+        "s1",
+    ]);
+    backdate(&e, &id, 5);
+    e.ok(&[
+        "start",
+        &id,
+        "--reclaim",
+        "--author",
+        "new",
+        "--session",
+        "s2",
+    ]);
 }
 
 #[test]

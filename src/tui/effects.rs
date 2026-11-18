@@ -86,13 +86,13 @@ pub fn run_effect(
         Effect::UncheckCriterion { id, number } => {
             let r = format!("{id}#{number}");
             Event::ActionDone(
-                ticket::uncheck(conn, &r)
+                ticket::uncheck(conn, &r, identity)
                     .map(|_| format!("{r} unchecked"))
                     .map_err(|e| e.to_string()),
             )
         }
         Effect::AddCriterion { id, text } => Event::ActionDone(
-            ticket::criteria_add(conn, &id, &text)
+            ticket::criteria_add(conn, &id, &text, identity)
                 .map(|d| {
                     let n = d.criteria.iter().map(|c| c.number).max().unwrap_or(0);
                     format!("{id}#{n} added")
@@ -102,7 +102,7 @@ pub fn run_effect(
         Effect::RemoveCriterion { id, number } => {
             let r = format!("{id}#{number}");
             Event::ActionDone(
-                ticket::criteria_rm(conn, &r)
+                ticket::criteria_rm(conn, &r, identity)
                     .map(|_| format!("{r} removed"))
                     .map_err(|e| e.to_string()),
             )
@@ -113,7 +113,7 @@ pub fn run_effect(
                 .map_err(|e| e.to_string()),
         ),
         Effect::RemoveComment { id, comment_id } => Event::ActionDone(
-            ticket::comment_rm(conn, &id, comment_id)
+            ticket::comment_rm(conn, &id, comment_id, identity)
                 .map(|_| format!("comment {comment_id} deleted"))
                 .map_err(|e| e.to_string()),
         ),
@@ -130,12 +130,12 @@ pub fn run_effect(
             )
         }
         Effect::AddDep { id, blocker } => Event::ActionDone(
-            ticket::dep_add(conn, &id, &blocker)
+            ticket::dep_add(conn, &id, &blocker, identity)
                 .map(|_| format!("{id} blocked by {blocker}"))
                 .map_err(|e| e.to_string()),
         ),
         Effect::RemoveDep { id, blocker } => Event::ActionDone(
-            ticket::dep_rm(conn, &id, &blocker)
+            ticket::dep_rm(conn, &id, &blocker, identity)
                 .map(|_| format!("{id} no longer blocked by {blocker}"))
                 .map_err(|e| e.to_string()),
         ),
@@ -625,7 +625,7 @@ mod tests {
         // blocked start
         let blocker = add(&mut conn, NewStatus::Ready, ForWho::Agent, &[]);
         let blocked = add(&mut conn, NewStatus::Ready, ForWho::Agent, &[]);
-        ticket::dep_add(&mut conn, &blocked, &blocker).unwrap();
+        ticket::dep_add(&mut conn, &blocked, &blocker, &agent()).unwrap();
         let e = act(&mut conn, &blocked, Lifecycle::Start).unwrap_err();
         assert!(e.contains("blocked"), "{e}");
         assert_eq!(status_of(&conn, &blocked), "ready");

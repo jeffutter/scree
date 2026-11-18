@@ -445,20 +445,20 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             transition(&mut conn, format, &id, ticket::Action::Reopen, &identity)
         }
         Command::Dep(DepCommand::Add { id, blocker }) => {
-            let t = ticket::dep_add(&mut conn, &id, &blocker)?;
+            let t = ticket::dep_add(&mut conn, &id, &blocker, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Dep(DepCommand::Rm { id, blocker }) => {
-            let t = ticket::dep_rm(&mut conn, &id, &blocker)?;
+            let t = ticket::dep_rm(&mut conn, &id, &blocker, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Criteria(CriteriaCommand::Add { id, criterion }) => {
             let criterion = text_arg("criterion text", Some(&criterion))?;
-            let t = ticket::criteria_add(&mut conn, &id, &criterion)?;
+            let t = ticket::criteria_add(&mut conn, &id, &criterion, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Criteria(CriteriaCommand::Rm { target }) => {
-            let t = ticket::criteria_rm(&mut conn, &target)?;
+            let t = ticket::criteria_rm(&mut conn, &target, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Check { target, evidence } => {
@@ -470,7 +470,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Uncheck { target } => {
-            let t = ticket::uncheck(&mut conn, &target)?;
+            let t = ticket::uncheck(&mut conn, &target, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Comment(CommentCommand::Add { id, body }) => {
@@ -479,7 +479,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Comment(CommentCommand::Rm { id, comment_id }) => {
-            let t = ticket::comment_rm(&mut conn, &id, comment_id)?;
+            let t = ticket::comment_rm(&mut conn, &id, comment_id, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
