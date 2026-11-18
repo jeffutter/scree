@@ -281,7 +281,10 @@ fn transition(
                 Lifecycle::Ready => ticket::Action::Ready,
                 Lifecycle::Start => ticket::Action::Start,
                 Lifecycle::Release => ticket::Action::Release,
-                Lifecycle::Done { force } => ticket::Action::Done { force },
+                Lifecycle::Done { force } => ticket::Action::Done {
+                    force,
+                    commits: Vec::new(),
+                },
                 // A general text prompt is a later ticket; use a fixed reason.
                 Lifecycle::Abandon => ticket::Action::Abandon {
                     reason: "abandoned from tui".into(),

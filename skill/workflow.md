@@ -15,6 +15,8 @@ When every criterion is checked, finish:
 
     scree done SCR-12
 
+Commit first, then `done`: it links the checkout's HEAD commit and branch to the ticket. Link any other commit with `--commit SHA` on `done`, or afterwards with `scree link SCR-12 SHA`.
+
 If you cannot finish, give the ticket back, or abandon it with a reason:
 
     scree release SCR-12

@@ -144,6 +144,18 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
             let _ = writeln!(out);
         }
     }
+    if !d.commits.is_empty() {
+        let _ = writeln!(out, "\nCommits:");
+        for c in &d.commits {
+            let _ = writeln!(
+                out,
+                "{}  {}  {}",
+                c.sha.get(..7).unwrap_or(&c.sha),
+                c.branch.as_deref().unwrap_or("(detached)"),
+                c.linked_at
+            );
+        }
+    }
     if !t.blocked_by.is_empty() {
         let _ = writeln!(out, "\nBlocked by:");
         for x in &t.blocked_by {
