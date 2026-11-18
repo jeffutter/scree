@@ -387,9 +387,16 @@ pub enum Action {
     Ready,
     Draft,
     Start,
-    Release,
-    Done { force: bool },
-    Abandon { reason: String },
+    /// `handoff` replaces the stored note when given; `None` keeps it.
+    Release {
+        handoff: Option<String>,
+    },
+    Done {
+        force: bool,
+    },
+    Abandon {
+        reason: String,
+    },
     Reopen,
 }
 
@@ -497,16 +504,17 @@ pub fn transition(
                 }
                 claim(tx, row, id, who)?;
             }
-            Action::Release => {
+            Action::Release { handoff } => {
                 if status != "active" {
                     return refuse("release");
                 }
                 tx.execute(
                     &format!(
                         "UPDATE tickets SET status = 'ready', claimed_by_author = NULL,
-                            claimed_by_session = NULL, updated_at = {NOW} WHERE id = ?1"
+                            claimed_by_session = NULL, handoff = coalesce(?2, handoff),
+                            updated_at = {NOW} WHERE id = ?1"
                     ),
-                    [row],
+                    params![row, handoff],
                 )?;
             }
             Action::Done { force } => {
@@ -541,7 +549,7 @@ pub fn transition(
                     &format!(
                         "UPDATE tickets SET status = 'done', done_at = {NOW},
                             claimed_by_author = NULL, claimed_by_session = NULL,
-                            updated_at = {NOW} WHERE id = ?1"
+                            handoff = '', updated_at = {NOW} WHERE id = ?1"
                     ),
                     [row],
                 )?;
@@ -1377,7 +1385,7 @@ fn build_summary(conn: &Connection, id: i64) -> Result<Ticket> {
 /// The full shape used by `show` and every mutation: the summary plus
 /// description, plan, criteria and comments.
 fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
-    let (ticket, description, plan) = load(conn, id)?;
+    let (ticket, description, plan, handoff) = load(conn, id)?;
     let criteria = conn
         .prepare(
             "SELECT number, text, checked, evidence, checked_by_author,
@@ -1420,13 +1428,14 @@ fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
         comments,
         criteria,
         description,
+        handoff,
         plan,
     })
 }
 
 /// Read one ticket row with its blockers and subtasks; also returns the
 /// description and plan so `build` needs no second row query.
-fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
+fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String, String)> {
     struct Row {
         id: String,
         parent: Option<String>,
@@ -1444,13 +1453,14 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         archived: Option<String>,
         description: String,
         plan: String,
+        handoff: String,
     }
     let row = conn.query_row(
         &format!(
             "SELECT {ID_EXPR}, p.key || '-' || pt.number, t.title, t.status, t.\"for\",
                     t.worktree_path, p.key, p.root_path, t.claimed_by_author, t.claimed_by_session,
                     t.created_at, t.updated_at, t.done_at, t.archived_at,
-                    t.description, t.plan
+                    t.description, t.plan, t.handoff
              FROM tickets t JOIN projects p ON p.id = t.project_id
              LEFT JOIN tickets pt ON pt.id = t.parent_id WHERE t.id = ?1"
         ),
@@ -1473,6 +1483,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
                 archived: r.get(13)?,
                 description: r.get(14)?,
                 plan: r.get(15)?,
+                handoff: r.get(16)?,
             })
         },
     )?;
@@ -1559,7 +1570,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String)> {
         done_at: row.done,
         archived_at: row.archived,
     };
-    Ok((ticket, row.description, row.plan))
+    Ok((ticket, row.description, row.plan, row.handoff))
 }
 
 #[cfg(test)]

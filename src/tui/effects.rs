@@ -280,7 +280,7 @@ fn transition(
             let a = match other {
                 Lifecycle::Ready => ticket::Action::Ready,
                 Lifecycle::Start => ticket::Action::Start,
-                Lifecycle::Release => ticket::Action::Release,
+                Lifecycle::Release => ticket::Action::Release { handoff: None },
                 Lifecycle::Done { force } => ticket::Action::Done { force },
                 // A general text prompt is a later ticket; use a fixed reason.
                 Lifecycle::Abandon => ticket::Action::Abandon {

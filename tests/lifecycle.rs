@@ -16,6 +16,38 @@ impl Env {
 }
 
 #[test]
+fn release_handoff_lifecycle() {
+    let e = Env::new();
+    let id = e.ready(&[]);
+    e.ok(&["start", &id]);
+    // No handoff yet; releasing without one stores nothing.
+    let t = e.ok(&["release", &id]);
+    assert_eq!(t["handoff"], "");
+    e.ok(&["start", &id]);
+    let t = e.ok(&["release", &id, "--handoff", "did A; tried B; next C"]);
+    assert_eq!(t["handoff"], "did A; tried B; next C");
+    // start prints it, show prints it, text puts it before comments.
+    let t = e.ok(&["start", &id]);
+    assert_eq!(t["handoff"], "did A; tried B; next C");
+    e.ok(&["comment", "add", &id, "a comment"]);
+    let text = e.run(&["show", &id, "--text"]);
+    let text = String::from_utf8_lossy(&text.stdout).to_string();
+    let h = text.find("Handoff:").expect("handoff section");
+    assert!(text.contains("did A; tried B; next C"));
+    assert!(h < text.find("a comment").unwrap());
+    // Release without --handoff keeps it; with one replaces it; stdin works.
+    let t = e.ok(&["release", &id]);
+    assert_eq!(t["handoff"], "did A; tried B; next C");
+    e.ok(&["start", &id]);
+    let t = e.stdin_ok(&["release", &id, "--handoff", "-"], "from stdin\n");
+    assert_eq!(t["handoff"], "from stdin");
+    // done clears it.
+    e.ok(&["start", &id]);
+    let t = e.ok(&["done", &id]);
+    assert_eq!(t["handoff"], "");
+}
+
+#[test]
 fn happy_path() {
     let e = Env::new();
     let id = e.ok(&["--role", "human", "add", "t"])["id"]

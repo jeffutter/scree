@@ -128,7 +128,11 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
         );
     }
     let _ = writeln!(out, "created: {}  updated: {}", t.created_at, t.updated_at);
-    for (label, body) in [("Description", &d.description), ("Plan", &d.plan)] {
+    for (label, body) in [
+        ("Description", &d.description),
+        ("Plan", &d.plan),
+        ("Handoff", &d.handoff),
+    ] {
         if !body.is_empty() {
             let _ = write!(out, "\n{label}:\n{body}\n");
         }

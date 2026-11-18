@@ -15,9 +15,12 @@ When every criterion is checked, finish:
 
     scree done SCR-12
 
-If you cannot finish, give the ticket back, or abandon it with a reason:
+If you cannot finish, give the ticket back with a handoff note: what is done, what you tried, and what is next. The next worker sees it in `show` and `start`, before the comments, and each release replaces the earlier note. `done` clears it.
 
-    scree release SCR-12
+    scree release SCR-12 --handoff "Done: parser fix in src/parse.rs. Tried: a regex, too slow. Next: add the benchmark."
+
+Or abandon it with a reason:
+
     scree abandon SCR-12 "Superseded by SCR-14"
 
 Exit 5 means your claim was lost: pick another ticket. Exit 4 means scree refused: read the message and do not retry with `--force`. `--force` is for humans, or for an agent only when the human said to use it.

@@ -227,6 +227,15 @@ pub struct MoveArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ReleaseArgs {
+    /// The ticket to release
+    pub id: String,
+    /// Handoff note for the next worker (done, tried, next), or - for stdin; replaces any earlier one
+    #[arg(long)]
+    pub handoff: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct StartArgs {
     /// The ticket to claim
     #[arg(required_unless_present = "next", conflicts_with = "next")]
@@ -353,7 +362,7 @@ pub enum Command {
     /// Move a ticket and its subtasks to another Worktree of its Project
     Move(MoveArgs),
     /// Active back to ready; clears the claim
-    Release { id: String },
+    Release(ReleaseArgs),
     /// Mark done; refused while a criterion is unchecked unless --force
     Done {
         id: String,

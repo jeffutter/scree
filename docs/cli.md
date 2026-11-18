@@ -64,7 +64,7 @@ Command grammar for v1. Vocabulary is in `../GLOSSARY.md`, storage in `data-mode
 - `done ID [--force]`: allowed from draft, ready or active; refused while a criterion is unchecked unless `--force`, and while subtasks are open.
 - `abandon ID REASON|-`: allowed from draft, ready or active; the reason is required and stored as a comment. An empty stdin read is a usage error (exit 2). Abandoning a parent abandons its open subtasks.
 - `reopen ID`: done or abandoned back to `ready`.
-- `release ID`: active back to `ready`; clears the claim.
+- `release ID [--handoff TEXT|-]`: active back to `ready`; clears the claim. `--handoff` stores a note for the next worker (what is done, what was tried, what is next), replacing any earlier one; without it the old note is kept. `done` clears the handoff. `show` and `start` print it after the plan and before the comments.
 - `dep add ID BLOCKER` / `dep rm ID BLOCKER`: `ID` is blocked by `BLOCKER`. A self edge, a cycle (counting a parent waiting on its subtasks and a subtask waiting on its earlier siblings) or a cross-Project edge is refused (exit 4); Worktrees of one Project may be mixed. Adding an existing edge, or removing a missing one, is a no-op.
 - `criteria add ID TEXT` / `criteria rm ID#N`.
 - `check ID#N [--evidence TEXT|-]` / `uncheck ID#N`. Checking records author, session and evidence; checking again overwrites them, and `uncheck` clears them. An empty stdin read is a usage error (exit 2). Criteria and comments may be changed on done or abandoned tickets too.
@@ -96,14 +96,14 @@ Every text argument (title, description, plan, criterion text, comment body, aba
 
 Every command prints one JSON object on stdout and nothing else; keys are `snake_case`; timestamps are RFC 3339 UTC.
 
-- **Ticket**: `id`, `title`, `parent` (id or null), `project` (`{key, root}`: the Project key and its canonical root checkout path, `root` null for LOCAL), `status`, `for`, `blocked`, `available` (computed), `blocked_by` (a list of `{id, title, status, worktree}`, one per blocker that is not done, whatever its Worktree), `subtasks` (summaries), `claimed_by` (`{author, session}` or null), `worktree` (null for the root checkout, else the linked worktree's path, which differs from `project.root`; match a ticket to its Project by `project.key`), `criteria` (a summary `{checked, total}`, `0/0` when none), `created_at`, `updated_at`, `done_at`, `archived_at`. `show` and the mutating commands add `description`, `plan` and `comments`, and replace `criteria` with the full array of criteria.
+- **Ticket**: `id`, `title`, `parent` (id or null), `project` (`{key, root}`: the Project key and its canonical root checkout path, `root` null for LOCAL), `status`, `for`, `blocked`, `available` (computed), `blocked_by` (a list of `{id, title, status, worktree}`, one per blocker that is not done, whatever its Worktree), `subtasks` (summaries), `claimed_by` (`{author, session}` or null), `worktree` (null for the root checkout, else the linked worktree's path, which differs from `project.root`; match a ticket to its Project by `project.key`), `criteria` (a summary `{checked, total}`, `0/0` when none), `created_at`, `updated_at`, `done_at`, `archived_at`. `show` and the mutating commands add `description`, `handoff` (empty when none), `plan` and `comments`, and replace `criteria` with the full array of criteria.
 - **List result** (`list`, `next`): `{"tickets": [...]}`. `next` adds `"human_pending": N` and `"blocked_pending": N`; the latter counts Blocked tickets in scope that would otherwise be Available, and is shown only when `tickets` is empty.
 - **Sweep result**: `{dry_run, worktrees: [{project, path, archived, abandoned}], skipped: [{project, reason}]}`.
 - **Error**: written to stderr as `{"error": {"code": "refused", "message": "..."}}`; stdout stays empty.
 
 ### Text
 
-Used on a terminal outside an agent session, or with `--text`. `list` and `next` print one line per ticket, `SCR-12  active  Title`, with `[blocked]` and `[human]` markers; a blocked ticket is followed by `[blocked by SCR-9 in feat-b]`, and `abandoned` is shown when the blocker was abandoned and aligned columns; no colour when stdout is not a terminal, and `NO_COLOR` is honoured. `show` prints a header block, the description and plan, a `[x]`/`[ ]` checklist with evidence, dependencies, subtasks and comments. Text is a convenience and is not stable: nothing parses it.
+Used on a terminal outside an agent session, or with `--text`. `list` and `next` print one line per ticket, `SCR-12  active  Title`, with `[blocked]` and `[human]` markers; a blocked ticket is followed by `[blocked by SCR-9 in feat-b]`, and `abandoned` is shown when the blocker was abandoned and aligned columns; no colour when stdout is not a terminal, and `NO_COLOR` is honoured. `show` prints a header block, the description, plan and handoff, a `[x]`/`[ ]` checklist with evidence, dependencies, subtasks and comments. Text is a convenience and is not stable: nothing parses it.
 
 ## Exit codes
 
