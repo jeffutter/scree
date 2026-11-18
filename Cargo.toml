@@ -11,7 +11,7 @@ ratatui = "0.30.2"
 # Per-character terminal width for TUI wrapping; ratatui already pulls it in,
 # this only names it so the code can call it directly.
 unicode-width = "0.2"
-rusqlite = { version = "0.42.0", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
