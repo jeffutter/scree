@@ -272,6 +272,32 @@ pub struct ListArgs {
     pub available: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GraphFormat {
+    Text,
+    Mermaid,
+}
+
+#[derive(Debug, Args)]
+pub struct GraphArgs {
+    /// Repeatable; default draft, ready and active
+    #[arg(long, value_enum)]
+    pub status: Vec<Status>,
+    #[arg(long = "for", value_enum)]
+    pub for_who: Option<ForWho>,
+    #[command(flatten)]
+    pub scope: ScopeArgs,
+    /// Include archived tickets
+    #[arg(long)]
+    pub archived: bool,
+    /// `mermaid` prints a flowchart to paste into docs; cannot be combined with --json
+    #[arg(long, value_enum, default_value_t = GraphFormat::Text)]
+    pub format: GraphFormat,
+    /// Draw with ASCII instead of Unicode glyphs
+    #[arg(long)]
+    pub ascii: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct EditArgs {
     pub id: String,
@@ -338,6 +364,8 @@ pub enum Command {
     Show { id: String },
     /// List tickets
     List(ListArgs),
+    /// Draw the dependency graph of the listed tickets
+    Graph(GraphArgs),
     /// Change a ticket's title, description, plan or assignee
     Edit(EditArgs),
     /// Draft to ready

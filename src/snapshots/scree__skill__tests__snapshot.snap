@@ -126,6 +126,19 @@ List tickets
 - `--blocked`: Only blocked tickets
 - `--available`: Only Available tickets: ready, unblocked and first among siblings
 
+### `scree graph [OPTIONS]`
+
+Draw the dependency graph of the listed tickets
+
+- `--status <STATUS>`: Repeatable; default draft, ready and active (values: draft, ready, active, done, abandoned)
+- `--for <FOR_WHO>` (values: agent, human)
+- `--all-worktrees`: Every Worktree of the Project
+- `--all-projects`: Every Project
+- `--project-root <PROJECT_ROOT>`: Narrow to the Project at this root
+- `--archived`: Include archived tickets
+- `--format <FORMAT>`: `mermaid` prints a flowchart to paste into docs; cannot be combined with --json (values: text, mermaid; default text)
+- `--ascii`: Draw with ASCII instead of Unicode glyphs
+
 ### `scree edit [OPTIONS] <ID>`
 
 Change a ticket's title, description, plan or assignee

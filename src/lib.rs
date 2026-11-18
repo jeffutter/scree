@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod db;
 pub mod error;
+pub mod graph;
 pub mod identity;
 pub mod model;
 pub mod output;
@@ -175,6 +176,35 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                     }
                     Ok(Outcome::Print(text))
                 }
+            }
+        }
+        Command::Graph(mut a) => {
+            apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
+            if a.format == cli::GraphFormat::Mermaid && cli.json {
+                return Err(Error::Usage("--format mermaid and --json conflict".into()));
+            }
+            sweep::sweep_auto(&mut conn, env, cwd, Some(&a.scope), None)?;
+            // A graph must not drop tickets silently, so there is no limit.
+            let list_args = ListArgs {
+                status: a.status,
+                for_who: a.for_who,
+                scope: a.scope,
+                archived: a.archived,
+                limit: Some(u32::MAX),
+                ..ListArgs::default()
+            };
+            let list = ticket::list(&conn, cwd, &list_args, &identity)?;
+            let g = graph::build(&list)?;
+            if a.format == cli::GraphFormat::Mermaid {
+                return Ok(Outcome::Print(graph::render_mermaid(&g)));
+            }
+            match format {
+                Format::Json => output::to_json(&g).map(Outcome::Print),
+                Format::Text => Ok(Outcome::Print(graph::render_text(
+                    &g,
+                    graph::use_unicode(a.ascii, env),
+                    output::use_color(env),
+                ))),
             }
         }
         Command::Next(mut a) => {

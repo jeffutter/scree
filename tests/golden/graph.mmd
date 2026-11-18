@@ -1,0 +1,23 @@
+flowchart TD
+    LOCAL_1["LOCAL-1: Foundation"]
+    LOCAL_2["LOCAL-2: Left"]
+    LOCAL_3["LOCAL-3: Right"]
+    LOCAL_4["LOCAL-4: Top"]
+    LOCAL_5["LOCAL-5: Loner"]
+    LOCAL_1 --> LOCAL_2
+    LOCAL_1 --> LOCAL_3
+    LOCAL_2 --> LOCAL_4
+    LOCAL_3 --> LOCAL_4
+    classDef done fill:#d4edda,stroke:#2e7d32
+    classDef active fill:#fff3cd,stroke:#f9a825
+    classDef ready fill:#ffffff,stroke:#555555
+    classDef blocked fill:#f8d7da,stroke:#c62828
+    classDef external stroke-dasharray:4 2,fill:#eeeeee
+    classDef abandoned fill:#eeeeee,stroke:#999999
+    class LOCAL_1 ready
+    class LOCAL_2 blocked
+    class LOCAL_3 blocked
+    class LOCAL_4 blocked
+    class LOCAL_5 ready
+    linkStyle 0,2 stroke:#c62828,stroke-width:3px
+

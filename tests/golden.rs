@@ -111,3 +111,65 @@ fn show_payload_round_trips_through_typed_model() {
     let n: scree::model::NextResult = serde_json::from_str(raw).unwrap();
     assert_eq!(serde_json::to_string(&n).unwrap(), raw);
 }
+
+/// A diamond: D needs B and C, which both need A; E is unconnected.
+fn diamond(e: &Env) {
+    e.stdout(&["add", "Foundation", "--status", "ready"]);
+    e.stdout(&[
+        "add",
+        "Left",
+        "--status",
+        "ready",
+        "--blocked-by",
+        "LOCAL-1",
+    ]);
+    e.stdout(&[
+        "add",
+        "Right",
+        "--status",
+        "ready",
+        "--blocked-by",
+        "LOCAL-1",
+    ]);
+    e.stdout(&[
+        "add",
+        "Top",
+        "--status",
+        "ready",
+        "--blocked-by",
+        "LOCAL-2",
+        "--blocked-by",
+        "LOCAL-3",
+    ]);
+    e.stdout(&["add", "Loner", "--status", "ready"]);
+}
+
+fn graph_out(e: &Env, locale: &str, args: &[&str]) -> String {
+    let mut a = vec!["graph"];
+    a.extend_from_slice(args);
+    let out = e.run_env_at(e.path(), &[("LANG", locale)], &a);
+    assert_eq!(out.status.code(), Some(0), "{a:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn graph_outputs_are_stable() {
+    let e = Env::with_flags(FLAGS);
+    diamond(&e);
+    check(
+        "graph.txt",
+        &(graph_out(&e, "en_US.UTF-8", &["--text"]) + "\n"),
+    );
+    check(
+        "graph_ascii.txt",
+        &(graph_out(&e, "en_US.UTF-8", &["--text", "--ascii"]) + "\n"),
+    );
+    check(
+        "graph.mmd",
+        &(graph_out(&e, "en_US.UTF-8", &["--format", "mermaid"]) + "\n"),
+    );
+    check(
+        "graph.json",
+        &(graph_out(&e, "en_US.UTF-8", &["--json"]) + "\n"),
+    );
+}
