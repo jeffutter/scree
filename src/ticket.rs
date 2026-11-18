@@ -431,17 +431,24 @@ fn require_claim(tx: &Connection, row: i64, id: &str, who: &Identity) -> Result<
     let Some(mine) = who.session.as_deref() else {
         return Ok(());
     };
-    let held: Option<String> = tx.query_row(
-        "SELECT claimed_by_session FROM tickets WHERE id = ?1",
+    let (held, held_author): (Option<String>, Option<String>) = tx.query_row(
+        "SELECT claimed_by_session, claimed_by_author FROM tickets WHERE id = ?1",
         [row],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    match held.as_deref() {
-        Some(h) if !h.is_empty() && h != mine => Err(Error::Conflict(format!(
+    // A sessionless holder (empty session, e.g. a human reclaim) still owns
+    // the claim against a session-carrying caller with a different author.
+    let lost = match held.as_deref() {
+        Some("") => held_author.as_deref().is_some_and(|a| a != who.author),
+        Some(h) => h != mine,
+        None => false,
+    };
+    if lost {
+        return Err(Error::Conflict(format!(
             "{id} is claimed by another session; your claim was lost"
-        ))),
-        _ => Ok(()),
+        )));
     }
+    Ok(())
 }
 
 /// Apply one status transition atomically and return the updated ticket.

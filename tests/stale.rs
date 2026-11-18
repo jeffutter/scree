@@ -196,3 +196,18 @@ fn reorder_does_not_refresh_the_claim() {
     assert_eq!(stale_ids(&e, &[]), std::slice::from_ref(&id));
     assert_eq!(e.ok(&["show", &id])["claim_touched_at"], before);
 }
+
+#[test]
+fn sessionless_reclaim_still_locks_out_the_previous_holder() {
+    let e = Env::new();
+    let id = claimed(&e);
+    backdate(&e, &id, 5);
+    e.ok(&["--role", "human", "start", &id, "--reclaim"]);
+    for cmd in ["done", "release"] {
+        assert_eq!(
+            e.code(&[cmd, &id, "--author", "old", "--session", "s1"]),
+            5,
+            "{cmd}"
+        );
+    }
+}
