@@ -43,6 +43,7 @@ Logical schema for v1. Vocabulary is in `../GLOSSARY.md`.
 | `title` | text, not null |
 | `description` | text, not null, default empty |
 | `plan` | text, not null, default empty |
+| `handoff` | text, not null, default empty; set by `release --handoff`, cleared by `done` |
 | `status` | CHECK in `draft`, `ready`, `active`, `done`, `abandoned` |
 | `for` | CHECK in `agent`, `human`; default `agent` |
 | `position` | integer, not null; orders the sibling set (root tickets of one Scope, or subtasks of one parent), lower first; gapped in steps of 1000 |

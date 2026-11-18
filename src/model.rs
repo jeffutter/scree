@@ -110,6 +110,7 @@ pub struct TicketDetail {
     pub comments: Vec<Comment>,
     pub criteria: Vec<Criterion>,
     pub description: String,
+    pub handoff: String,
     pub plan: String,
 }
 
@@ -120,6 +121,8 @@ struct RawDetail {
     comments: Vec<Comment>,
     criteria: Vec<Criterion>,
     description: String,
+    #[serde(default)]
+    handoff: String,
     plan: String,
 }
 
@@ -134,6 +137,7 @@ impl From<RawDetail> for TicketDetail {
             comments: r.comments,
             criteria: r.criteria,
             description: r.description,
+            handoff: r.handoff,
             plan: r.plan,
         }
     }
@@ -158,6 +162,7 @@ impl Serialize for TicketDetail {
             to_value(serde_json::to_value(&self.criteria))?,
         );
         all.insert("description".into(), self.description.clone().into());
+        all.insert("handoff".into(), self.handoff.clone().into());
         all.insert("plan".into(), self.plan.clone().into());
         let mut m = s.serialize_map(Some(all.len()))?;
         for (k, v) in &all {

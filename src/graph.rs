@@ -470,6 +470,7 @@ mod tests {
                     worktree: None,
                 })
                 .collect(),
+            claim_touched_at: None,
             claimed_by: None,
             created_at: String::new(),
             criteria: Default::default(),

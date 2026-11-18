@@ -15,9 +15,12 @@ When every criterion is checked, finish:
 
     scree done SCR-12
 
-If you cannot finish, give the ticket back, or abandon it with a reason:
+If you cannot finish, give the ticket back with a handoff note: what is done, what you tried, and what is next. The next worker sees it in `show` and `start`, before the comments, and each release replaces the earlier note. `done` clears it.
 
-    scree release SCR-12
+    scree release SCR-12 --handoff "Done: parser fix in src/parse.rs. Tried: a regex, too slow. Next: add the benchmark."
+
+Or abandon it with a reason:
+
     scree abandon SCR-12 "Superseded by SCR-14"
 
 If a session crashed, its ticket stays `active`. `scree list --stale` shows active tickets whose claim has not been touched (comment, check, edit) for 4 hours; `--older-than 30m` or `2h` changes the threshold. Take one over with `scree start SCR-12 --reclaim`: it works only on a stale claim, and it comments the previous holder's name on the ticket. Read the comments before continuing the earlier work.

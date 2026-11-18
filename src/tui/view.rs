@@ -277,7 +277,12 @@ fn detail_lines(
     for (name, body) in [
         ("Description", &d.ticket.description),
         ("Plan", &d.ticket.plan),
+        ("Handoff", &d.ticket.handoff),
     ] {
+        // Handoff is rare: show the section only when a note exists.
+        if name == "Handoff" && body.trim().is_empty() {
+            continue;
+        }
         heading(&mut out, name);
         if body.trim().is_empty() {
             plain(&mut out, "none", "  ");
@@ -1416,6 +1421,18 @@ mod tests {
     fn detail_sample() {
         let mut s = detail_state();
         insta::assert_snapshot!(render(&mut s, 80, 56).join("\n"));
+    }
+
+    #[test]
+    fn detail_shows_handoff_only_when_set() {
+        let mut s = detail_state();
+        let lines = render(&mut s, 60, 80);
+        assert!(!lines.iter().any(|l| l.contains("Handoff")), "{lines:?}");
+        s.detail.as_mut().unwrap().ticket.handoff = "next: wire the view".into();
+        s.detail.as_mut().unwrap().cache = None;
+        let lines = render(&mut s, 60, 80);
+        assert!(lines.iter().any(|l| l.contains("Handoff")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("wire the view")));
     }
 
     #[test]

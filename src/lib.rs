@@ -350,8 +350,18 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             let t = ticket::move_tree(&mut conn, &a.id, target)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
-        Command::Release { id } => {
-            transition(&mut conn, format, &id, ticket::Action::Release, &identity)
+        Command::Release(a) => {
+            let handoff = match a.handoff.as_deref() {
+                None => None,
+                Some(h) => Some(text_arg("--handoff", Some(h))?),
+            };
+            transition(
+                &mut conn,
+                format,
+                &a.id,
+                ticket::Action::Release { handoff },
+                &identity,
+            )
         }
         Command::Done { id, force } => {
             sweep::sweep_auto(&mut conn, env, cwd, None, cli.project.as_deref())?;

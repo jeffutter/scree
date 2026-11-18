@@ -9,6 +9,7 @@ use crate::error::{Error, Result};
 const MIGRATIONS: &[&str] = &[
     include_str!("migrations/001_init.sql"),
     include_str!("migrations/002_claim_touched.sql"),
+    include_str!("migrations/003_handoff.sql"),
 ];
 
 /// Pick the database path: flag, then `SCREE_DB`, then `$XDG_DATA_HOME`,
@@ -157,7 +158,7 @@ mod tests {
         let uv: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(uv, 2);
+        assert_eq!(uv, MIGRATIONS.len() as i64);
     }
 
     #[test]
