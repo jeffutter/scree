@@ -181,3 +181,18 @@ fn reclaim_flag_combinations_are_rejected() {
     assert_eq!(e.code(&["start", "--next", "--reclaim"]), 2);
     assert_eq!(e.code(&["start", "LOCAL-1", "--older-than", "1h"]), 2);
 }
+
+#[test]
+fn reorder_does_not_refresh_the_claim() {
+    let e = Env::new();
+    let id = claimed(&e);
+    let other = e.ok(&["--role", "human", "add", "o", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    backdate(&e, &id, 5);
+    let before = e.ok(&["show", &id])["claim_touched_at"].clone();
+    e.ok(&["--role", "human", "reorder", &id, "--after", &other]);
+    assert_eq!(stale_ids(&e, &[]), std::slice::from_ref(&id));
+    assert_eq!(e.ok(&["show", &id])["claim_touched_at"], before);
+}

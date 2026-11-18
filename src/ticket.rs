@@ -738,6 +738,17 @@ fn display_id(conn: &Connection, row: i64) -> Result<String> {
     )?)
 }
 
+/// Bump `updated_at` only. A reorder changes the ticket but is not the
+/// claimant working, so it must not reset the stale-claim clock.
+fn bump_updated(tx: &Connection, row: i64) -> Result<()> {
+    tx.execute(
+        &format!("UPDATE tickets SET updated_at = {NOW} WHERE id = ?1"),
+        [row],
+    )?;
+    Ok(())
+}
+
+/// Bump `updated_at` and, for an active ticket, refresh `claim_touched_at`.
 fn touch(tx: &Connection, row: i64) -> Result<()> {
     tx.execute(
         &format!(
@@ -1389,7 +1400,7 @@ pub fn reorder(conn: &mut Connection, id: &str, place: Place) -> Result<TicketDe
                 }
             }
         }
-        touch(tx, row)?;
+        bump_updated(tx, row)?;
         build(tx, row)
     })
 }
