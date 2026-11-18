@@ -27,7 +27,7 @@ Board: header "Scree board", a machine chip ("this computer" or the machine name
 - Every write the mod makes: `ready`, `start`, `release`, `draft`, `done`, `abandon`, `reopen`, `edit`, `add`, all as `scree --json --role human ...`.
 - Fold, scope and filter state survive restarts through `localStorage` (keys `allWorktrees`, `folded`, `boardFolded`, `boardExpanded`, `filterFor`, `blockedOnly`, `showAbandoned`, default off). `boardFolded` holds explicit user choices only: a key present as a boolean wins over the data, a missing key means a project whose visible tickets are all done (`onlyDone` in `boardModel`) starts folded.
 - Errors: "scree not found on <machine>" when no binary answers, "Not in a scree project", otherwise scree's message. A failed write puts scree's own message in a strip under the header (`theme().blocked`) until the next write succeeds or you change view, so a refusal survives the poll. Empty: "No tickets" or "No tickets match the filters".
-- No keys. Agent statuses do not apply.
+- Escape (with the mod focused) closes the window: the board returns the work area to `work-body`, the panel hides via `layout.hide {id: "panel"}`. An open status menu, edit form or create form takes Escape first. Agent statuses do not apply.
 
 ## Built from
 

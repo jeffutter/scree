@@ -474,6 +474,7 @@ export default class Scree extends View {
     this.refreshQueued = false;
     // A handle lives longer than a render, so it is made here and never in render().
     this.menuFocus = cx.focus_handle();
+    this.viewFocus = cx.focus_handle(); // the list and detail roots, so Escape reaches closeWindow
     // Edit form: retained widget state made once here, never in render. this.edit is
     // {base, for, error} while editing (base is the Ticket as loaded at startEdit); drafts maps
     // draftKey(id) to the last typed fields so a cancelled or abandoned edit of one Ticket never
@@ -772,6 +773,15 @@ export default class Scree extends View {
 
   dismissMenu(cx) { if (this.menu) { this.menu = null; cx.notify(); } }
 
+  // Escape with nothing else to dismiss (the menu, edit and create handlers stop propagation first)
+  // closes the window: the board hands the work area back to work-body, the panel hides itself.
+  closeWindow() {
+    if (this.mode === "board") run("layout.select", { stack: "work-area", child: "work-body" });
+    else run("layout.hide", { id: "panel" });
+  }
+  onEscape(e, cx) { if (e.key === "escape") { cx.stop_propagation(); this.closeWindow(); } }
+  onViewClick(cx) { this.viewFocus.focus(); this.dismissMenu(cx); }
+
   // A menu row: build the command, run it where the Ticket lives, and let runWrite report.
   chooseStatus(k, target, cx) {
     cx.spawn(async (cx) => { await this.runWrite(statusArgs(k.id, target), this.writeOpts(k), cx); });
@@ -979,7 +989,7 @@ export default class Scree extends View {
     // scroll sideways instead of squeezing or clipping cards.
     const minW = 90 + columns.length * (COL_W + 8) + 28;
     return v_flex().id("scree-board").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .on_click((_e, cx) => this.dismissMenu(cx))
+      .track_focus(this.viewFocus).on_key_down((e, cx) => this.onEscape(e, cx)).on_click((_e, cx) => this.onViewClick(cx))
       .child(header)
       .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .child(this.filterBar(t))
@@ -1085,8 +1095,12 @@ export default class Scree extends View {
     }
     return v_flex().id("scree-detail").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .track_focus(this.editHandle)
-      .on_key_down((e, cx) => { if (this.edit && e.key === "escape") { cx.stop_propagation(); this.cancelEdit(cx); } })
-      .on_click((_e, cx) => this.dismissMenu(cx))
+      .on_key_down((e, cx) => {
+        if (e.key !== "escape") return;
+        cx.stop_propagation();
+        if (this.edit) this.cancelEdit(cx); else this.closeWindow();
+      })
+      .on_click((_e, cx) => { this.editHandle.focus(); this.dismissMenu(cx); })
       .child(header)
       .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .child(v_flex().id("scree-body-detail").flex_1().min_h(0).overflow_y_scroll().children(body))
@@ -1139,7 +1153,7 @@ export default class Scree extends View {
           .child(this.mark(t, { blocked: kind === "blocked" }, kind))
           .child(label)));
     return v_flex().id("scree-panel").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .on_click((_e, cx) => this.dismissMenu(cx))
+      .track_focus(this.viewFocus).on_key_down((e, cx) => this.onEscape(e, cx)).on_click((_e, cx) => this.onViewClick(cx))
       .child(header)
       .when(this.notice, (el) => el.child(this.noticeStrip(t)))
       .when(!fatal, (el) => el.child(this.filterBar(t)))
