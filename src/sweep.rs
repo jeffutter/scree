@@ -160,7 +160,7 @@ fn close_worktree(conn: &Connection, project_id: i64, path: &str, dry: bool) -> 
     conn.execute(
         &format!(
             "UPDATE tickets SET status = 'abandoned', claimed_by_author = NULL,
-                claimed_by_session = NULL, updated_at = {NOW}, archived_at = {NOW}
+                claimed_by_session = NULL, claim_touched_at = NULL, updated_at = {NOW}, archived_at = {NOW}
              WHERE project_id = ?1 AND worktree_path = ?2 AND archived_at IS NULL
                AND status IN ({})",
             Status::sql_list(&Status::OPEN),

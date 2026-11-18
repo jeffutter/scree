@@ -79,6 +79,7 @@ pub struct Ticket {
     pub available: bool,
     pub blocked: bool,
     pub blocked_by: Vec<Blocker>,
+    pub claim_touched_at: Option<String>,
     pub claimed_by: Option<Claimer>,
     pub created_at: String,
     #[serde(default)]

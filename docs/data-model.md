@@ -48,6 +48,7 @@ Logical schema for v1. Vocabulary is in `../GLOSSARY.md`.
 | `position` | integer, not null; orders the sibling set (root tickets of one Scope, or subtasks of one parent), lower first; gapped in steps of 1000 |
 | `worktree_path` | text; canonical absolute path of the linked worktree, NULL for the root checkout and for unscoped tickets; copied onto every subtask from its parent |
 | `claimed_by_author`, `claimed_by_session` | nullable; set by `start`, cleared whenever the ticket leaves `active`. The CHECK needs both non-null while active, so a claim with no session stores `''`, which `show` prints as a null session |
+| `claim_touched_at` | nullable; when the current claim was last touched: set by `start` and reclaim, refreshed by any comment, criterion, dependency or edit change while the ticket stays `active`, cleared with the claim. Non-null only while active, kept in code (ALTER TABLE cannot add the CHECK). Drives `list --stale` and `start --reclaim`; `updated_at` is not used because reorders and sweeps bump it too |
 | `created_at`, `updated_at` | RFC 3339 UTC text |
 | `done_at` | nullable; set on the transition to `done` |
 | `archived_at` | nullable; archived is separate from status |
@@ -108,6 +109,8 @@ In code, inside the same `BEGIN IMMEDIATE` transaction as the write, returning t
 - A parent cannot be done while subtasks are open, and abandoning a parent abandons its open subtasks.
 - `done` is refused while a criterion is unchecked unless forced.
 - `start` rules from the identity decision.
+- `start --reclaim` needs `status = 'active'` and `claim_touched_at` before the cutoff, re-checked in the UPDATE itself so racing reclaimers have one winner (Conflict, exit 5).
+- `release` and `done` by a session other than the claim's are a Conflict (exit 5).
 
 No triggers: they hide logic from the Rust tests and are awkward to evolve under forward-only migrations.
 
