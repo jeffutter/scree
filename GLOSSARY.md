@@ -27,6 +27,9 @@ A computed property: a ticket a dependency or a subtask still holds up. Never st
 **Dependency**
 A statement that one ticket cannot start until another is done. The waiting ticket is Blocked while the other is not done. Allowed between Worktrees of one Project, never between Projects.
 
+**Critical path**
+The longest chain of unfinished tickets in which each waits on the previous one, as drawn by `scree graph`. Finishing it takes the most sequential steps, so a delay anywhere on it delays everything after.
+
 **Acceptance Criterion**
 An outcome a ticket must achieve, stated so it can be verified. Checking one is a claim by whoever checked it, recorded with the evidence they gave. It is not a fact Scree established.
 _Avoid_: Subtask (a subtask is work to perform, not an outcome to check)

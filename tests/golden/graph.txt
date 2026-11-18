@@ -1,0 +1,9 @@
+⊘ LOCAL-4 * Top
+├─ ⊘ LOCAL-2 * Left
+│  └─ ○ LOCAL-1 * Foundation
+└─ ⊘ LOCAL-3 Right
+   └─ ○ LOCAL-1 * Foundation (see above)
+○ LOCAL-5 Loner
+critical path: LOCAL-1 -> LOCAL-2 -> LOCAL-4
+top blockers: LOCAL-1 (blocks 3), LOCAL-2 (blocks 1), LOCAL-3 (blocks 1)
+
