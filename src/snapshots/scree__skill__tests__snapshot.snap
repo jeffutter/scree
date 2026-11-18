@@ -124,7 +124,7 @@ List tickets
 - `--for <FOR_WHO>` (values: agent, human)
 - `--mine`: Only tickets claimed by this caller
 - `--limit <LIMIT>`: Default 50
-- `--done-since <WHEN>`: Only tickets done at or after this time: an RFC 3339 timestamp or `Nd` (N days ago). Applies before --limit, so recent done tickets are not cut off by position
+- `--done-since <WHEN>`: Only tickets done at or after this time: `Nd`, `Nh`, `Nm` or an RFC 3339 timestamp. Applies before --limit, so recent done tickets are not cut off by position
 - `--all-worktrees`: Every Worktree of the Project
 - `--all-projects`: Every Project
 - `--project-root <PROJECT_ROOT>`: Narrow to the Project at this root
