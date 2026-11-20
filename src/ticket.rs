@@ -968,6 +968,188 @@ pub struct EditFields<'a> {
     /// Add to description and plan instead of replacing them.
     pub append: bool,
     pub for_who: Option<ForWho>,
+    pub parent: Option<ParentChange<'a>>,
+}
+
+/// A re-parent requested through `edit`.
+#[derive(Clone, Copy)]
+pub enum ParentChange<'a> {
+    /// `--no-parent`: promote a subtask to a top-level ticket.
+    Detach,
+    /// `--parent ID`: make the ticket a subtask of another top-level ticket.
+    Under(&'a str),
+}
+
+/// Re-parent `row` inside the caller's write transaction and return its old
+/// and new display ids. The row (plan, criteria, comments, status, commits,
+/// dependency edges) is kept; only the parent, number, worktree and position
+/// change, and a comment records the old and new id. Every refusal is
+/// `Error::Refused` (exit 4) and the caller's transaction rolls back.
+fn reparent(
+    tx: &Connection,
+    row: i64,
+    change: ParentChange,
+    who: &Identity,
+) -> Result<(String, String)> {
+    let display = |r: i64| -> Result<String> {
+        Ok(tx.query_row(
+            &format!(
+                "SELECT {ID_EXPR} FROM tickets t JOIN projects p ON p.id = t.project_id
+                 LEFT JOIN tickets pt ON pt.id = t.parent_id WHERE t.id = ?1"
+            ),
+            [r],
+            |r| r.get(0),
+        )?)
+    };
+    let old_id = display(row)?;
+    let (project_id, old_parent, status, for_who, archived, worktree): (
+        i64,
+        Option<i64>,
+        String,
+        String,
+        bool,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT project_id, parent_id, status, \"for\", archived_at IS NOT NULL, worktree_path
+         FROM tickets WHERE id = ?1",
+        [row],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        },
+    )?;
+    if status == "active" {
+        return Err(Error::Refused(format!(
+            "{old_id} is active and claimed; release it before changing its parent"
+        )));
+    }
+    if archived {
+        return Err(Error::Refused(format!(
+            "{old_id} is archived and cannot be re-parented"
+        )));
+    }
+    if who.role == crate::identity::Role::Agent && for_who == "human" {
+        return Err(Error::Refused(format!(
+            "{old_id} is for a human; an agent may only re-parent tickets for agent"
+        )));
+    }
+    let (new_parent, number, worktree) = match change {
+        ParentChange::Detach => {
+            if old_parent.is_none() {
+                return Err(Error::Refused(format!("{old_id} is already top-level")));
+            }
+            let number: i64 = tx.query_row(
+                "UPDATE projects SET next_ticket_number = next_ticket_number + 1
+                 WHERE id = ?1 RETURNING next_ticket_number - 1",
+                [project_id],
+                |r| r.get(0),
+            )?;
+            (None, number, worktree)
+        }
+        ParentChange::Under(pid) => {
+            let prow = resolve(tx, pid)?;
+            if prow == row {
+                return Err(Error::Refused(format!("{old_id} cannot be its own parent")));
+            }
+            let (p_project, p_grand, p_status, p_worktree): (
+                i64,
+                Option<i64>,
+                String,
+                Option<String>,
+            ) = tx.query_row(
+                "SELECT project_id, parent_id, status, worktree_path FROM tickets WHERE id = ?1",
+                [prow],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            if p_grand.is_some() {
+                return Err(Error::Refused(format!(
+                    "{pid} is a subtask; tickets nest two levels deep"
+                )));
+            }
+            if p_project != project_id {
+                return Err(Error::Refused(format!(
+                    "{pid} is in a different Project than {old_id}; tickets never change Project"
+                )));
+            }
+            if Status::is_settled(&p_status) {
+                return Err(Error::Refused(format!(
+                    "cannot move {old_id} under {pid}, which is {p_status}"
+                )));
+            }
+            if old_parent == Some(prow) {
+                return Err(Error::Refused(format!("{old_id} is already under {pid}")));
+            }
+            let has_children: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM tickets WHERE parent_id = ?1)",
+                [row],
+                |r| r.get(0),
+            )?;
+            if has_children {
+                return Err(Error::Refused(format!(
+                    "{old_id} has subtasks and cannot become a subtask; move or promote its subtasks first"
+                )));
+            }
+            let number: i64 = tx.query_row(
+                "UPDATE tickets SET next_subtask_number = next_subtask_number + 1
+                 WHERE id = ?1 RETURNING next_subtask_number - 1",
+                [prow],
+                |r| r.get(0),
+            )?;
+            (Some(prow), number, p_worktree)
+        }
+    };
+    let position: i64 = tx.query_row(
+        "SELECT coalesce(max(position), 0) + 1000 FROM tickets
+         WHERE project_id = ?1 AND parent_id IS ?2 AND worktree_path IS ?3 AND id <> ?4",
+        params![project_id, new_parent, worktree, row],
+        |r| r.get(0),
+    )?;
+    tx.execute(
+        &format!(
+            "UPDATE tickets SET parent_id = ?2, number = ?3, worktree_path = ?4, position = ?5,
+                updated_at = {NOW}
+             WHERE id = ?1"
+        ),
+        params![row, new_parent, number, worktree, position],
+    )?;
+    // Every new cycle passes through `row`, the only ticket whose edges changed:
+    // it waits on its blockers and earlier siblings.
+    let successors: Vec<i64> = tx
+        .prepare(
+            "SELECT blocked_by_id FROM dependencies WHERE ticket_id = ?1
+             UNION SELECT e.id FROM tickets c JOIN tickets e ON e.parent_id = c.parent_id
+                 WHERE c.id = ?1 AND (e.position, e.number) < (c.position, c.number)",
+        )?
+        .query_map([row], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    for s in successors {
+        if waits_for(tx, s, row)? {
+            return Err(Error::Refused(format!(
+                "re-parenting {old_id} would make a dependency cycle"
+            )));
+        }
+    }
+    let new_id = display(row)?;
+    tx.execute(
+        &format!(
+            "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
+        ),
+        params![
+            row,
+            who.author,
+            who.session,
+            who.role.as_str(),
+            format!("Re-parented: {old_id} is now {new_id}")
+        ],
+    )?;
+    Ok((old_id, new_id))
 }
 
 /// `old` followed by `new`, separated by a blank line.
@@ -992,9 +1174,15 @@ pub fn edit(
     f: &EditFields,
     who: &Identity,
 ) -> Result<TicketDetail> {
-    if f.title.is_none() && f.description.is_none() && f.plan.is_none() && f.for_who.is_none() {
+    if f.title.is_none()
+        && f.description.is_none()
+        && f.plan.is_none()
+        && f.for_who.is_none()
+        && f.parent.is_none()
+    {
         return Err(Error::Usage(
-            "nothing to edit; pass --title, --description, --plan or --for".into(),
+            "nothing to edit; pass --title, --description, --plan, --for, --parent or --no-parent"
+                .into(),
         ));
     }
     if f.append && f.description.is_none() && f.plan.is_none() {
@@ -1015,6 +1203,9 @@ pub fn edit(
     }
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
+        if let Some(change) = f.parent {
+            reparent(tx, row, change, who)?;
+        }
         let (status, for_who, description, plan): (String, String, String, String) = tx.query_row(
             "SELECT status, \"for\", description, plan FROM tickets WHERE id = ?1",
             [row],

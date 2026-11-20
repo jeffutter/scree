@@ -313,6 +313,11 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                     plan: plan.as_deref(),
                     append: a.append,
                     for_who: a.for_who,
+                    parent: match (&a.parent, a.no_parent) {
+                        (Some(p), _) => Some(ticket::ParentChange::Under(p)),
+                        (None, true) => Some(ticket::ParentChange::Detach),
+                        (None, false) => None,
+                    },
                 },
                 &identity,
             )?;

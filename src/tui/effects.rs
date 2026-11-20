@@ -159,6 +159,7 @@ fn edit_title(
         plan: None,
         append: false,
         for_who: None,
+        parent: None,
     };
     ticket::edit(conn, id, &f, identity)
         .map(|_| format!("{id} title updated"))
@@ -228,6 +229,7 @@ pub fn apply_external(
         plan: (field == TextField::Plan).then_some(edited),
         append: false,
         for_who: None,
+        parent: None,
     };
     ticket::edit(conn, id, &f, identity)
         .map(|_| format!("{id} {name} updated"))

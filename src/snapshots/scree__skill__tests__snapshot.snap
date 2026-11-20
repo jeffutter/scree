@@ -158,6 +158,8 @@ Change a ticket's title, description, plan or assignee
 - `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
 - `--append`: Add to the end of --description / --plan instead of replacing it
 - `--for <FOR_WHO>`: Reassign; an agent may only reassign to human. Releases an active claim (values: agent, human)
+- `--parent <ID>`: Make the ticket a subtask of another top-level ticket of the same Project. The ticket keeps its row but gets a new id, and takes the parent's Worktree
+- `--no-parent`: Promote a subtask to a top-level ticket (new id, same Worktree; `scree move` can then relocate it)
 
 ### `scree ready [OPTIONS] <ID>`
 

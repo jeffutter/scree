@@ -338,6 +338,12 @@ pub struct EditArgs {
     /// Reassign; an agent may only reassign to human. Releases an active claim.
     #[arg(long = "for", value_enum)]
     pub for_who: Option<ForWho>,
+    /// Make the ticket a subtask of another top-level ticket of the same Project. The ticket keeps its row but gets a new id, and takes the parent's Worktree.
+    #[arg(long, value_name = "ID", conflicts_with = "no_parent")]
+    pub parent: Option<String>,
+    /// Promote a subtask to a top-level ticket (new id, same Worktree; `scree move` can then relocate it)
+    #[arg(long)]
+    pub no_parent: bool,
 }
 
 #[derive(Debug, Subcommand)]

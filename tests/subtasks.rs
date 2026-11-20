@@ -344,6 +344,171 @@ fn start_refuses_a_later_sibling_until_earlier_ones_settle() {
     e.ok_at(&repo, &["--role", "agent", "start", &c3]);
 }
 
+// Re-parenting with `edit --parent` / `--no-parent`.
+
+fn comments(e: &Env, cwd: &Path, id: &str) -> Vec<String> {
+    e.ok_at(cwd, &["show", id])["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| s(&c["body"]).to_string())
+        .collect()
+}
+
+#[test]
+fn no_parent_promotes_a_subtask_and_keeps_its_row() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let c = e.add(
+        &repo,
+        "c",
+        &["--parent", &p, "--plan", "the plan", "--criterion", "crit"],
+    );
+    let other = e.add(&repo, "other", &[]);
+    e.ok_at(&repo, &["comment", "add", &c, "a note"]);
+    e.ok_at(&repo, &["dep", "add", &other, &c]);
+    let row_before: i64 = e.sql("SELECT id FROM tickets WHERE title = 'c'", |r| r.get(0));
+
+    let t = e.ok_at(&repo, &["edit", &c, "--no-parent"]);
+    assert_eq!(t["id"], "SCR-3");
+    assert!(t["parent"].is_null());
+    assert_eq!(t["plan"], "the plan");
+    assert_eq!(t["status"], "ready");
+    assert_eq!(t["criteria"].as_array().unwrap().len(), 1);
+    let row_after: i64 = e.sql("SELECT id FROM tickets WHERE title = 'c'", |r| r.get(0));
+    assert_eq!(row_before, row_after);
+
+    let notes = comments(&e, &repo, "SCR-3");
+    assert!(notes.contains(&"a note".to_string()));
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("SCR-1.1") && n.contains("SCR-3"))
+    );
+    // The old display id no longer resolves; the blocker edge still does.
+    assert_eq!(e.code_at(&repo, &["show", &c]), 3);
+    assert_eq!(
+        e.ok_at(&repo, &["show", &other])["blocked_by"][0]["id"],
+        "SCR-3"
+    );
+    // The parent no longer lists it.
+    assert!(e.ids_at(&repo, &["--parent", &p]).is_empty());
+}
+
+#[test]
+fn edit_parent_moves_under_another_top_level_ticket_last() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let wt = e.worktree(&repo, "feat");
+    let a = e.add(&repo, "a", &[]);
+    let b = e.add(&wt, "b", &[]);
+    let b1 = e.sub(&wt, &b, "b1");
+    let loose = e.add(&repo, "loose", &[]);
+
+    let t = e.ok_at(&repo, &["edit", &loose, "--parent", &b]);
+    assert_eq!(t["id"], "SCR-2.2");
+    assert_eq!(t["parent"], "SCR-2");
+    // It takes the new parent's worktree.
+    assert_eq!(
+        e.sql(
+            "SELECT worktree_path FROM tickets WHERE title = 'loose'",
+            |r| r.get::<_, String>(0)
+        ),
+        wt.to_str().unwrap()
+    );
+    assert_eq!(
+        e.ids_at(&wt, &["--parent", &b]),
+        vec![b1.clone(), "SCR-2.2".to_string()]
+    );
+    // Last among siblings, so the first sibling is the only one available.
+    assert_eq!(e.ids_at(&wt, &["--available", "--parent", &b]), vec![b1]);
+    let _ = a;
+    assert!(
+        comments(&e, &repo, "SCR-2.2")
+            .iter()
+            .any(|n| n.contains("SCR-3") && n.contains("SCR-2.2"))
+    );
+}
+
+#[test]
+fn promoted_ticket_can_be_moved_to_a_worktree() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let wt = e.worktree(&repo, "feat");
+    let p = e.add(&repo, "p", &[]);
+    let c = e.sub(&repo, &p, "c");
+    assert_eq!(
+        e.code_at(&repo, &["move", &c, "--worktree", wt.to_str().unwrap()]),
+        4
+    );
+    let t = e.ok_at(&repo, &["edit", &c, "--no-parent"]);
+    let id = s(&t["id"]).to_string();
+    e.ok_at(&repo, &["move", &id, "--worktree", wt.to_str().unwrap()]);
+    assert_eq!(e.ids_at(&wt, &[]), vec![id]);
+}
+
+#[test]
+fn reparent_refusals_exit_4() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let other_repo = e.repo("other");
+    let p = e.add(&repo, "p", &[]);
+    let c = e.sub(&repo, &p, "c");
+    let q = e.add(&repo, "q", &[]);
+    let top = e.add(&repo, "top", &[]);
+    let foreign = e.add(&other_repo, "foreign", &[]);
+    let human = e.add(&repo, "human", &["--for", "human"]);
+    let done = e.add(&repo, "done", &[]);
+    e.ok_at(&repo, &["done", &done, "--force"]);
+
+    let refused = |args: &[&str]| {
+        let mut a = vec!["--role", "human", "edit"];
+        a.extend_from_slice(args);
+        let out = e.run_at(&repo, &a);
+        assert_eq!(out.status.code(), Some(4), "{args:?}: {out:?}");
+    };
+    refused(&[&top, "--parent", &c]); // target is a subtask
+    refused(&[&p, "--parent", &q]); // has subtasks
+    refused(&[&top, "--parent", &foreign]); // other Project
+    refused(&[&top, "--parent", &top]); // itself
+    refused(&[&top, "--no-parent"]); // already top-level
+    refused(&[&c, "--parent", &p]); // already under it
+    refused(&[&top, "--parent", &done]); // settled parent
+
+    // Active and claimed.
+    e.ok_at(&repo, &["--role", "agent", "start", &top]);
+    refused(&[&top, "--parent", &q]);
+    e.ok_at(&repo, &["--role", "agent", "release", &top]);
+
+    // An agent may not re-parent a human ticket.
+    let out = e.run_at(&repo, &["--role", "agent", "edit", &human, "--parent", &q]);
+    assert_eq!(out.status.code(), Some(4));
+    // Archived.
+    e.ok_at(&repo, &["archive", &top]);
+    refused(&[&top, "--parent", &q]);
+    // The flags conflict (usage error).
+    assert_eq!(
+        e.code_at(&repo, &["edit", &c, "--parent", &q, "--no-parent"]),
+        2
+    );
+}
+
+#[test]
+fn reparent_refuses_a_dependency_cycle() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let x = e.add(&repo, "x", &[]);
+    // x waits on p, so x cannot become p's subtask (p waits on its subtasks).
+    e.ok_at(&repo, &["dep", "add", &x, &p]);
+    let out = e.run_at(&repo, &["--role", "human", "edit", &x, "--parent", &p]);
+    assert_eq!(out.status.code(), Some(4), "{out:?}");
+    assert!(Env::stderr(&out).contains("cycle"));
+    // Nothing changed: x is still top-level.
+    assert!(e.ok_at(&repo, &["show", &x])["parent"].is_null());
+}
+
 /// A configured `git` run in `dir`, through the shared scrub.
 fn git(dir: &Path, args: &[&str]) {
     let out = git_cmd(dir).args(args).output().unwrap();
