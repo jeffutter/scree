@@ -11,6 +11,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/002_claim_touched.sql"),
     include_str!("migrations/003_handoff.sql"),
     include_str!("migrations/004_commits.sql"),
+    include_str!("migrations/005_label.sql"),
 ];
 
 /// Pick the database path: flag, then `SCREE_DB`, then `$XDG_DATA_HOME`,

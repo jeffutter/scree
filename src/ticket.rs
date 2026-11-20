@@ -18,8 +18,7 @@ use crate::scope::{self, Scope, path_str};
 
 /// SQL for a ticket's display id; needs aliases `t` (ticket), `p` (its
 /// project) and `pt` (its parent, LEFT JOINed).
-const ID_EXPR: &str =
-    "p.key || '-' || CASE WHEN pt.id IS NULL THEN t.number ELSE pt.number || '.' || t.number END";
+const ID_EXPR: &str = "p.key || '-' || t.label";
 
 /// SQL for a ticket (alias `t`) with a blocker that is not done. An abandoned
 /// blocker still blocks.
@@ -127,19 +126,24 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
         return Err(Error::Usage("title must not be empty".into()));
     }
     db::write(conn, |tx| {
-        let (project_id, parent, number, worktree) = if let Some(pid) = t.parent {
+        let (project_id, parent, number, worktree, label) = if let Some(pid) = t.parent {
             if t.key.is_some() {
                 return Err(Error::Usage(
                     "--key applies to a new Project, not to a subtask".into(),
                 ));
             }
             let prow = resolve(tx, pid)?;
-            let (project_id, grand, status, worktree): (i64, Option<i64>, String, Option<String>) =
-                tx.query_row(
-                    "SELECT project_id, parent_id, status, worktree_path FROM tickets WHERE id = ?1",
-                    [prow],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )?;
+            let (project_id, grand, status, worktree, plabel): (
+                i64,
+                Option<i64>,
+                String,
+                Option<String>,
+                String,
+            ) = tx.query_row(
+                "SELECT project_id, parent_id, status, worktree_path, label FROM tickets WHERE id = ?1",
+                [prow],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?;
             if grand.is_some() {
                 return Err(Error::Refused(format!(
                     "{pid} is a subtask; tickets nest two levels deep"
@@ -164,7 +168,8 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
                 [prow],
                 |r| r.get(0),
             )?;
-            (project_id, Some(prow), number, worktree)
+            let label = child_label(tx, project_id, &plabel, number)?;
+            (project_id, Some(prow), number, worktree, label)
         } else {
             let (project, worktree) = match scope {
                 Scope::Unscoped => {
@@ -189,7 +194,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
                 [project.id],
                 |r| r.get(0),
             )?;
-            (project.id, None, number, worktree)
+            (project.id, None, number, worktree, number.to_string())
         };
         let position: i64 = tx.query_row(
             "SELECT coalesce(max(position), 0) + 1000 FROM tickets
@@ -199,9 +204,9 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
         )?;
         tx.execute(
             &format!(
-                "INSERT INTO tickets (project_id, parent_id, number, title, description, plan, status,
+                "INSERT INTO tickets (project_id, parent_id, number, label, title, description, plan, status,
                     \"for\", position, worktree_path, next_criterion_number, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, {NOW}, {NOW})"
+                 VALUES (?1, ?2, ?3, ?12, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, {NOW}, {NOW})"
             ),
             params![
                 project_id,
@@ -215,6 +220,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
                 position,
                 worktree,
                 t.criteria.len() as i64 + 1,
+                label,
             ],
         )?;
         let id = tx.last_insert_rowid();
@@ -244,27 +250,35 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
 /// The row id of the ticket a display id names; NotFound (exit 3) if none.
 fn resolve(conn: &Connection, id: &str) -> Result<i64> {
     let parsed = parse_id(id)?;
-    let found = match parsed.sub {
-        None => conn.query_row(
-            "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-             WHERE p.key = ?1 AND t.number = ?2 AND t.parent_id IS NULL",
-            params![parsed.key, parsed.number],
-            |r| r.get(0),
-        ),
-        Some(sub) => conn.query_row(
-            "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
-             JOIN tickets pt ON pt.id = t.parent_id
-             WHERE p.key = ?1 AND pt.number = ?2 AND pt.parent_id IS NULL AND t.number = ?3",
-            params![parsed.key, parsed.number, sub],
-            |r| r.get(0),
-        ),
+    let label = match parsed.sub {
+        None => parsed.number.to_string(),
+        Some(sub) => format!("{}.{sub}", parsed.number),
     };
-    found.optional()?.ok_or_else(|| {
-        Error::NotFound(match parsed.sub {
-            None => format!("no ticket {}-{}", parsed.key, parsed.number),
-            Some(sub) => format!("no ticket {}-{}.{sub}", parsed.key, parsed.number),
-        })
-    })
+    conn.query_row(
+        "SELECT t.id FROM tickets t JOIN projects p ON p.id = t.project_id
+         WHERE p.key = ?1 AND t.label = ?2",
+        params![parsed.key, label],
+        |r| r.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| Error::NotFound(format!("no ticket {}-{label}", parsed.key)))
+}
+
+/// The label (the id without the Project key) of a new subtask. A subtask of
+/// a ticket with a plain label `12` is `12.<n>`. A ticket promoted out of
+/// another parent keeps its dotted label, and ids nest two deep, so its
+/// subtasks take a fresh Project number instead.
+fn child_label(tx: &Connection, project_id: i64, parent_label: &str, n: i64) -> Result<String> {
+    if !parent_label.contains('.') {
+        return Ok(format!("{parent_label}.{n}"));
+    }
+    let fresh: i64 = tx.query_row(
+        "UPDATE projects SET next_ticket_number = next_ticket_number + 1
+         WHERE id = ?1 RETURNING next_ticket_number - 1",
+        [project_id],
+        |r| r.get(0),
+    )?;
+    Ok(fresh.to_string())
 }
 
 /// Insert `row` blocked-by `blocker` after the Project check. `label` names
@@ -980,28 +994,13 @@ pub enum ParentChange<'a> {
     Under(&'a str),
 }
 
-/// Re-parent `row` inside the caller's write transaction and return its old
-/// and new display ids. The row (plan, criteria, comments, status, commits,
-/// dependency edges) is kept; only the parent, number, worktree and position
-/// change, and a comment records the old and new id. Every refusal is
+/// Re-parent `row` inside the caller's write transaction. The row (plan,
+/// criteria, comments, status, commits, dependency edges) and its label, so
+/// its id, are kept; only the parent, the internal sibling number, the
+/// worktree and the position change, and a comment records the move. Every refusal is
 /// `Error::Refused` (exit 4) and the caller's transaction rolls back.
-fn reparent(
-    tx: &Connection,
-    row: i64,
-    change: ParentChange,
-    who: &Identity,
-) -> Result<(String, String)> {
-    let display = |r: i64| -> Result<String> {
-        Ok(tx.query_row(
-            &format!(
-                "SELECT {ID_EXPR} FROM tickets t JOIN projects p ON p.id = t.project_id
-                 LEFT JOIN tickets pt ON pt.id = t.parent_id WHERE t.id = ?1"
-            ),
-            [r],
-            |r| r.get(0),
-        )?)
-    };
-    let old_id = display(row)?;
+fn reparent(tx: &Connection, row: i64, change: ParentChange, who: &Identity) -> Result<()> {
+    let old_id = display_id(tx, row)?;
     let (project_id, old_parent, status, for_who, archived, worktree): (
         i64,
         Option<i64>,
@@ -1135,21 +1134,21 @@ fn reparent(
             )));
         }
     }
-    let new_id = display(row)?;
+    let note = match new_parent {
+        Some(p) => format!(
+            "Re-parented: {old_id} is now a subtask of {}",
+            display_id(tx, p)?
+        ),
+        None => format!("Re-parented: {old_id} is now a top-level ticket"),
+    };
     tx.execute(
         &format!(
             "INSERT INTO comments (ticket_id, author, session, role, body, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, {NOW})"
         ),
-        params![
-            row,
-            who.author,
-            who.session,
-            who.role.as_str(),
-            format!("Re-parented: {old_id} is now {new_id}")
-        ],
+        params![row, who.author, who.session, who.role.as_str(), note],
     )?;
-    Ok((old_id, new_id))
+    Ok(())
 }
 
 /// `old` followed by `new`, separated by a blank line.
@@ -1862,7 +1861,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String, String)> 
     }
     let row = conn.query_row(
         &format!(
-            "SELECT {ID_EXPR}, p.key || '-' || pt.number, t.title, t.status, t.\"for\",
+            "SELECT {ID_EXPR}, p.key || '-' || pt.label, t.title, t.status, t.\"for\",
                     t.worktree_path, p.key, p.root_path, t.claimed_by_author, t.claimed_by_session, t.claim_touched_at,
                     t.created_at, t.updated_at, t.done_at, t.archived_at,
                     t.description, t.plan, t.handoff
@@ -1922,9 +1921,8 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String, String)> 
         .collect::<std::result::Result<_, _>>()?;
     let subtasks: Vec<Subtask> = conn
         .prepare(
-            "SELECT p.key || '-' || t.number || '.' || c.number, c.title, c.status
-             FROM tickets c JOIN tickets t ON t.id = c.parent_id
-             JOIN projects p ON p.id = c.project_id
+            "SELECT p.key || '-' || c.label, c.title, c.status
+             FROM tickets c JOIN projects p ON p.id = c.project_id
              WHERE c.parent_id = ?1 ORDER BY c.position, c.number",
         )?
         .query_map([id], |r| {

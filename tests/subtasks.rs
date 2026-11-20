@@ -371,7 +371,7 @@ fn no_parent_promotes_a_subtask_and_keeps_its_row() {
     let row_before: i64 = e.sql("SELECT id FROM tickets WHERE title = 'c'", |r| r.get(0));
 
     let t = e.ok_at(&repo, &["edit", &c, "--no-parent"]);
-    assert_eq!(t["id"], "SCR-3");
+    assert_eq!(t["id"], "SCR-1.1", "re-parenting keeps the id");
     assert!(t["parent"].is_null());
     assert_eq!(t["plan"], "the plan");
     assert_eq!(t["status"], "ready");
@@ -379,19 +379,20 @@ fn no_parent_promotes_a_subtask_and_keeps_its_row() {
     let row_after: i64 = e.sql("SELECT id FROM tickets WHERE title = 'c'", |r| r.get(0));
     assert_eq!(row_before, row_after);
 
-    let notes = comments(&e, &repo, "SCR-3");
+    let notes = comments(&e, &repo, "SCR-1.1");
     assert!(notes.contains(&"a note".to_string()));
-    assert!(
-        notes
-            .iter()
-            .any(|n| n.contains("SCR-1.1") && n.contains("SCR-3"))
-    );
-    // The old display id no longer resolves; the blocker edge still does.
-    assert_eq!(e.code_at(&repo, &["show", &c]), 3);
+    assert!(notes.iter().any(|n| n.contains("top-level")));
+    // The same id still resolves, and so does the blocker edge.
+    assert_eq!(e.ok_at(&repo, &["show", &c])["id"], "SCR-1.1");
     assert_eq!(
         e.ok_at(&repo, &["show", &other])["blocked_by"][0]["id"],
-        "SCR-3"
+        "SCR-1.1"
     );
+    // A subtask of the promoted ticket cannot nest a third id level, so it
+    // takes a fresh Project number.
+    let g = e.add(&repo, "g", &["--parent", "SCR-1.1"]);
+    assert_eq!(g, "SCR-4");
+    assert_eq!(e.ok_at(&repo, &["show", &g])["parent"], "SCR-1.1");
     // The parent no longer lists it.
     assert!(e.ids_at(&repo, &["--parent", &p]).is_empty());
 }
@@ -407,7 +408,7 @@ fn edit_parent_moves_under_another_top_level_ticket_last() {
     let loose = e.add(&repo, "loose", &[]);
 
     let t = e.ok_at(&repo, &["edit", &loose, "--parent", &b]);
-    assert_eq!(t["id"], "SCR-2.2");
+    assert_eq!(t["id"], "SCR-3", "re-parenting keeps the id");
     assert_eq!(t["parent"], "SCR-2");
     // It takes the new parent's worktree.
     assert_eq!(
@@ -419,15 +420,15 @@ fn edit_parent_moves_under_another_top_level_ticket_last() {
     );
     assert_eq!(
         e.ids_at(&wt, &["--parent", &b]),
-        vec![b1.clone(), "SCR-2.2".to_string()]
+        vec![b1.clone(), "SCR-3".to_string()]
     );
     // Last among siblings, so the first sibling is the only one available.
     assert_eq!(e.ids_at(&wt, &["--available", "--parent", &b]), vec![b1]);
     let _ = a;
     assert!(
-        comments(&e, &repo, "SCR-2.2")
+        comments(&e, &repo, "SCR-3")
             .iter()
-            .any(|n| n.contains("SCR-3") && n.contains("SCR-2.2"))
+            .any(|n| n.contains("SCR-3") && n.contains("SCR-2"))
     );
 }
 

@@ -67,7 +67,7 @@ Uniqueness:
 - `UNIQUE(project_id, parent_id, number)` for subtasks.
 - A partial unique index on `(project_id, number) WHERE parent_id IS NULL` for top-level tickets, because SQLite treats NULLs as distinct.
 
-The display id (`SCR-12`, `SCR-12.3`) is composed at read time from the Key, the parent's number and the subtask's number. It is never stored. Numbers are never reused, even after a delete. `edit --parent` / `--no-parent` re-parent a row in place: the row id (and so comments, criteria and dependency edges) is kept, but the number comes from the new parent's counter (or the Project's for a promoted ticket), so the display id changes.
+The display id (`SCR-12`, `SCR-12.3`) is the Key plus the ticket's `label`, which is stored and never changes. A new top-level ticket's label is its Project number; a subtask's is `<parent label>.<n>` from the parent's counter, except that a subtask of a ticket whose label is already dotted (one promoted out of a parent) takes a fresh Project number, since ids nest two deep. Numbers are never reused, even after a delete. `edit --parent` / `--no-parent` re-parent a row in place: the row id and the label (so the display id, comments, criteria and dependency edges) are kept; only the parent, the internal sibling `number` (from the new parent's counter, or the Project's for a promoted ticket), the worktree and the position change. A dotted id therefore no longer implies a subtask; the `parent` field says so.
 
 ### dependencies
 
