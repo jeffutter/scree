@@ -28,16 +28,42 @@ https://github.com/user-attachments/assets/ea753449-323a-4084-a51d-fda9cf69515d
 
 ## Install
 
-With Nix:
+Scree runs on Linux x86_64 and macOS aarch64. Check the install with `scree --version`.
+
+### With Nix
+
+Try it without installing:
 
 ```sh
-nix build github:jeffutter/scree     # the binary
 nix run github:jeffutter/scree -- list
 ```
 
-Download the tarball for your platform (Linux x86_64 or macOS aarch64) from the [releases page](https://github.com/jeffutter/scree/releases) and put `scree` on your `PATH`. Pushing a version tag builds the tarballs.
+Install it into your profile:
 
-Build from source inside `nix develop`. A plain `cargo build` needs a C compiler on your `PATH` for the bundled SQLite.
+```sh
+nix profile install github:jeffutter/scree
+```
+
+Or add it to a flake. Add `scree.url = "github:jeffutter/scree";` to your inputs, then use `inputs.scree.packages.${system}.default` in `environment.systemPackages` or `home.packages`. To pin a release, use `github:jeffutter/scree/v0.1.0`.
+
+### From a GitHub release
+
+Each [release](https://github.com/jeffutter/scree/releases) has a tarball and a `.sha256` file per platform. Download both, verify, and put `scree` on your `PATH`:
+
+```sh
+VERSION=v0.1.0
+PLATFORM=macos-aarch64    # or linux-x86_64
+gh release download "$VERSION" -R jeffutter/scree -p "scree-$VERSION-$PLATFORM.*"
+shasum -a 256 -c "scree-$VERSION-$PLATFORM.sha256"
+tar xzf "scree-$VERSION-$PLATFORM.tar.gz"
+install -m 755 scree ~/.local/bin/scree    # any directory on your PATH
+```
+
+Without the `gh` CLI, download the same two files from the release page in a browser. On macOS a browser download is quarantined and Gatekeeper may block the binary. Clear it with `xattr -d com.apple.quarantine scree`.
+
+### From source
+
+Build inside `nix develop`, which provides the Rust toolchain. A plain `cargo build` needs a C compiler on your `PATH` for the bundled SQLite. The binary is `target/debug/scree`, or `target/release/scree` with `--release`.
 
 ## Set up your agent
 
