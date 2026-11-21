@@ -66,3 +66,12 @@ The Caller (author and session) who started an active ticket.
 
 **Decision**
 A question a human must answer, scoped to the Project and linked to one or more tickets, so one answer can settle many tickets. Shown as `D-<n>` per Project. Open until decided; never deleted, only superseded by a later Decision.
+
+**Open / Decided**
+The status of a Decision. Open means no human has answered it; Decided records the answer, who decided and when.
+
+**Superseded**
+A decided Decision replaced by another through `decision supersede`. It stays in the record but leaves the queue and, by default, the decided ledger.
+
+**Blocking Decision**
+An open Decision linked to a ticket. It makes that ticket Blocked until the Decision is decided.

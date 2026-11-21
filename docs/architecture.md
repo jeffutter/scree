@@ -20,6 +20,7 @@ Flat under `src/`, one per concept. Commands are plain functions that take a `&m
 | `identity` | caller role and session inference |
 | `ids` | display-id and criterion-reference parsing and formatting |
 | `ticket` | create, read, state changes, Available and Blocked, criteria, comments, dependencies |
+| `decision` | Decision create, link, unlink, answer, supersede; the open queue and decided ledger queries; the similar-question hint |
 | `order` | `position` placement and sibling ordering |
 | `sweep` | closed-Worktree sweep |
 | `output` | JSON or text decision and rendering |
