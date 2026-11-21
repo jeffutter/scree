@@ -248,7 +248,7 @@ pub fn add(conn: &mut Connection, scope: &Scope, t: &NewTicket) -> Result<Ticket
 }
 
 /// The row id of the ticket a display id names; NotFound (exit 3) if none.
-fn resolve(conn: &Connection, id: &str) -> Result<i64> {
+pub(crate) fn resolve(conn: &Connection, id: &str) -> Result<i64> {
     let parsed = parse_id(id)?;
     let label = match parsed.sub {
         None => parsed.number.to_string(),
@@ -799,7 +799,7 @@ pub fn parse_criterion_ref(s: &str) -> Result<(&str, i64)> {
 }
 
 /// The display id (`SCR-12` or `SCR-12.3`) of a ticket row.
-fn display_id(conn: &Connection, row: i64) -> Result<String> {
+pub(crate) fn display_id(conn: &Connection, row: i64) -> Result<String> {
     Ok(conn.query_row(
         &format!(
             "SELECT {ID_EXPR} FROM tickets t JOIN projects p ON p.id = t.project_id
@@ -824,7 +824,7 @@ fn bump_updated(tx: &Connection, row: i64) -> Result<()> {
 /// active and `who` is the claim holder (same author and session, a missing
 /// session being `''`); anyone else's change leaves the stale clock alone, so a
 /// crashed agent's ticket stays reclaimable.
-fn touch(tx: &Connection, row: i64, who: &Identity) -> Result<()> {
+pub(crate) fn touch(tx: &Connection, row: i64, who: &Identity) -> Result<()> {
     tx.execute(
         &format!(
             "UPDATE tickets SET updated_at = {NOW},

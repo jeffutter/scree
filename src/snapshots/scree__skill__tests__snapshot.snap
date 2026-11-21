@@ -312,6 +312,49 @@ Delete any comment by its id, including ones scree wrote
 - `<ID>` (required)
 - `<COMMENT_ID>` (required)
 
+### `scree decision [OPTIONS] <COMMAND>`
+
+Questions a human must answer, shared by tickets
+
+### `scree decision add [OPTIONS] <TICKET> <QUESTION>`
+
+Ask a question linked to a ticket; ids are D-<n> per Project (KEY-D-<n> names another Project)
+
+- `<TICKET>` (required)
+- `<QUESTION>` (required)
+- `--option <TEXT>`: A possible answer (repeatable)
+- `--recommend <N>`: The recommended option, by its 1-based number
+
+### `scree decision link [OPTIONS] <ID> <TICKET>`
+
+Link a decision to another ticket of its Project; a cross-Project link is refused
+
+- `<ID>` (required)
+- `<TICKET>` (required)
+
+### `scree decision unlink [OPTIONS] <ID> <TICKET>`
+
+Remove the link; a missing link is not an error
+
+- `<ID>` (required)
+- `<TICKET>` (required)
+
+### `scree decision answer [OPTIONS] <ID> [TEXT]`
+
+Human only: answer with TEXT, or --accept to take the recommendation; an agent is refused
+
+- `<ID>` (required)
+- `<ANSWER>`
+- `--rationale <RATIONALE>`: Why this answer
+- `--accept`: Take the recommended option as the answer
+
+### `scree decision supersede [OPTIONS] --by <ID> <ID>`
+
+Mark a decided decision as replaced by another decision of the same Project
+
+- `<ID>` (required)
+- `--by <ID>` (required)
+
 ### `scree tui [OPTIONS]`
 
 Open the interactive terminal UI

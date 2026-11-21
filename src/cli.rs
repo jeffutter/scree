@@ -385,6 +385,49 @@ pub enum CommentCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum DecisionCommand {
+    /// Ask a question linked to a ticket; ids are D-<n> per Project (KEY-D-<n> names another Project)
+    Add {
+        ticket: String,
+        #[arg(allow_hyphen_values = true)]
+        question: String,
+        /// A possible answer (repeatable)
+        #[arg(long = "option", value_name = "TEXT", allow_hyphen_values = true)]
+        options: Vec<String>,
+        /// The recommended option, by its 1-based number
+        #[arg(long, value_name = "N")]
+        recommend: Option<usize>,
+    },
+    /// Link a decision to another ticket of its Project; a cross-Project link is refused
+    Link { id: String, ticket: String },
+    /// Remove the link; a missing link is not an error
+    Unlink { id: String, ticket: String },
+    /// Human only: answer with TEXT, or --accept to take the recommendation; an agent is refused
+    Answer {
+        id: String,
+        // Not named `text`: that is the global --text flag's argument id.
+        #[arg(
+            value_name = "TEXT",
+            allow_hyphen_values = true,
+            conflicts_with = "accept"
+        )]
+        answer: Option<String>,
+        /// Why this answer
+        #[arg(long, allow_hyphen_values = true)]
+        rationale: Option<String>,
+        /// Take the recommended option as the answer
+        #[arg(long)]
+        accept: bool,
+    },
+    /// Mark a decided decision as replaced by another decision of the same Project
+    Supersede {
+        id: String,
+        #[arg(long, value_name = "ID")]
+        by: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Create a ticket
     Add(AddArgs),
@@ -451,6 +494,9 @@ pub enum Command {
     /// Add or delete comments
     #[command(subcommand)]
     Comment(CommentCommand),
+    /// Questions a human must answer, shared by tickets
+    #[command(subcommand)]
+    Decision(DecisionCommand),
     /// Manage Projects
     #[command(subcommand)]
     Project(ProjectCommand),

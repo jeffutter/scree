@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli::Status;
 use crate::error::{Error, Result};
 use crate::identity::{Env, Role};
-use crate::model::{ListResult, TicketDetail};
+use crate::model::{DecisionDetail, ListResult, TicketDetail};
 
 pub fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Other(e.to_string()))
@@ -180,6 +180,35 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
         for c in &d.comments {
             let _ = writeln!(out, "{} {}: {}", c.created_at, c.author, c.body);
         }
+    }
+    out.trim_end_matches('\n').to_string()
+}
+
+/// `D-1  open  <question>`, then options, recommendation, the answer and the
+/// linked tickets.
+pub fn render_text_decision(d: &DecisionDetail) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}  {}  {}", d.id, d.status, d.question);
+    for (i, o) in d.options.iter().enumerate() {
+        let _ = writeln!(out, "  {}. {o}", i + 1);
+    }
+    if let Some(r) = &d.recommendation {
+        let _ = writeln!(out, "recommended: {r}");
+    }
+    if let Some(a) = &d.answer {
+        let _ = writeln!(out, "answer: {a}");
+    }
+    if let Some(r) = &d.rationale {
+        let _ = writeln!(out, "rationale: {r}");
+    }
+    if let (Some(by), Some(at)) = (&d.decided_by, &d.decided_at) {
+        let _ = writeln!(out, "decided by: {by} at {at}");
+    }
+    if let Some(s) = &d.superseded_by {
+        let _ = writeln!(out, "superseded by: {s}");
+    }
+    if !d.tickets.is_empty() {
+        let _ = writeln!(out, "tickets: {}", d.tickets.join(", "));
     }
     out.trim_end_matches('\n').to_string()
 }

@@ -126,6 +126,26 @@ pub struct Decision {
     pub superseded_by: Option<String>,
 }
 
+/// What every `decision` command returns: a `Decision` plus the ids of the
+/// tickets it is linked to. Fields are listed out (not flattened) so the JSON
+/// key order stays alphabetical.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionDetail {
+    pub answer: Option<String>,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+    pub decided_by: Option<String>,
+    pub id: String,
+    pub number: i64,
+    pub options: Vec<String>,
+    pub question: String,
+    pub rationale: Option<String>,
+    pub recommendation: Option<String>,
+    pub status: String,
+    pub superseded_by: Option<String>,
+    pub tickets: Vec<String>,
+}
+
 /// The `show` shape, also returned by every mutation.
 ///
 /// Its `criteria` key is the full array, not the list shape's

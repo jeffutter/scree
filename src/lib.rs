@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod db;
+pub mod decision;
 pub mod error;
 pub mod graph;
 pub mod identity;
@@ -16,7 +17,10 @@ use clap::CommandFactory;
 
 use std::path::{Path, PathBuf};
 
-use cli::{Cli, Command, CommentCommand, CriteriaCommand, DepCommand, ListArgs, ProjectCommand};
+use cli::{
+    Cli, Command, CommentCommand, CriteriaCommand, DecisionCommand, DepCommand, ListArgs,
+    ProjectCommand,
+};
 use error::{Error, Result};
 use identity::{Env, Role};
 use output::Format;
@@ -486,6 +490,65 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Comment(CommentCommand::Rm { id, comment_id }) => {
             let t = ticket::comment_rm(&mut conn, &id, comment_id, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
+        }
+        Command::Decision(c) => {
+            let ctx = decision::Ctx {
+                cwd,
+                project: cli.project.as_deref(),
+            };
+            let d = match c {
+                DecisionCommand::Add {
+                    ticket,
+                    question,
+                    options,
+                    recommend,
+                } => {
+                    let question = text_arg("question", Some(&question))?;
+                    let options = options
+                        .iter()
+                        .map(|o| text_arg("--option", Some(o)))
+                        .collect::<Result<Vec<_>>>()?;
+                    decision::add(
+                        &mut conn, &ticket, &question, &options, recommend, &identity,
+                    )?
+                }
+                DecisionCommand::Link { id, ticket } => {
+                    decision::link(&mut conn, &ctx, &id, &ticket, &identity)?
+                }
+                DecisionCommand::Unlink { id, ticket } => {
+                    decision::unlink(&mut conn, &ctx, &id, &ticket, &identity)?
+                }
+                DecisionCommand::Answer {
+                    id,
+                    answer,
+                    rationale,
+                    accept,
+                } => {
+                    // Refuse an agent before reading any input or the database.
+                    decision::require_human(&identity)?;
+                    let text = answer
+                        .as_deref()
+                        .map(|t| text_arg("answer", Some(t)))
+                        .transpose()?;
+                    let rationale = rationale
+                        .as_deref()
+                        .map(|r| text_arg("--rationale", Some(r)))
+                        .transpose()?;
+                    decision::answer(
+                        &mut conn,
+                        &ctx,
+                        &id,
+                        text.as_deref(),
+                        accept,
+                        rationale.as_deref(),
+                        &identity,
+                    )?
+                }
+                DecisionCommand::Supersede { id, by } => {
+                    decision::supersede(&mut conn, &ctx, &id, &by)?
+                }
+            };
+            emit(format, &d, || output::render_text_decision(&d))
         }
         Command::Project(ProjectCommand::Relink { old, new }) => {
             let v = db::write(&mut conn, |tx| {

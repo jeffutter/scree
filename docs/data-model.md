@@ -98,6 +98,8 @@ The display id (`SCR-12`, `SCR-12.3`) is the Key plus the ticket's `label`, whic
 - A Decision is a question a human must answer, scoped to the Project and shared by every ticket it is linked to. The display id is `D-<n>`, `n` from a `next_decision_number` counter on `projects`.
 - `options` is a JSON array of strings (CHECK `json_valid`). `status` is `open` or `decided`; a CHECK ties `decided` to a non-null `answer` and `decided_at`.
 - `superseded_by` points at the decision that replaced this one. Decisions are never deleted; links are removed with their ticket by the cascade.
+- Answering sets `status = 'decided'`, `answer`, `rationale`, `decided_by` (the caller's author) and `decided_at`, once; only a human may answer, and `--accept` copies `recommendation` (the option text) into `answer`.
+- `supersede` needs a decided, not yet superseded decision and a replacement in the same Project, and refuses a chain that loops back. A link joins a decision only to tickets of its own Project.
 - `ticket::build` fills a ticket's `decisions` (ordered by number) on the `show` shape only.
 
 ### comments
