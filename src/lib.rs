@@ -491,6 +491,12 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             let t = ticket::comment_rm(&mut conn, &id, comment_id, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
+        Command::Decisions(mut a) => {
+            apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
+            sweep::sweep_auto(&mut conn, env, cwd, Some(&a.scope), None)?;
+            let q = decision::open_queue(&conn, cwd, &a.scope)?;
+            emit(format, &q, || output::render_text_decisions(&q))
+        }
         Command::Decision(c) => {
             let ctx = decision::Ctx {
                 cwd,

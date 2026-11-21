@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli::Status;
 use crate::error::{Error, Result};
 use crate::identity::{Env, Role};
-use crate::model::{DecisionDetail, ListResult, TicketDetail};
+use crate::model::{DecisionDetail, DecisionsResult, ListResult, TicketDetail};
 
 pub fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Other(e.to_string()))
@@ -219,6 +219,41 @@ pub fn render_text_decision(d: &DecisionDetail) -> String {
     }
     if !d.tickets.is_empty() {
         let _ = writeln!(out, "tickets: {}", d.tickets.join(", "));
+    }
+    out.trim_end_matches('\n').to_string()
+}
+
+/// One block per open decision: `D-3  unblocks 2 tickets  <question>`, the
+/// numbered options with the recommended one marked, then its age. The id is
+/// qualified `KEY-D-3` when the rows span several Projects.
+pub fn render_text_decisions(q: &DecisionsResult) -> String {
+    let multi = q
+        .decisions
+        .windows(2)
+        .any(|w| w[0].project.key != w[1].project.key);
+    let mut out = String::new();
+    for d in &q.decisions {
+        let id = if multi {
+            format!("{}-{}", d.project.key, d.id)
+        } else {
+            d.id.clone()
+        };
+        let noun = if d.unblocks == 1 { "ticket" } else { "tickets" };
+        let _ = writeln!(out, "{id}  unblocks {} {noun}  {}", d.unblocks, d.question);
+        for (i, o) in d.options.iter().enumerate() {
+            let mark = if d.recommendation.as_deref() == Some(o) {
+                " (recommended)"
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "  {}. {o}{mark}", i + 1);
+        }
+        if let Some(r) = &d.recommendation
+            && !d.options.contains(r)
+        {
+            let _ = writeln!(out, "  recommended: {r}");
+        }
+        let _ = writeln!(out, "  created {}", d.created_at);
     }
     out.trim_end_matches('\n').to_string()
 }

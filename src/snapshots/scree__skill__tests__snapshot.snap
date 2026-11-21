@@ -355,6 +355,15 @@ Mark a decided decision as replaced by another decision of the same Project
 - `<ID>` (required)
 - `--by <ID>` (required)
 
+### `scree decisions [OPTIONS]`
+
+The queue of open Decisions awaiting a human answer
+
+- `--open`: Open Decisions, the default and today the only listing. Ordered by how many linked unfinished tickets (draft, ready or active, not archived) each has, highest first, then oldest. The count is a plain count of linked tickets, not only those this Decision alone blocks
+- `--all-worktrees`: Every Worktree of the Project
+- `--all-projects`: Every Project
+- `--project-root <PROJECT_ROOT>`: Narrow to the Project at this root
+
 ### `scree tui [OPTIONS]`
 
 Open the interactive terminal UI

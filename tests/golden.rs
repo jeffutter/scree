@@ -193,3 +193,24 @@ fn graph_outputs_are_stable() {
         &(graph_out(&e, "en_US.UTF-8", &["--json"]) + "\n"),
     );
 }
+
+#[test]
+fn open_decision_queue_json_and_text() {
+    let e = Env::with_flags(FLAGS);
+    e.stdout(&["add", "Needs answers", "--status", "ready"]);
+    e.stdout(&["add", "Also waits", "--status", "ready"]);
+    e.exec_batch(
+        "INSERT INTO decisions (id, project_id, number, question, options, recommendation, created_at)
+           VALUES (1, 1, 1, 'Which store?', '[\"sqlite\",\"files\"]', 'sqlite', '2026-01-01T00:00:00Z'),
+                  (2, 1, 2, 'Which format?', '[\"json\",\"toml\"]', NULL, '2026-01-02T00:00:00Z');
+         INSERT INTO decision_tickets (decision_id, ticket_id) VALUES (1, 1), (2, 1), (2, 2);",
+    );
+    check(
+        "decisions.json",
+        &redact(&e.stdout(&["decisions", "--open"])),
+    );
+    check(
+        "decisions.txt",
+        &redact(&e.stdout(&["--text", "decisions", "--open"])),
+    );
+}

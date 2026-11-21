@@ -255,6 +255,19 @@ pub struct StartArgs {
     pub older_than: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct DecisionsArgs {
+    /// Open Decisions, the default and today the only listing. Ordered by how
+    /// many linked unfinished tickets (draft, ready or active, not archived)
+    /// each has, highest first, then oldest. The count is a plain count of
+    /// linked tickets, not only those this Decision alone blocks.
+    #[arg(long)]
+    pub open: bool,
+    /// A Decision belongs to a Project, so --all-worktrees equals the default
+    #[command(flatten)]
+    pub scope: ScopeArgs,
+}
+
 #[derive(Debug, Args, Default)]
 pub struct ListArgs {
     /// Repeatable; default draft, ready and active
@@ -497,6 +510,8 @@ pub enum Command {
     /// Questions a human must answer, shared by tickets
     #[command(subcommand)]
     Decision(DecisionCommand),
+    /// The queue of open Decisions awaiting a human answer
+    Decisions(DecisionsArgs),
     /// Manage Projects
     #[command(subcommand)]
     Project(ProjectCommand),

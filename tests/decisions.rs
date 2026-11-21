@@ -390,3 +390,135 @@ fn superseded_decision_does_not_block() {
     );
     assert_eq!(e.ok_at(&repo, &["show", &a])["available"], true);
 }
+
+fn queue_ids(v: &serde_json::Value) -> Vec<String> {
+    v["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn queue_orders_by_unfinished_tickets_then_age_and_skips_closed() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let t: Vec<String> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|n| e.ticket(&repo, n))
+        .collect();
+    let add = |q: &str, ticket: &str| {
+        e.ok_at(
+            &repo,
+            &[
+                "decision",
+                "add",
+                ticket,
+                q,
+                "--option",
+                "x",
+                "--option",
+                "y",
+                "--recommend",
+                "2",
+            ],
+        );
+    };
+    add("one ticket", &t[0]);
+    add("two tickets", &t[0]);
+    e.ok_at(&repo, &["decision", "link", "D-2", &t[1]]);
+    add("only done ticket", &t[2]);
+    add("decided", &t[0]);
+    e.ok_at(
+        &repo,
+        &[
+            "--role", "human", "--author", "jeff", "decision", "answer", "D-4", "--accept",
+        ],
+    );
+    add("no live tickets, old", &t[3]);
+    add("one ticket, older", &t[1]);
+    // t[2] done, t[3] archived: neither counts.
+    e.exec_batch(
+        "UPDATE tickets SET status = 'done' WHERE number = 3;
+         UPDATE tickets SET archived_at = '2026-01-01T00:00:00Z' WHERE number = 4;
+         UPDATE decisions SET created_at = '2026-01-0' || (10 - number) || 'T00:00:00Z';",
+    );
+
+    let q = e.ok_at(&repo, &["decisions", "--open"]);
+    // D-2 has 2; D-6 and D-1 have 1 (D-6 is older); D-5 and D-3 have 0 (D-5 older).
+    assert_eq!(queue_ids(&q), ["D-2", "D-6", "D-1", "D-5", "D-3"]);
+    let row = &q["decisions"][0];
+    let keys: Vec<&str> = row
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "created_at",
+            "id",
+            "number",
+            "options",
+            "project",
+            "question",
+            "recommendation",
+            "tickets",
+            "unblocks"
+        ]
+    );
+    assert_eq!(row["question"], "two tickets");
+    assert_eq!(row["options"], serde_json::json!(["x", "y"]));
+    assert_eq!(row["recommendation"], "y");
+    assert_eq!(row["unblocks"], 2);
+    assert_eq!(row["tickets"].as_array().unwrap().len(), 2);
+    assert_eq!(q["decisions"][3]["unblocks"], 0);
+    // --open is the default.
+    assert_eq!(e.ok_at(&repo, &["decisions"]), q);
+}
+
+#[test]
+fn queue_scope_flags_behave_as_in_list() {
+    let e = Env::new();
+    let (a, b) = (e.repo("a"), e.repo("b"));
+    for repo in [&a, &b] {
+        let t = e.ticket(repo, "t");
+        e.ok_at(repo, &["decision", "add", &t, "q"]);
+    }
+    let wt = e.path().join("wt-a");
+    assert!(
+        git_cmd(&a)
+            .args(["worktree", "add", "-q", "-b", "w"])
+            .arg(&wt)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let wt = std::fs::canonicalize(wt).unwrap();
+
+    let one = e.ok_at(&a, &["decisions"]);
+    assert_eq!(queue_ids(&one), ["D-1"]);
+    assert_eq!(one["decisions"][0]["project"]["root"], a.to_str().unwrap());
+    // A Decision belongs to the Project, so a worktree sees it and --all-worktrees changes nothing.
+    assert_eq!(e.ok_at(&wt, &["decisions"]), one);
+    assert_eq!(e.ok_at(&wt, &["decisions", "--all-worktrees"]), one);
+    assert_eq!(
+        e.ok_at(&a, &["decisions", "--all-projects"])["decisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let narrowed = e.ok_at(&a, &["decisions", "--project-root", b.to_str().unwrap()]);
+    assert_eq!(
+        narrowed["decisions"][0]["project"]["root"],
+        b.to_str().unwrap()
+    );
+    let unseen = e.repo("unseen");
+    assert_eq!(
+        e.ok_at(&unseen, &["decisions"]),
+        serde_json::json!({"decisions": []})
+    );
+}

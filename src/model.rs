@@ -136,6 +136,28 @@ pub struct Decision {
     pub superseded_by: Option<String>,
 }
 
+/// A row of the open-decisions queue. `unblocks` counts the linked tickets
+/// that are unfinished (draft, ready or active) and not archived; `tickets`
+/// lists them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenDecision {
+    pub created_at: String,
+    pub id: String,
+    pub number: i64,
+    pub options: Vec<String>,
+    pub project: ProjectRef,
+    pub question: String,
+    pub recommendation: Option<String>,
+    pub tickets: Vec<String>,
+    pub unblocks: i64,
+}
+
+/// The `{"decisions": [...]}` shape returned by `decisions`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionsResult {
+    pub decisions: Vec<OpenDecision>,
+}
+
 /// What every `decision` command returns: a `Decision` plus the ids of the
 /// tickets it is linked to. Fields are listed out (not flattened) so the JSON
 /// key order stays alphabetical.

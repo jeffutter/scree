@@ -6,13 +6,14 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::cli::{ScopeArgs, Status};
 use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::{Identity, Role};
-use crate::model::DecisionDetail;
+use crate::model::{DecisionDetail, DecisionsResult, OpenDecision, ProjectRef};
 use crate::project;
 use crate::scope::{self, Scope, path_str};
-use crate::ticket::{display_id, resolve, touch};
+use crate::ticket::{display_id, resolve, scope_project, touch};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
@@ -349,6 +350,76 @@ pub fn supersede(conn: &mut Connection, ctx: &Ctx, id: &str, by: &str) -> Result
     })
 }
 
+fn parse_options(json: String, col: usize) -> rusqlite::Result<Vec<String>> {
+    serde_json::from_str(&json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(col, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+/// The open-decisions queue: open, unsuperseded decisions in scope, most
+/// linked unfinished tickets first, then oldest, then by Project key and
+/// number. The count is a plain count of linked tickets that are draft, ready
+/// or active and not archived.
+pub fn open_queue(conn: &Connection, cwd: &Path, scope: &ScopeArgs) -> Result<DecisionsResult> {
+    let Some(project) = scope_project(conn, cwd, scope)? else {
+        return Ok(DecisionsResult { decisions: vec![] });
+    };
+    let unfinished = format!(
+        "t.status IN ({}) AND t.archived_at IS NULL",
+        Status::sql_list(&Status::OPEN)
+    );
+    let mut stmt = conn.prepare(&format!(
+        "SELECT d.id, d.number, d.question, d.options, d.recommendation, d.created_at,
+                p.key, p.root_path
+         FROM decisions d JOIN projects p ON p.id = d.project_id
+         WHERE d.status = 'open' AND d.superseded_by IS NULL
+           AND (?1 IS NULL OR d.project_id = ?1)
+         ORDER BY (SELECT COUNT(*) FROM decision_tickets dt
+                   JOIN tickets t ON t.id = dt.ticket_id
+                   WHERE dt.decision_id = d.id AND {unfinished}) DESC,
+                  d.created_at, p.key, d.number"
+    ))?;
+    let rows: Vec<(i64, OpenDecision)> = stmt
+        .query_map([project], |r| {
+            let number = r.get::<_, i64>(1)?;
+            Ok((
+                r.get::<_, i64>(0)?,
+                OpenDecision {
+                    created_at: r.get(5)?,
+                    id: format!("D-{number}"),
+                    number,
+                    options: parse_options(r.get::<_, String>(3)?, 3)?,
+                    project: ProjectRef {
+                        key: r.get(6)?,
+                        root: r.get(7)?,
+                    },
+                    question: r.get(2)?,
+                    recommendation: r.get(4)?,
+                    tickets: vec![],
+                    unblocks: 0,
+                },
+            ))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut tickets = conn.prepare(&format!(
+        "SELECT dt.ticket_id FROM decision_tickets dt JOIN tickets t ON t.id = dt.ticket_id
+         WHERE dt.decision_id = ?1 AND {unfinished} ORDER BY dt.ticket_id"
+    ))?;
+    let mut decisions = Vec::with_capacity(rows.len());
+    for (row, mut d) in rows {
+        let ids: Vec<i64> = tickets
+            .query_map([row], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        d.tickets = ids
+            .into_iter()
+            .map(|t| display_id(conn, t))
+            .collect::<Result<_>>()?;
+        d.unblocks = d.tickets.len() as i64;
+        decisions.push(d);
+    }
+    Ok(DecisionsResult { decisions })
+}
+
 /// A decision with its linked tickets.
 fn load(conn: &Connection, row: i64) -> Result<DecisionDetail> {
     let mut d = conn.query_row(
@@ -359,18 +430,11 @@ fn load(conn: &Connection, row: i64) -> Result<DecisionDetail> {
         [row],
         |r| {
             let number = r.get::<_, i64>(0)?;
-            let options: String = r.get(2)?;
             Ok(DecisionDetail {
                 id: format!("D-{number}"),
                 number,
                 question: r.get(1)?,
-                options: serde_json::from_str(&options).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        2,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
+                options: parse_options(r.get::<_, String>(2)?, 2)?,
                 recommendation: r.get(3)?,
                 status: r.get(4)?,
                 answer: r.get(5)?,

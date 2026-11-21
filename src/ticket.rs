@@ -1310,6 +1310,21 @@ fn resolve_where(conn: &Connection, cwd: &Path, a: &ScopeArgs) -> Result<Option<
     }))
 }
 
+/// The Project ids `a`'s scope reaches: `Some(None)` for every Project,
+/// `Some(Some(id))` for one, `None` when the scope holds nothing (a repository
+/// never seen before). Worktrees do not narrow it: a Decision belongs to a
+/// Project, so `--all-worktrees` equals the default.
+pub(crate) fn scope_project(
+    conn: &Connection,
+    cwd: &Path,
+    a: &ScopeArgs,
+) -> Result<Option<Option<i64>>> {
+    Ok(resolve_where(conn, cwd, a)?.map(|w| match w {
+        Where::All => None,
+        Where::Project(id) | Where::Worktree(id, _) => Some(id),
+    }))
+}
+
 /// The WHERE conditions and arguments that restrict a query on `tickets t`
 /// to `a`'s scope; `None` when the scope holds no tickets at all (a
 /// repository never seen before, and a read creates nothing).
