@@ -63,3 +63,6 @@ An optional label for one run of an agent, recorded with the author so claims an
 
 **Claimer**
 The Caller (author and session) who started an active ticket.
+
+**Decision**
+A question a human must answer, scoped to the Project and linked to one or more tickets, so one answer can settle many tickets. Shown as `D-<n>` per Project. Open until decided; never deleted, only superseded by a later Decision.

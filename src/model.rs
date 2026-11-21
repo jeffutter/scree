@@ -107,6 +107,25 @@ pub struct Commit {
     pub sha: String,
 }
 
+/// A question a human must answer, shared by the tickets it is linked to.
+/// `id` is `D-<n>` per Project; `superseded_by` is the `D-<n>` of the
+/// decision that replaced this one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Decision {
+    pub answer: Option<String>,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+    pub decided_by: Option<String>,
+    pub id: String,
+    pub number: i64,
+    pub options: Vec<String>,
+    pub question: String,
+    pub rationale: Option<String>,
+    pub recommendation: Option<String>,
+    pub status: String,
+    pub superseded_by: Option<String>,
+}
+
 /// The `show` shape, also returned by every mutation.
 ///
 /// Its `criteria` key is the full array, not the list shape's
@@ -119,6 +138,7 @@ pub struct TicketDetail {
     pub comments: Vec<Comment>,
     pub commits: Vec<Commit>,
     pub criteria: Vec<Criterion>,
+    pub decisions: Vec<Decision>,
     pub description: String,
     pub handoff: String,
     pub plan: String,
@@ -132,6 +152,8 @@ struct RawDetail {
     #[serde(default)]
     commits: Vec<Commit>,
     criteria: Vec<Criterion>,
+    #[serde(default)]
+    decisions: Vec<Decision>,
     description: String,
     #[serde(default)]
     handoff: String,
@@ -149,6 +171,7 @@ impl From<RawDetail> for TicketDetail {
             comments: r.comments,
             commits: r.commits,
             criteria: r.criteria,
+            decisions: r.decisions,
             description: r.description,
             handoff: r.handoff,
             plan: r.plan,
@@ -177,6 +200,10 @@ impl Serialize for TicketDetail {
         all.insert(
             "criteria".into(),
             to_value(serde_json::to_value(&self.criteria))?,
+        );
+        all.insert(
+            "decisions".into(),
+            to_value(serde_json::to_value(&self.decisions))?,
         );
         all.insert("description".into(), self.description.clone().into());
         all.insert("handoff".into(), self.handoff.clone().into());

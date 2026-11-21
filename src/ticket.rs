@@ -10,8 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, Claimer, Comment, Commit, CriteriaSummary, Criterion, ListResult, NextResult,
-    ProjectRef, Subtask, Ticket, TicketDetail,
+    Blocker, Claimer, Comment, Commit, CriteriaSummary, Criterion, Decision, ListResult,
+    NextResult, ProjectRef, Subtask, Ticket, TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -1825,11 +1825,46 @@ fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
             })
         })?
         .collect::<std::result::Result<_, _>>()?;
+    let decisions = conn
+        .prepare(
+            "SELECT d.number, d.question, d.options, d.recommendation, d.status, d.answer,
+                    d.rationale, d.decided_by, d.decided_at, s.number, d.created_at
+             FROM decision_tickets dt
+             JOIN decisions d ON d.id = dt.decision_id
+             LEFT JOIN decisions s ON s.id = d.superseded_by
+             WHERE dt.ticket_id = ?1 ORDER BY d.number",
+        )?
+        .query_map([id], |r| {
+            let number = r.get::<_, i64>(0)?;
+            let options: String = r.get(2)?;
+            Ok(Decision {
+                id: format!("D-{number}"),
+                number,
+                question: r.get(1)?,
+                options: serde_json::from_str(&options).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
+                recommendation: r.get(3)?,
+                status: r.get(4)?,
+                answer: r.get(5)?,
+                rationale: r.get(6)?,
+                decided_by: r.get(7)?,
+                decided_at: r.get(8)?,
+                superseded_by: r.get::<_, Option<i64>>(9)?.map(|n| format!("D-{n}")),
+                created_at: r.get(10)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
     Ok(TicketDetail {
         ticket,
         comments,
         commits,
         criteria,
+        decisions,
         description,
         handoff,
         plan,

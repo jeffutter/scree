@@ -89,11 +89,31 @@ fn json_key_order_is_stable() {
 }
 
 #[test]
+fn show_carries_open_and_decided_decisions() {
+    let e = Env::with_flags(FLAGS);
+    e.stdout(&["add", "Needs answers", "--status", "ready"]);
+    e.exec_batch(
+        "INSERT INTO decisions (id, project_id, number, question, options, recommendation, created_at)
+           VALUES (1, 1, 1, 'Which store?', '[\"sqlite\",\"files\"]', 'sqlite', '2026-01-01T00:00:00Z');
+         INSERT INTO decisions (id, project_id, number, question, status, answer, rationale,
+                                decided_by, decided_at, superseded_by, created_at)
+           VALUES (2, 1, 2, 'Which format?', 'decided', 'json', 'simple', 'jeff',
+                   '2026-01-02T00:00:00Z', 1, '2026-01-01T00:00:00Z');
+         INSERT INTO decision_tickets (decision_id, ticket_id) VALUES (2, 1), (1, 1);",
+    );
+    check(
+        "show_decisions.json",
+        &redact(&e.stdout(&["show", "LOCAL-1"])),
+    );
+}
+
+#[test]
 fn show_payload_round_trips_through_typed_model() {
     for name in [
         "show_detail.json",
         "show_blocked.json",
         "show_subtasks.json",
+        "show_decisions.json",
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden")

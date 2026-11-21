@@ -12,6 +12,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("migrations/003_handoff.sql"),
     include_str!("migrations/004_commits.sql"),
     include_str!("migrations/005_label.sql"),
+    include_str!("migrations/006_decisions.sql"),
 ];
 
 /// Pick the database path: flag, then `SCREE_DB`, then `$XDG_DATA_HOME`,
@@ -161,6 +162,34 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(uv, MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn decisions_schema_enforces_status_and_number() {
+        let (_d, path) = temp_db();
+        let conn = open(&path).unwrap();
+        let pid: i64 = conn
+            .query_row("SELECT id FROM projects LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let ins = |n: i64, status: &str, answer: Option<&str>, at: Option<&str>| {
+            conn.execute(
+                "INSERT INTO decisions (project_id, number, question, status, answer, decided_at, created_at)
+                 VALUES (?1, ?2, 'q', ?3, ?4, ?5, 't')",
+                rusqlite::params![pid, n, status, answer, at],
+            )
+        };
+        ins(1, "open", None, None).unwrap();
+        assert!(ins(1, "open", None, None).is_err(), "duplicate number");
+        assert!(
+            ins(2, "decided", None, None).is_err(),
+            "decided needs answer"
+        );
+        assert!(
+            ins(3, "open", Some("a"), Some("t")).is_err(),
+            "open has no answer"
+        );
+        assert!(ins(4, "bogus", None, None).is_err(), "bad status");
+        ins(5, "decided", Some("a"), Some("t")).unwrap();
     }
 
     #[test]

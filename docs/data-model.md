@@ -91,6 +91,15 @@ The display id (`SCR-12`, `SCR-12.3`) is the Key plus the ticket's `label`, whic
 - `sha` is the full commit sha. `branch` is what the checkout was on when linked, null when detached or unknown, so it is stored per link rather than per ticket.
 - Linking a sha twice keeps the first row. Rows are removed with their ticket by the cascade.
 
+### decisions and decision_tickets
+
+`decisions(id, project_id, number, question, options, recommendation, status, answer, rationale, decided_by, decided_at, superseded_by, created_at)`, with `UNIQUE(project_id, number)`; `decision_tickets(decision_id, ticket_id)`, primary key `(decision_id, ticket_id)`.
+
+- A Decision is a question a human must answer, scoped to the Project and shared by every ticket it is linked to. The display id is `D-<n>`, `n` from a `next_decision_number` counter on `projects`.
+- `options` is a JSON array of strings (CHECK `json_valid`). `status` is `open` or `decided`; a CHECK ties `decided` to a non-null `answer` and `decided_at`.
+- `superseded_by` points at the decision that replaced this one. Decisions are never deleted; links are removed with their ticket by the cascade.
+- `ticket::build` fills a ticket's `decisions` (ordered by number) on the `show` shape only.
+
 ### comments
 
 `comments(id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id, author, session, role, body, created_at)`.
