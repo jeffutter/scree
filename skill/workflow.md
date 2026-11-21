@@ -2,7 +2,7 @@ Claim the first available ticket:
 
     scree start --next
 
-Read the whole ticket before you work: description, plan if one was written, criteria and comments.
+Read the whole ticket before you work: description, plan if one was written, criteria, comments and `decisions`. A decided Decision linked to the ticket carries the answer and rationale: follow it, do not reopen it.
 
     scree show SCR-12
 
@@ -38,6 +38,24 @@ Create tickets as `draft`. A human (or an explicit instruction) makes them `read
 The exception is a subtask added under a ticket you hold, which may be `ready`:
 
     scree add "Add a test" --parent SCR-12 --status ready
+
+Decisions are for questions only a human can settle. Raise one only when the choice is costly to reverse; otherwise pick the best option, note it with a comment, and continue.
+
+    scree comment add SCR-12 "Chose a flat file layout; easy to change later"
+
+Before asking, search the decided ledger for an earlier answer:
+
+    scree decisions --decided --search "layout"
+
+If a matching open or decided Decision exists, or `decision add` prints a `similar` array, link it to your ticket instead of adding a duplicate:
+
+    scree decision link D-3 SCR-12
+
+Otherwise raise it, with the options and your recommendation (a 1-based option number):
+
+    scree decision add SCR-12 "Which layout?" --option "Flat files" --option "Nested folders" --recommend 1
+
+Never answer a Decision yourself: `decision answer` is for humans and scree refuses an agent with exit 4. Do not poll for an answer. A ticket waiting on an open Decision stops being Available; work another ticket, and report the waiting tickets to the user at the end of the session.
 
 An empty `next` that reports `blocked_pending: N` means work exists but waits on blockers, possibly in another Worktree, or on open Decisions. Show the blocker (it works from any directory) and report it; do not work on it. A ticket waiting on an open Decision lists it under `blocking_decisions`; a human answers it with `decision answer`, and the ticket becomes Available by itself:
 
