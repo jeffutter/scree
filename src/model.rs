@@ -71,6 +71,13 @@ pub struct ProjectRef {
     pub root: Option<String>,
 }
 
+/// An open Decision that blocks a ticket. `id` is `D-<n>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlockingDecision {
+    pub id: String,
+    pub question: String,
+}
+
 /// The list shape: a ticket without description, plan, criteria detail or
 /// comments. `criteria` is only the `{checked, total}` summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +86,9 @@ pub struct Ticket {
     pub available: bool,
     pub blocked: bool,
     pub blocked_by: Vec<Blocker>,
+    /// Open Decisions linked to this ticket; while any exist it is Blocked.
+    #[serde(default)]
+    pub blocking_decisions: Vec<BlockingDecision>,
     pub claim_touched_at: Option<String>,
     pub claimed_by: Option<Claimer>,
     pub created_at: String,

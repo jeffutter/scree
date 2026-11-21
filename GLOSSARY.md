@@ -22,7 +22,7 @@ A ticket's place among its siblings: the root tickets of one Scope, or the subta
 _Avoid_: Priority, rank
 
 **Blocked**
-A computed property: a ticket a dependency or a subtask still holds up. Never stored.
+A computed property: a ticket a dependency, a subtask or an open Decision still holds up. Never stored.
 
 **Dependency**
 A statement that one ticket cannot start until another is done. The waiting ticket is Blocked while the other is not done. Allowed between Worktrees of one Project, never between Projects.

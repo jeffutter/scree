@@ -10,8 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, Claimer, Comment, Commit, CriteriaSummary, Criterion, Decision, ListResult,
-    NextResult, ProjectRef, Subtask, Ticket, TicketDetail,
+    Blocker, BlockingDecision, Claimer, Comment, Commit, CriteriaSummary, Criterion, Decision,
+    ListResult, NextResult, ProjectRef, Subtask, Ticket, TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -26,6 +26,12 @@ const OPEN_BLOCKER_SQL: &str = "EXISTS (SELECT 1 FROM dependencies d
     JOIN tickets b ON b.id = d.blocked_by_id
     WHERE d.ticket_id = t.id AND b.status <> 'done')";
 
+/// SQL for a ticket (alias `t`) linked to a Decision that is still open.
+/// Decided and superseded Decisions never block.
+const OPEN_DECISION_SQL: &str = "EXISTS (SELECT 1 FROM decision_tickets dt
+    JOIN decisions d ON d.id = dt.decision_id
+    WHERE dt.ticket_id = t.id AND d.status = 'open')";
+
 /// SQL for a parent (alias `t`) with a subtask that is not settled.
 fn open_subtask_sql() -> String {
     format!(
@@ -35,11 +41,14 @@ fn open_subtask_sql() -> String {
     )
 }
 
-/// Blocked, for a ticket aliased `t`: an unfinished blocker or an unsettled
-/// subtask. `start`, `next`, `list` and `show` all use this, so they cannot
+/// Blocked, for a ticket aliased `t`: an unfinished blocker, an unsettled
+/// subtask or an open Decision. `start`, `next`, `list` and `show` all use this, so they cannot
 /// disagree about what is Available.
 fn blocked_sql() -> String {
-    format!("({OPEN_BLOCKER_SQL} OR {})", open_subtask_sql())
+    format!(
+        "({OPEN_BLOCKER_SQL} OR {OPEN_DECISION_SQL} OR {})",
+        open_subtask_sql()
+    )
 }
 
 /// Available, for a ticket aliased `t`, apart from being blocked: ready,
@@ -1969,7 +1978,20 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String, String)> 
         })?
         .collect::<std::result::Result<_, _>>()?;
 
-    let blocked = !blocked_by.is_empty();
+    let blocking_decisions: Vec<BlockingDecision> = conn
+        .prepare(
+            "SELECT d.number, d.question
+             FROM decision_tickets dt JOIN decisions d ON d.id = dt.decision_id
+             WHERE dt.ticket_id = ?1 AND d.status = 'open' ORDER BY d.number",
+        )?
+        .query_map([id], |r| {
+            Ok(BlockingDecision {
+                id: format!("D-{}", r.get::<_, i64>(0)?),
+                question: r.get(1)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    let blocked = !blocked_by.is_empty() || !blocking_decisions.is_empty();
     let available: bool = conn.query_row(
         &format!(
             "SELECT {} AND NOT {} FROM tickets t WHERE t.id = ?1",
@@ -1998,6 +2020,7 @@ fn load(conn: &Connection, id: i64) -> Result<(Ticket, String, String, String)> 
         blocked,
         available,
         blocked_by,
+        blocking_decisions,
         subtasks,
         claimed_by: row.author.map(|author| Claimer {
             author,

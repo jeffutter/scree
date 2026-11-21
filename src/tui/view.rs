@@ -261,11 +261,14 @@ fn detail_lines(
     }
 
     heading(&mut out, "Blocked by");
-    if t.blocked_by.is_empty() {
+    if t.blocked_by.is_empty() && t.blocking_decisions.is_empty() {
         plain(&mut out, "none", "  ");
     }
     for b in &t.blocked_by {
         item(&mut out, &b.status, &b.id, &b.title);
+    }
+    for b in &t.blocking_decisions {
+        item(&mut out, "open", &b.id, &b.question);
     }
     heading(&mut out, "Subtasks");
     if t.subtasks.is_empty() {

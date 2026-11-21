@@ -291,3 +291,102 @@ fn numbers_are_per_project() {
     assert_eq!(e.ok_at(&r1, &["decision", "add", &a, "2"])["id"], "D-2");
     assert_eq!(e.ok_at(&r2, &["decision", "add", &b, "1"])["id"], "D-1");
 }
+
+#[test]
+fn open_decision_blocks_start_and_lists_it() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.ticket(&repo, "a");
+    e.ok_at(&repo, &["decision", "add", &a, "Which store?"]);
+
+    let shown = e.ok_at(&repo, &["show", &a]);
+    assert_eq!(shown["blocked"], true);
+    assert_eq!(shown["available"], false);
+    assert_eq!(shown["blocked_by"], serde_json::json!([]));
+    assert_eq!(
+        shown["blocking_decisions"],
+        serde_json::json!([{"id": "D-1", "question": "Which store?"}])
+    );
+    assert_eq!(e.code_at(&repo, &["start", &a]), 4);
+
+    let blocked = e.ok_at(&repo, &["list", "--blocked"]);
+    assert_eq!(blocked["tickets"][0]["id"], a.as_str());
+    assert_eq!(blocked["tickets"][0]["blocking_decisions"][0]["id"], "D-1");
+
+    // Answering the only open decision frees it with no other change.
+    assert_eq!(e.human(&repo, &["decision", "answer", "D-1", "sqlite"]), 0);
+    let shown = e.ok_at(&repo, &["show", &a]);
+    assert_eq!(shown["blocked"], false);
+    assert_eq!(shown["available"], true);
+    assert_eq!(shown["blocking_decisions"], serde_json::json!([]));
+    assert_eq!(e.code_at(&repo, &["start", &a]), 0);
+}
+
+#[test]
+fn one_decision_blocks_several_tickets_and_two_decisions_need_both() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let (a, b, c) = (
+        e.ticket(&repo, "a"),
+        e.ticket(&repo, "b"),
+        e.ticket(&repo, "c"),
+    );
+    e.ok_at(&repo, &["decision", "add", &a, "one"]);
+    e.ok_at(&repo, &["decision", "link", "D-1", &b]);
+    e.ok_at(&repo, &["decision", "add", &c, "two"]);
+    e.ok_at(&repo, &["decision", "link", "D-2", &a]);
+    let avail = |t: &str| e.ok_at(&repo, &["show", t])["available"].clone();
+
+    assert_eq!(avail(&a), false);
+    assert_eq!(avail(&b), false);
+    assert_eq!(avail(&c), false);
+    assert_eq!(
+        e.ok_at(&repo, &["show", &a])["blocking_decisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // D-1 unblocks b (its only decision) but a still waits on D-2.
+    assert_eq!(e.human(&repo, &["decision", "answer", "D-1", "x"]), 0);
+    assert_eq!(avail(&a), false);
+    assert_eq!(avail(&b), true);
+    assert_eq!(avail(&c), false);
+    assert_eq!(e.human(&repo, &["decision", "answer", "D-2", "y"]), 0);
+    assert_eq!(avail(&a), true);
+    assert_eq!(avail(&c), true);
+}
+
+#[test]
+fn next_counts_decision_blocked_tickets_as_pending() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.ticket(&repo, "a");
+    e.ok_at(&repo, &["decision", "add", &a, "Q?"]);
+
+    let n = e.ok_at(&repo, &["--role", "agent", "next"]);
+    assert_eq!(n["tickets"], serde_json::json!([]));
+    assert_eq!(n["blocked_pending"], 1);
+
+    assert_eq!(e.human(&repo, &["decision", "answer", "D-1", "x"]), 0);
+    let n = e.ok_at(&repo, &["--role", "agent", "next"]);
+    assert_eq!(n["tickets"][0]["id"], a.as_str());
+}
+
+#[test]
+fn superseded_decision_does_not_block() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.ticket(&repo, "a");
+    e.ok_at(&repo, &["decision", "add", &a, "old"]);
+    e.ok_at(&repo, &["decision", "add", &a, "new"]);
+    for d in ["D-1", "D-2"] {
+        assert_eq!(e.human(&repo, &["decision", "answer", d, "ok"]), 0);
+    }
+    assert_eq!(
+        e.code_at(&repo, &["decision", "supersede", "D-1", "--by", "D-2"]),
+        0
+    );
+    assert_eq!(e.ok_at(&repo, &["show", &a])["available"], true);
+}

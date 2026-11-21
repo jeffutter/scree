@@ -88,6 +88,10 @@ pub fn render_text_list(list: &ListResult, color: bool) -> String {
                     s
                 })
                 .collect();
+            let names: Vec<String> = names
+                .into_iter()
+                .chain(t.blocking_decisions.iter().map(|d| d.id.clone()))
+                .collect();
             if !names.is_empty() {
                 let _ = writeln!(out, "  [blocked by {}]", names.join(", "));
             }
@@ -167,6 +171,12 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
         let _ = writeln!(out, "\nBlocked by:");
         for x in &t.blocked_by {
             let _ = writeln!(out, "{}  {}  {}", x.id, x.status, x.title);
+        }
+    }
+    if !t.blocking_decisions.is_empty() {
+        let _ = writeln!(out, "\nBlocked by decisions:");
+        for x in &t.blocking_decisions {
+            let _ = writeln!(out, "{}  {}", x.id, x.question);
         }
     }
     if !t.subtasks.is_empty() {
@@ -267,6 +277,7 @@ mod tests {
             available: false,
             blocked: false,
             blocked_by: vec![],
+            blocking_decisions: vec![],
             claim_touched_at: None,
             claimed_by: None,
             created_at: String::new(),

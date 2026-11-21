@@ -461,6 +461,7 @@ mod tests {
             archived_at: None,
             available: false,
             blocked: !blockers.is_empty(),
+            blocking_decisions: vec![],
             blocked_by: blockers
                 .iter()
                 .map(|(b, s)| Blocker {
