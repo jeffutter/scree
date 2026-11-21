@@ -2,20 +2,16 @@
 source: src/tui/view.rs
 expression: "render(&mut s, 90, 60).join(\"\\n\")"
 ---
-scree  |  all Projects  |  agent/jeff  |  8 tickets
-+draft (1)-------------------------------------------------------------------------------+
-|- SCR-9 Sketch the detail view                                                          |
-|                                                                                        |
-|                                                                                        |
-|   +help (Esc closes)--------------------------------------------------------------+    |
-|   |Board and list:                                                                |    |
-|   |  h/l, Left/Right            previous/next column (board; up/down when stacked)|    |
+scre+help (j/k scroll, Esc closes) - more below-------------------------------------+
++dra|Board and list:                                                                |----+
+|- S|  h/l, Left/Right            previous/next column (board; up/down when stacked)|    |
 |   |  j/k, Down/Up               next/previous row                                 |    |
 |   |  PgUp/PgDn                  page up/down                                      |    |
 |   |  Ctrl-u/Ctrl-d              half page up/down                                 |    |
 |   |  g/G, Home/End              first/last row                                    |    |
 |   |  Enter                      open ticket detail                                |    |
 |   |  Tab                        switch board/list                                 |    |
+|   |  W                          open decisions view                               |    |
 |   |  c                          hide/show closed columns                          |    |
 |   |  a                          show/hide archived                                |    |
 |   |  s                          cycle scope worktree/project/all                  |    |
@@ -46,19 +42,23 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 |   |  ?                          this help                                         |    |
 |   |  Ctrl-c                     quit                                              |    |
 |   |                                                                               |    |
-|   |Popups and prompts:                                                            |    |
-+---|  Filter: s f b              cycle status / for / blocked                      |----+
-+rea|  Filter: x                  clear all filters                                 |----+
-|o S|  Filter: Esc, Enter         close                                             |    |
-+---|  Picker: type               filter tickets                                    |----+
-+act|  Picker: Up/Down, Ctrl-p/n  move                                              |----+
-|* S|  Picker: Enter, Esc         apply, cancel                                     |    |
-+---|  Prompt: Enter, Esc         save, cancel                                      |----+
-+don|  Confirm: y, Enter          confirm; any other key cancels                    |----+
-|+ S|  Help: Esc, ?, q            close                                             |    |
-+---+-------------------------------------------------------------------------------+----+
-+abandoned (1)---------------------------------------------------------------------------+
-|x SCR-1 Typed tickets                                                                   |
-+----------------------------------------------------------------------------------------+
-[Enter] open | [Tab] board/list | [h/l] column | [j/k] row | [PgUp/PgDn] page
-[g/G] first/last | [/] search | [f] filter | [c] hide closed | [a] archived | [s] scope
+|   |Decisions:                                                                     |    |
+|   |  j/k, PgUp/PgDn             next/previous decision, page                      |    |
+|   |  Ctrl-u/Ctrl-d              half page up/down                                 |    |
+|   |  g/G, Home/End              first/last decision                               |    |
+|   |  y                          accept the recommendation (confirm)               |    |
++---|  a                          answer with typed text (prompt)                   |----+
++rea|  t                          open the linked ticket (picker when several)      |----+
+|o S|  s                          cycle scope worktree/project/all                  |    |
++---|  Esc, q, h, Left, Tab, W    back to board/list                                |----+
++act|  ?                          this help                                         |----+
+|* S|  Ctrl-c                     quit                                              |    |
++---|                                                                               |----+
++don|Popups and prompts:                                                            |----+
+|+ S|  Filter: s f b              cycle status / for / blocked                      |    |
++---|  Filter: x                  clear all filters                                 |----+
++aba|  Filter: Esc, Enter         close                                             |----+
+|x S|  Picker: type               filter tickets                                    |    |
++---|  Picker: Up/Down, Ctrl-p/n  move                                              |----+
+[Ent|  Picker: Enter, Esc         apply, cancel                                     |
+[g/G+-------------------------------------------------------------------------------+pe

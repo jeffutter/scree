@@ -8,6 +8,7 @@ use rusqlite::Connection;
 
 use super::state::{Effect, Event, Lifecycle, LoadSpec, ScopeMode, TextField};
 use crate::cli::{ListArgs, ScopeArgs, Status};
+use crate::decision;
 use crate::identity::Identity;
 use crate::ticket;
 
@@ -57,6 +58,30 @@ pub fn run_effect(
                 .map(|r| r.tickets)
                 .map_err(|e| e.to_string()),
         ),
+        Effect::LoadDecisions(mode) => Event::DecisionsLoaded(
+            decision::open_queue(conn, cwd, &scope_args(mode, project_root))
+                .map(|r| r.decisions)
+                .map_err(|e| e.to_string()),
+        ),
+        Effect::AnswerDecision { id, text } => {
+            let ctx = decision::Ctx {
+                cwd,
+                project: project_root,
+            };
+            Event::ActionDone(
+                decision::answer(
+                    conn,
+                    &ctx,
+                    &id,
+                    text.as_deref(),
+                    text.is_none(),
+                    None,
+                    identity,
+                )
+                .map(|_| format!("{id} answered"))
+                .map_err(|e| e.to_string()),
+            )
+        }
         Effect::LoadDescriptions => {
             Event::DescriptionsLoaded(ticket::descriptions(conn).map_err(|e| e.to_string()))
         }
@@ -391,6 +416,117 @@ mod tests {
             let titles: Vec<_> = ts.iter().map(|t| t.title.as_str()).collect();
             assert_eq!(titles, ["in-b"], "{mode:?}");
         }
+    }
+
+    #[test]
+    fn decisions_load_and_answer_record_the_human() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = crate::db::open(&dir.path().join("t.db")).unwrap();
+        let t = ticket::add(
+            &mut conn,
+            &Scope::Unscoped,
+            &NewTicket {
+                title: "t",
+                description: "",
+                plan: "",
+                criteria: &[],
+                for_who: ForWho::Agent,
+                status: NewStatus::Ready,
+                key: None,
+                parent: None,
+                blocked_by: &[],
+            },
+        )
+        .unwrap()
+        .ticket
+        .id;
+        let opts = ["a".to_string(), "b".to_string()];
+        decision::add(&mut conn, &t, "Which?", &opts, Some(2), &agent()).unwrap();
+        decision::add(&mut conn, &t, "Other?", &[], None, &agent()).unwrap();
+        let human = Identity {
+            role: Role::Human,
+            author: "pat".into(),
+            session: None,
+        };
+        let load = |conn: &mut Connection| {
+            let Event::DecisionsLoaded(Ok(d)) = run_effect(
+                conn,
+                dir.path(),
+                None,
+                &human,
+                Effect::LoadDecisions(ScopeMode::AllProjects),
+            ) else {
+                panic!("load failed");
+            };
+            d
+        };
+        let d = load(&mut conn);
+        assert_eq!(d.len(), 2);
+        let key = crate::tui::state::decision_key(&d[0]);
+
+        // An agent is refused by the library, and nothing changes.
+        let Event::ActionDone(Err(e)) = run_effect(
+            &mut conn,
+            dir.path(),
+            None,
+            &agent(),
+            Effect::AnswerDecision {
+                id: key.clone(),
+                text: None,
+            },
+        ) else {
+            panic!("agent should be refused");
+        };
+        assert!(!e.is_empty());
+        assert_eq!(load(&mut conn).len(), 2);
+
+        // Accepting records the recommendation and the human.
+        let Event::ActionDone(Ok(_)) = run_effect(
+            &mut conn,
+            dir.path(),
+            None,
+            &human,
+            Effect::AnswerDecision {
+                id: key.clone(),
+                text: None,
+            },
+        ) else {
+            panic!("accept failed");
+        };
+        let by: String = conn
+            .query_row(
+                "SELECT decided_by FROM decisions WHERE number = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(by, "pat");
+        let rest = load(&mut conn);
+        assert_eq!(rest.len(), 1);
+
+        // Typed text answers the other.
+        let key2 = crate::tui::state::decision_key(&rest[0]);
+        let Event::ActionDone(Ok(_)) = run_effect(
+            &mut conn,
+            dir.path(),
+            None,
+            &human,
+            Effect::AnswerDecision {
+                id: key2,
+                text: Some("custom".into()),
+            },
+        ) else {
+            panic!("answer failed");
+        };
+        let (ans, by): (String, String) = conn
+            .query_row(
+                "SELECT answer, decided_by FROM decisions WHERE number = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((ans.as_str(), by.as_str()), ("custom", "pat"));
+        assert!(load(&mut conn).is_empty());
     }
 
     #[test]

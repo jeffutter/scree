@@ -3,15 +3,15 @@ source: src/tui/view.rs
 expression: "bottom.join(\"\\n\")"
 ---
 +help (j/k scroll, Esc closes) - end-------------------------------------------+
-|  g/G                        top/bottom                                       |
-|  [ ]                        select previous/next criterion or comment        |
-|  Space, v                   check (evidence prompt) / uncheck                |
-|  n                          add criterion                                    |
-|  m M                        add comment in prompt / editor                   |
-|  X                          remove criterion or comment (confirm)            |
-|  b B                        add / remove blocker                             |
-|  r S R d D x o A e E P      as on the board                                  |
-|  Esc, q, h, Left            back to board/list                               |
+|Decisions:                                                                    |
+|  j/k, PgUp/PgDn             next/previous decision, page                     |
+|  Ctrl-u/Ctrl-d              half page up/down                                |
+|  g/G, Home/End              first/last decision                              |
+|  y                          accept the recommendation (confirm)              |
+|  a                          answer with typed text (prompt)                  |
+|  t                          open the linked ticket (picker when several)     |
+|  s                          cycle scope worktree/project/all                 |
+|  Esc, q, h, Left, Tab, W    back to board/list                               |
 |  ?                          this help                                        |
 |  Ctrl-c                     quit                                             |
 |                                                                              |

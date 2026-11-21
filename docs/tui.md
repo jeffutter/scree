@@ -9,6 +9,7 @@ It runs as Role human with author `human` unless `--role`, `--author` or their `
 - Board: one column per status (draft, ready, active, done, abandoned). Empty columns collapse to a strip that still shows the full status name. When the terminal is too narrow for the columns to stay readable side by side (each expanded column needs 22 cells, each strip 11, wide enough for the full status name), the columns are stacked top to bottom instead, each using the full width; empty ones collapse to a short pane, and the focused column is guaranteed at least 5 rows (less only when the whole area is shorter) and the other panes shrink first, populated ones keeping their border rows before empty ones, so its selected row stays visible on short terminals. The layout is chosen on every draw, so resizing switches it without a restart. `h`/`l` still move to the previous/next column, which is up/down on screen in the stacked layout.
 - List: one row per ticket. `Tab` switches between board and list.
 - Detail: `Enter` opens the selected ticket full-pane: every field, blocked-by, subtasks, criteria with evidence and comments. Description, Plan and comment bodies render as Markdown (headings, emphasis, code, lists, quotes, tables as " | "-joined rows; inline code keeps its spaces); titles, criteria and ids stay plain. Esc, `q`, `h` or Left return to the board or list.
+- Decisions: `W` opens the queue of open decisions, in the order of `scree decisions --open` (most tickets unblocked first), each row showing its id, "unblocks N" and the question. The selected decision's options, recommendation and linked tickets show below it. `Esc`, `q`, `h`, Left, `Tab` or `W` return to the board or list you came from.
 
 The header shows the scope, the caller and the ticket count.
 
@@ -29,6 +30,7 @@ Board and list:
 | `g`/`G`, Home/End | first/last row |
 | Enter | open ticket detail |
 | Tab | switch board/list |
+| `W` | open decisions view |
 | `c` | hide/show closed columns |
 | `a` | show/hide archived |
 | `s` | cycle scope |
@@ -62,6 +64,21 @@ Detail:
 | `?` | help |
 | Ctrl-c | quit |
 
+Decisions:
+
+| Key | Action |
+| --- | --- |
+| `j`/`k`, PgUp/PgDn | next/previous decision, page |
+| Ctrl-u/Ctrl-d | half page up/down |
+| `g`/`G`, Home/End | first/last decision |
+| `y` | accept the recommendation (confirm) |
+| `a` | answer with typed text (prompt) |
+| `t` | open the linked ticket (picker when several) |
+| `s` | cycle scope |
+| Esc, `q`, `h`, Left, Tab, `W` | back to board/list |
+| `?` | help |
+| Ctrl-c | quit |
+
 Popups and prompts:
 
 | Key | Action |
@@ -79,6 +96,8 @@ Popups and prompts:
 
 Lifecycle keys act on the selected ticket and only when valid for its status. `D` and `x` ask for `y` first; abandon uses the fixed reason "abandoned from tui". Refusals appear in the status line. The footer lists the keys valid for the current view and selection.
 
+Answering and accepting call the same library code as `scree decision answer`, so they record the TUI's caller as `decided_by`, and a TUI started as an agent is refused with the library's message in the status line. A decision with no recommendation refuses `y`. An empty typed answer is refused. Answering removes the decision from the queue; if another process answers or supersedes it first, the view reloads and the selection moves to the neighbouring decision.
+
 ## Search and filters
 
 `/` opens a live search over id, title and description (case-insensitive substring, applied client-side; results update per keystroke). Enter keeps the query, Esc clears it. `f` opens a filter popup for status, for and blocked/available. Active filters AND together and show in a row under the header; Esc on the board or list clears them all.
@@ -91,7 +110,7 @@ Blockers are chosen in a filterable picker; self edges, cycles and cross-Project
 
 ## Live refresh
 
-The TUI polls `PRAGMA data_version` and reloads within about a second when another process writes the database. The selection is kept by id, as are any open prompt, popup or picker.
+The TUI polls `PRAGMA data_version` and reloads within about a second when another process writes the database. The selection is kept by id, as are any open prompt, popup or picker. In the decisions view the queue reloads too.
 
 ## Structure
 

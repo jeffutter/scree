@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use super::theme::Theme;
 use super::widgets::{Prompt, PromptOutcome};
 use crate::cli::Status;
-use crate::model::{Ticket, TicketDetail};
+use crate::model::{OpenDecision, Ticket, TicketDetail};
 use crate::scope::Scope;
 
 /// Board columns, left to right. Derived from [`Status::ALL`], so the board
@@ -66,6 +66,13 @@ pub enum View {
     #[default]
     Board,
     List,
+    /// The open-decisions queue; `State::back_view` is where Esc returns.
+    Decisions,
+}
+
+/// The full id of a decision, as the library's `locate` accepts it.
+pub fn decision_key(d: &OpenDecision) -> String {
+    format!("{}-{}", d.project.key, d.id)
 }
 
 /// One line of the list view, in display order.
@@ -225,8 +232,14 @@ pub struct Confirm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
     Lifecycle(Lifecycle),
-    RemoveCriterion { number: i64 },
-    RemoveComment { comment_id: i64 },
+    RemoveCriterion {
+        number: i64,
+    },
+    RemoveComment {
+        comment_id: i64,
+    },
+    /// Accept the recommendation of the decision in `Confirm::id`.
+    AcceptDecision,
 }
 
 /// A ticket text field the prompt or $EDITOR edits.
@@ -250,6 +263,8 @@ pub enum PromptField {
     Criterion,
     /// Body of a new comment.
     Comment,
+    /// Typed answer to the decision in `PromptState::id`.
+    DecisionAnswer,
 }
 
 /// An open one-line prompt and the ticket it edits.
@@ -267,6 +282,8 @@ pub struct PromptState {
 pub enum PickerMode {
     Add,
     Remove,
+    /// Choose which linked ticket of decision `id` to open.
+    Jump,
 }
 
 /// An open filterable ticket list choosing a blocker for `id`.
@@ -366,6 +383,13 @@ pub struct State {
     pub help: bool,
     /// First help line shown; the view clamps it to the content on draw.
     pub help_scroll: u16,
+    /// The open decisions, in the order of `scree decisions --open`.
+    pub decisions: Vec<OpenDecision>,
+    /// Selected decision by `decision_key`; survives reloads.
+    pub decision_sel: Option<String>,
+    pub decisions_offset: usize,
+    /// The view the decisions view returns to.
+    pub back_view: View,
 }
 
 impl Default for State {
@@ -398,6 +422,10 @@ impl Default for State {
             filter_menu: false,
             help: false,
             help_scroll: 0,
+            decisions: vec![],
+            decision_sel: None,
+            decisions_offset: 0,
+            back_view: View::Board,
         }
     }
 }
@@ -411,6 +439,38 @@ impl State {
             who,
             theme,
             ..State::default()
+        }
+    }
+
+    /// Effects that refresh what is on screen: the tickets, plus the
+    /// decisions queue while that view is open.
+    fn reload_effects(&self) -> Vec<Effect> {
+        let mut fx = vec![Effect::Reload(self.load_spec())];
+        if self.view == View::Decisions {
+            fx.push(Effect::LoadDecisions(self.mode));
+        }
+        if self.wants_descriptions() {
+            fx.push(Effect::LoadDescriptions);
+        }
+        fx
+    }
+
+    /// Position of the selected decision in `decisions`.
+    pub fn decision_pos(&self) -> Option<usize> {
+        let sel = self.decision_sel.as_deref()?;
+        self.decisions.iter().position(|d| decision_key(d) == sel)
+    }
+
+    /// The selected decision.
+    pub fn selected_decision(&self) -> Option<&OpenDecision> {
+        self.decisions.get(self.decision_pos()?)
+    }
+
+    fn move_decision(&mut self, f: impl FnOnce(usize, usize) -> usize) {
+        let len = self.decisions.len();
+        if len > 0 {
+            let cur = self.decision_pos().unwrap_or(0);
+            self.decision_sel = Some(decision_key(&self.decisions[f(cur, len).min(len - 1)]));
         }
     }
 
@@ -673,6 +733,7 @@ pub enum Event {
     Loaded(Result<Vec<Ticket>, String>),
     DetailLoaded(Result<Box<TicketDetail>, String>),
     DescriptionsLoaded(Result<HashMap<String, String>, String>),
+    DecisionsLoaded(Result<Vec<OpenDecision>, String>),
     /// A lifecycle action finished: Ok is a success message, Err the library's
     /// refusal text.
     ActionDone(Result<String, String>),
@@ -688,6 +749,14 @@ pub enum Effect {
     LoadDetail(String),
     /// Fetch every ticket's description, for search.
     LoadDescriptions,
+    /// Fetch the open decisions queue for a scope mode.
+    LoadDecisions(ScopeMode),
+    /// Answer decision `id` (its full key): with `text`, or None to accept
+    /// the recommendation.
+    AnswerDecision {
+        id: String,
+        text: Option<String>,
+    },
     /// Apply a lifecycle action to the ticket with this id.
     Transition {
         id: String,
@@ -816,22 +885,38 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
             state.error = Some(e);
             vec![]
         }
+        Event::DecisionsLoaded(Ok(decisions)) => {
+            // As for tickets: if the selection vanished (answered elsewhere),
+            // move to the next survivor in the old order, else the previous.
+            let old: Vec<String> = state.decisions.iter().map(decision_key).collect();
+            state.decisions = decisions;
+            let alive = |st: &State, k: &String| st.decisions.iter().any(|d| decision_key(d) == *k);
+            if let Some(sel) = state.decision_sel.clone()
+                && !alive(state, &sel)
+                && let Some(pos) = old.iter().position(|k| *k == sel)
+            {
+                state.decision_sel = old[pos + 1..]
+                    .iter()
+                    .find(|k| alive(state, k))
+                    .or_else(|| old[..pos].iter().rev().find(|k| alive(state, k)))
+                    .cloned();
+            }
+            if state.decision_pos().is_none() {
+                state.decision_sel = state.decisions.first().map(decision_key);
+            }
+            state.error = None;
+            vec![]
+        }
+        Event::DecisionsLoaded(Err(e)) => {
+            state.error = Some(e);
+            vec![]
+        }
         Event::ActionDone(Ok(msg)) => {
             state.notice = Some(msg);
             state.error = None;
-            let mut fx = vec![Effect::Reload(state.load_spec())];
-            if state.wants_descriptions() {
-                fx.push(Effect::LoadDescriptions);
-            }
-            fx
+            state.reload_effects()
         }
-        Event::DbChanged => {
-            let mut fx = vec![Effect::Reload(state.load_spec())];
-            if state.wants_descriptions() {
-                fx.push(Effect::LoadDescriptions);
-            }
-            fx
-        }
+        Event::DbChanged => state.reload_effects(),
         Event::ActionDone(Err(e)) => {
             state.notice = None;
             state.error = Some(e);
@@ -1051,17 +1136,23 @@ fn on_prompt_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
                     number,
                     evidence: (!text.trim().is_empty()).then_some(text),
                 }],
-                PromptField::Criterion | PromptField::Comment if text.trim().is_empty() => {
+                PromptField::Criterion | PromptField::Comment | PromptField::DecisionAnswer
+                    if text.trim().is_empty() =>
+                {
                     state.error = Some(
-                        if p.field == PromptField::Criterion {
-                            "criterion must not be empty"
-                        } else {
-                            "comment must not be empty"
+                        match p.field {
+                            PromptField::Criterion => "criterion must not be empty",
+                            PromptField::Comment => "comment must not be empty",
+                            _ => "answer must not be empty",
                         }
                         .into(),
                     );
                     vec![]
                 }
+                PromptField::DecisionAnswer => vec![Effect::AnswerDecision {
+                    id: p.id,
+                    text: Some(text),
+                }],
                 PromptField::Criterion => vec![Effect::AddCriterion { id: p.id, text }],
                 PromptField::Comment => vec![Effect::AddComment {
                     id: p.id,
@@ -1113,6 +1204,7 @@ fn reorder_key(state: &mut State, up: bool) -> Vec<Effect> {
             .filter(|t| sibling(t))
             .map(|t| t.id.as_str())
             .collect(),
+        View::Decisions => return vec![],
         View::List => state
             .list_order()
             .into_iter()
@@ -1165,12 +1257,14 @@ fn picker_key(state: &mut State, c: char) -> Option<Vec<Effect>> {
             .iter()
             .map(|b| (b.id.clone(), b.title.clone()))
             .collect(),
+        PickerMode::Jump => unreachable!("jump pickers are built by decisions_key"),
     };
     if candidates.is_empty() {
         state.error = Some(
             match mode {
                 PickerMode::Add => "no tickets to add as a blocker",
                 PickerMode::Remove => "this ticket has no blockers to remove",
+                PickerMode::Jump => unreachable!("jump pickers are built by decisions_key"),
             }
             .into(),
         );
@@ -1216,6 +1310,7 @@ fn on_picker_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
                 return vec![match p.mode {
                     PickerMode::Add => Effect::AddDep { id, blocker },
                     PickerMode::Remove => Effect::RemoveDep { id, blocker },
+                    PickerMode::Jump => Effect::LoadDetail(blocker),
                 }];
             }
         }
@@ -1238,6 +1333,10 @@ fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
             ConfirmAction::RemoveComment { comment_id } => Effect::RemoveComment {
                 id: c.id,
                 comment_id,
+            },
+            ConfirmAction::AcceptDecision => Effect::AnswerDecision {
+                id: c.id,
+                text: None,
             },
         }],
         _ => vec![],
@@ -1271,6 +1370,97 @@ fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         (KeyCode::Char('d'), true) => d.scroll = d.scroll.saturating_add(half),
         (KeyCode::Home | KeyCode::Char('g'), false) => d.scroll = 0,
         (KeyCode::End | KeyCode::Char('G'), false) => d.scroll = usize::MAX,
+        _ => {}
+    }
+    vec![]
+}
+
+/// Keys in the decisions view. `y` asks to accept the recommendation, `a`
+/// opens the answer prompt, `t` opens the linked ticket (a picker when there
+/// are several). Esc, `q`, `h`, Left, Tab and `W` go back.
+fn on_decisions_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    let page = state.page;
+    let half = (page / 2).max(1);
+    match (k.code, ctrl) {
+        (
+            KeyCode::Esc
+            | KeyCode::Tab
+            | KeyCode::BackTab
+            | KeyCode::Left
+            | KeyCode::Char('q' | 'h' | 'W'),
+            false,
+        ) => {
+            state.view = state.back_view;
+            state.reselect();
+        }
+        (KeyCode::Up | KeyCode::Char('k'), false) => {
+            state.move_decision(|r, _| r.saturating_sub(1));
+        }
+        (KeyCode::Down | KeyCode::Char('j'), false) => state.move_decision(|r, _| r + 1),
+        (KeyCode::PageUp, _) => state.move_decision(|r, _| r.saturating_sub(page)),
+        (KeyCode::PageDown, _) => state.move_decision(|r, _| r + page),
+        (KeyCode::Char('u'), true) => state.move_decision(|r, _| r.saturating_sub(half)),
+        (KeyCode::Char('d'), true) => state.move_decision(|r, _| r + half),
+        (KeyCode::Home | KeyCode::Char('g'), false) => state.move_decision(|_, _| 0),
+        (KeyCode::End | KeyCode::Char('G'), false) => state.move_decision(|_, len| len - 1),
+        (KeyCode::Char('s'), false) if state.cycle_scope() => return state.reload_effects(),
+        (KeyCode::Char('y'), false) => {
+            let Some(d) = state.selected_decision() else {
+                return vec![];
+            };
+            let id = decision_key(d);
+            match d.recommendation.clone() {
+                Some(rec) => {
+                    state.confirm = Some(Confirm {
+                        prompt: format!("accept \"{rec}\" for {id}?"),
+                        id,
+                        action: ConfirmAction::AcceptDecision,
+                    });
+                }
+                None => state.error = Some(format!("{id} has no recommendation to accept")),
+            }
+        }
+        (KeyCode::Char('a'), false) => {
+            if let Some(d) = state.selected_decision() {
+                state.prompt = Some(PromptState {
+                    id: decision_key(d),
+                    field: PromptField::DecisionAnswer,
+                    seed: String::new(),
+                    prompt: Prompt::new("answer", ""),
+                });
+            }
+        }
+        (KeyCode::Char('t'), false) => {
+            let Some(d) = state.selected_decision() else {
+                return vec![];
+            };
+            match d.tickets.as_slice() {
+                [] => state.error = Some(format!("{} has no linked tickets", decision_key(d))),
+                [one] => return vec![Effect::LoadDetail(one.clone())],
+                many => {
+                    let candidates = many
+                        .iter()
+                        .map(|id| {
+                            let title = state
+                                .tickets
+                                .iter()
+                                .find(|t| t.id == *id)
+                                .map(|t| t.title.clone())
+                                .unwrap_or_default();
+                            (id.clone(), title)
+                        })
+                        .collect();
+                    state.picker = Some(Picker {
+                        id: decision_key(d),
+                        mode: PickerMode::Jump,
+                        filter: String::new(),
+                        candidates,
+                        sel: 0,
+                    });
+                }
+            }
+        }
         _ => {}
     }
     vec![]
@@ -1325,6 +1515,9 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     if state.detail.is_some() {
         return on_detail_key(state, k);
     }
+    if state.view == View::Decisions {
+        return on_decisions_key(state, k);
+    }
     if k.modifiers.contains(KeyModifiers::SHIFT)
         && let KeyCode::Up | KeyCode::Down = k.code
     {
@@ -1339,6 +1532,11 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
             'f' => {
                 state.filter_menu = true;
                 return vec![];
+            }
+            'W' => {
+                state.back_view = state.view;
+                state.view = View::Decisions;
+                return vec![Effect::LoadDecisions(state.mode)];
             }
             _ => {}
         }
@@ -1376,7 +1574,7 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         (KeyCode::Tab | KeyCode::BackTab, _) => {
             state.view = match state.view {
                 View::Board => View::List,
-                View::List => View::Board,
+                View::List | View::Decisions => View::Board,
             };
             state.reselect();
         }
@@ -2886,5 +3084,189 @@ mod tests {
         );
         update(&mut s, Event::Loaded(Ok(sample())));
         assert_eq!(all_ids(&s), ["R2"]);
+    }
+
+    fn decision(n: i64, rec: Option<&str>, tickets: &[&str]) -> OpenDecision {
+        serde_json::from_value(serde_json::json!({
+            "created_at": "", "id": format!("D-{n}"), "number": n,
+            "options": ["x", "y"], "project": {"key": "SCR", "root": "/r"},
+            "question": format!("question {n}"), "recommendation": rec,
+            "tickets": tickets, "unblocks": 1
+        }))
+        .unwrap()
+    }
+
+    fn in_decisions(ds: Vec<OpenDecision>) -> State {
+        let mut s = loaded(vec![press('W')]);
+        update(&mut s, Event::DecisionsLoaded(Ok(ds)));
+        s
+    }
+
+    fn three() -> Vec<OpenDecision> {
+        vec![
+            decision(1, Some("x"), &["R1"]),
+            decision(2, None, &[]),
+            decision(3, Some("y"), &["R1", "R2"]),
+        ]
+    }
+
+    #[test]
+    fn w_enters_decisions_and_loads_then_esc_returns() {
+        let mut s = loaded(vec![code(KeyCode::Tab)]);
+        let fx = update(&mut s, press('W'));
+        assert_eq!(s.view, View::Decisions);
+        assert_eq!(fx, vec![Effect::LoadDecisions(s.mode)]);
+        update(&mut s, code(KeyCode::Esc));
+        assert_eq!(s.view, View::List);
+        update(&mut s, press('W'));
+        update(&mut s, press('W'));
+        assert_eq!(s.view, View::List);
+        update(&mut s, press('W'));
+        update(&mut s, code(KeyCode::Tab));
+        assert_eq!(s.view, View::List);
+    }
+
+    #[test]
+    fn decisions_selection_follows_id_and_neighbour() {
+        let mut s = in_decisions(three());
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-1"));
+        update(&mut s, press('j'));
+        update(&mut s, press('j'));
+        update(&mut s, press('j'));
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-3"));
+        update(&mut s, press('g'));
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-1"));
+        update(&mut s, press('G'));
+        update(&mut s, press('k'));
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-2"));
+        // Reordered queue: selection stays on D-2.
+        let mut ds = three();
+        ds.reverse();
+        update(&mut s, Event::DecisionsLoaded(Ok(ds)));
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-2"));
+        // D-2 answered elsewhere: the next survivor in the old order.
+        update(
+            &mut s,
+            Event::DecisionsLoaded(Ok(vec![decision(3, None, &[]), decision(1, None, &[])])),
+        );
+        assert_eq!(s.decision_sel.as_deref(), Some("SCR-D-1"));
+        update(&mut s, Event::DecisionsLoaded(Ok(vec![])));
+        assert_eq!(s.decision_sel, None);
+    }
+
+    #[test]
+    fn reload_events_also_load_decisions_only_in_that_view() {
+        let mut s = in_decisions(three());
+        let fx = update(&mut s, Event::DbChanged);
+        assert!(fx.contains(&Effect::LoadDecisions(s.mode)));
+        let fx = update(&mut s, Event::ActionDone(Ok("x".into())));
+        assert!(fx.contains(&Effect::LoadDecisions(s.mode)));
+        let mut b = loaded(vec![]);
+        let fx = update(&mut b, Event::DbChanged);
+        assert!(!fx.iter().any(|e| matches!(e, Effect::LoadDecisions(_))));
+    }
+
+    #[test]
+    fn y_confirms_then_accepts_the_recommendation() {
+        let mut s = in_decisions(three());
+        let fx = update(&mut s, press('y'));
+        assert!(fx.is_empty() && s.confirm.is_some());
+        assert_eq!(
+            update(&mut s, press('y')),
+            vec![Effect::AnswerDecision {
+                id: "SCR-D-1".into(),
+                text: None
+            }]
+        );
+        // Any other key cancels.
+        update(&mut s, press('y'));
+        assert!(update(&mut s, press('n')).is_empty());
+        assert!(s.confirm.is_none());
+    }
+
+    #[test]
+    fn y_without_recommendation_errors_and_does_nothing() {
+        let mut s = in_decisions(three());
+        update(&mut s, press('j'));
+        let fx = update(&mut s, press('y'));
+        assert!(fx.is_empty() && s.confirm.is_none());
+        assert!(s.error.as_deref().unwrap().contains("no recommendation"));
+    }
+
+    #[test]
+    fn a_prompts_for_text_and_refuses_empty() {
+        let mut s = in_decisions(three());
+        update(&mut s, press('a'));
+        assert!(s.prompt.is_some());
+        let fx = update(&mut s, code(KeyCode::Enter));
+        assert!(fx.is_empty() && s.prompt.is_none());
+        assert_eq!(s.error.as_deref(), Some("answer must not be empty"));
+        update(&mut s, press('a'));
+        update(&mut s, press('o'));
+        update(&mut s, press('k'));
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::AnswerDecision {
+                id: "SCR-D-1".into(),
+                text: Some("ok".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn t_opens_one_ticket_or_a_picker_for_several() {
+        let mut s = in_decisions(three());
+        assert_eq!(
+            update(&mut s, press('t')),
+            vec![Effect::LoadDetail("R1".into())]
+        );
+        update(&mut s, press('j'));
+        assert!(update(&mut s, press('t')).is_empty());
+        assert!(s.error.as_deref().unwrap().contains("no linked tickets"));
+        update(&mut s, press('j'));
+        assert!(update(&mut s, press('t')).is_empty());
+        let p = s.picker.as_ref().unwrap();
+        assert_eq!(p.mode, PickerMode::Jump);
+        assert_eq!(p.candidates.len(), 2);
+        update(&mut s, ctrl('n'));
+        assert_eq!(
+            update(&mut s, code(KeyCode::Enter)),
+            vec![Effect::LoadDetail("R2".into())]
+        );
+    }
+
+    #[test]
+    fn detail_opened_from_decisions_returns_to_decisions() {
+        let mut s = in_decisions(three());
+        assert_eq!(s.view, View::Decisions);
+        update(&mut s, press('t'));
+        update(&mut s, Event::DetailLoaded(Ok(Box::new(detail_of("R1")))));
+        assert!(s.detail.is_some());
+        update(&mut s, code(KeyCode::Esc));
+        assert!(s.detail.is_none());
+        assert_eq!(s.view, View::Decisions);
+    }
+
+    #[test]
+    fn decisions_view_ignores_ticket_keys_and_ctrl_c_quits() {
+        let mut s = in_decisions(three());
+        for c in ['S', 'd', 'x', '/', 'f', 'e', 'c'] {
+            assert!(update(&mut s, press(c)).is_empty(), "{c}");
+        }
+        assert!(!s.filter_menu && s.search.is_none() && s.prompt.is_none());
+        update(&mut s, ctrl('c'));
+        assert!(s.should_quit);
+    }
+
+    #[test]
+    fn s_in_decisions_reloads_for_the_new_scope() {
+        let mut s = in_decisions(three());
+        s.scope = Scope::Checkout {
+            root: PathBuf::from("/r"),
+        };
+        s.mode = ScopeMode::Project;
+        let fx = update(&mut s, press('s'));
+        assert_eq!(s.mode, ScopeMode::AllProjects);
+        assert!(fx.contains(&Effect::LoadDecisions(ScopeMode::AllProjects)));
     }
 }

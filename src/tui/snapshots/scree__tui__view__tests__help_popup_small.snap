@@ -11,6 +11,7 @@ expression: "top.join(\"\\n\")"
 |  g/G, Home/End              first/last row                                   |
 |  Enter                      open ticket detail                               |
 |  Tab                        switch board/list                                |
+|  W                          open decisions view                              |
 |  c                          hide/show closed columns                         |
 |  a                          show/hide archived                               |
 |  s                          cycle scope worktree/project/all                 |
@@ -24,5 +25,4 @@ expression: "top.join(\"\\n\")"
 |  e                          edit title                                       |
 |  E P                        edit description / plan in editor                |
 |  ?                          this help                                        |
-|  q, Ctrl-c                  quit                                             |
 +------------------------------------------------------------------------------+

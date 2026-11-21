@@ -1,0 +1,28 @@
+---
+source: src/tui/view.rs
+expression: "render(&mut s, 90, 24).join(\"\\n\")"
+---
+scree  |  all Projects  |  agent/jeff  |  8 tickets
++decisions (2)---------------------------------------------------------------------------+
+|SCR-D-4   unblocks  3  Which store backs the cache?                                     |
+|SCR-D-2   unblocks  1  Should the export be JSON or CSV?                                |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
+|                                                                                        |
++----------------------------------------------------------------------------------------+
++SCR-D-4---------------------------------------------------------------------------------+
+|Which store backs the cache?                                                            |
+|  1. Keep sqlite                                                                        |
+|  2. Move to postgres                                                                   |
+|recommended: Keep sqlite                                                                |
+|tickets: SCR-7, SCR-8                                                                   |
+|                                                                                        |
++----------------------------------------------------------------------------------------+
+[Esc/q] back | [j/k] row | [g/G] first/last | [y] accept | [a] answer | [t] ticket
+[s] scope | [?] help

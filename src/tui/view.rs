@@ -9,7 +9,7 @@ use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph};
 use super::markdown::markdown_lines;
 use super::state::{
     Avail, Detail, DetailCache, DetailSel, Filter, ListEntry, Picker, PickerMode, STATUSES, State,
-    View, allowed,
+    View, allowed, decision_key,
 };
 use super::text::{cell, clean};
 use super::theme::Theme;
@@ -49,6 +49,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("g/G, Home/End", "first/last row"),
             ("Enter", "open ticket detail"),
             ("Tab", "switch board/list"),
+            ("W", "open decisions view"),
             ("c", "hide/show closed columns"),
             ("a", "show/hide archived"),
             ("s", "cycle scope worktree/project/all"),
@@ -84,6 +85,21 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Decisions",
+        &[
+            ("j/k, PgUp/PgDn", "next/previous decision, page"),
+            ("Ctrl-u/Ctrl-d", "half page up/down"),
+            ("g/G, Home/End", "first/last decision"),
+            ("y", "accept the recommendation (confirm)"),
+            ("a", "answer with typed text (prompt)"),
+            ("t", "open the linked ticket (picker when several)"),
+            ("s", "cycle scope worktree/project/all"),
+            ("Esc, q, h, Left, Tab, W", "back to board/list"),
+            ("?", "this help"),
+            ("Ctrl-c", "quit"),
+        ],
+    ),
+    (
         "Popups and prompts",
         &[
             ("Filter: s f b", "cycle status / for / blocked"),
@@ -112,6 +128,17 @@ const HINTS_DETAIL: [(&str, &str); 11] = [
     ("m/M", "comment"),
     ("X", "remove"),
     ("b/B", "add/rm blocker"),
+    ("?", "help"),
+];
+
+const HINTS_DECISIONS: [(&str, &str); 8] = [
+    ("Esc/q", "back"),
+    ("j/k", "row"),
+    ("g/G", "first/last"),
+    ("y", "accept"),
+    ("a", "answer"),
+    ("t", "ticket"),
+    ("s", "scope"),
     ("?", "help"),
 ];
 
@@ -608,18 +635,85 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &mut State) {
     state.list_offset = ls.offset();
 }
 
+/// The decisions view: the queue on top, the selected decision's options,
+/// recommendation and linked tickets below when there is room.
+fn draw_decisions(frame: &mut Frame, area: Rect, state: &mut State) {
+    let theme = &state.theme;
+    let sel = state.selected_decision().cloned();
+    let (list_area, detail_area) = if area.height >= 14 {
+        let [l, d] = Layout::vertical([Constraint::Min(5), Constraint::Length(8)]).areas(area);
+        (l, Some(d))
+    } else {
+        (area, None)
+    };
+    let block = widgets::bordered_pane(
+        &format!("decisions ({})", state.decisions.len()),
+        true,
+        theme,
+    );
+    let width = usize::from(list_area.width.saturating_sub(2));
+    let items: Vec<ListItem> = if state.decisions.is_empty() {
+        vec![ListItem::new("no open decisions")]
+    } else {
+        state
+            .decisions
+            .iter()
+            .map(|d| {
+                let head = format!("{:<9} unblocks {:>2}  ", decision_key(d), d.unblocks);
+                let room = width.saturating_sub(head.chars().count());
+                ListItem::new(format!(
+                    "{head}{}",
+                    truncate(&clean(&d.question), room, theme)
+                ))
+            })
+            .collect()
+    };
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.selected_style());
+    let mut ls = ListState::default().with_offset(state.decisions_offset);
+    ls.select(state.decision_pos());
+    frame.render_stateful_widget(list, list_area, &mut ls);
+    state.decisions_offset = ls.offset();
+    if let (Some(area), Some(d)) = (detail_area, sel) {
+        let w = usize::from(area.width.saturating_sub(2));
+        let mut lines: Vec<String> = wrap(&clean(&d.question), "", w);
+        for (i, o) in d.options.iter().enumerate() {
+            lines.extend(wrap(&format!("{}. {}", i + 1, clean(o)), "  ", w));
+        }
+        if let Some(r) = &d.recommendation {
+            lines.extend(wrap(&format!("recommended: {}", clean(r)), "", w));
+        }
+        if !d.tickets.is_empty() {
+            lines.extend(wrap(&format!("tickets: {}", d.tickets.join(", ")), "", w));
+        }
+        let text: Vec<Line> = lines.into_iter().map(Line::from).collect();
+        frame.render_widget(
+            Paragraph::new(text).block(widgets::bordered_pane(&decision_key(&d), false, theme)),
+            area,
+        );
+    }
+}
+
 pub fn draw(frame: &mut Frame, state: &mut State) {
     let area = frame.area();
+    let in_decisions = state.detail.is_none() && state.view == View::Decisions;
     let base: &[(&str, &str)] = if state.detail.is_some() {
         &HINTS_DETAIL
+    } else if in_decisions {
+        &HINTS_DECISIONS
     } else {
         &HINTS
     };
     // Actions valid for the selected ticket's status, as "[k] label" hints.
-    let offers = state
-        .acted_ticket()
-        .map(|(_, status, archived)| allowed(&status, archived))
-        .unwrap_or_default();
+    let offers = if in_decisions {
+        vec![]
+    } else {
+        state
+            .acted_ticket()
+            .map(|(_, status, archived)| allowed(&status, archived))
+            .unwrap_or_default()
+    };
     let mut hints: Vec<(&str, &str)> = base.to_vec();
     // Insert before the trailing quit hint so it stays last on the row.
     let at = if state.detail.is_some() {
@@ -631,7 +725,7 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     for (i, (k, label, _)) in offers.into_iter().enumerate() {
         hints.insert(at + i, (k, label));
     }
-    if state.acted_ticket().is_some() {
+    if !in_decisions && state.acted_ticket().is_some() {
         for (i, h) in HINTS_EDIT.into_iter().enumerate() {
             hints.insert(at + n_offers + i, h);
         }
@@ -643,8 +737,9 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     } else {
         widgets::footer_height(hints, area.width, &state.theme) + u16::from(status_line)
     };
-    let show_filter =
-        state.detail.is_none() && (state.filter.is_active() || state.search.is_some());
+    let show_filter = !in_decisions
+        && state.detail.is_none()
+        && (state.filter.is_active() || state.search.is_some());
     let [header, filter_row, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(u16::from(show_filter)),
@@ -677,6 +772,7 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         match state.view {
             View::Board => draw_board(frame, body, state),
             View::List => draw_list(frame, body, state),
+            View::Decisions => draw_decisions(frame, body, state),
         }
     }
     let message = match (&state.error, &state.notice) {
@@ -844,6 +940,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, p: &Picker, theme: &Theme) {
     let title = match p.mode {
         PickerMode::Add => format!("{} blocked by", p.id),
         PickerMode::Remove => format!("{} no longer blocked by", p.id),
+        PickerMode::Jump => format!("open a ticket of {}", p.id),
     };
     let block = widgets::bordered_pane(&title, true, theme);
     let inner = block.inner(rect);
@@ -1695,6 +1792,49 @@ mod tests {
         let mut s = detail_state();
         key(&mut s, 'b');
         key(&mut s, 'r');
+        insta::assert_snapshot!(render(&mut s, 90, 24).join("\n"));
+    }
+
+    fn decisions_state() -> State {
+        let mut s = sample_state();
+        let d = |n: i64, q: &str, rec: Option<&str>, unblocks: i64, tickets: &[&str]| {
+            serde_json::from_value(serde_json::json!({
+                "created_at": "", "id": format!("D-{n}"), "number": n,
+                "options": ["Keep sqlite", "Move to postgres"],
+                "project": {"key": "SCR", "root": "/r"},
+                "question": q, "recommendation": rec,
+                "tickets": tickets, "unblocks": unblocks
+            }))
+            .unwrap()
+        };
+        crate::tui::state::update(
+            &mut s,
+            Event::DecisionsLoaded(Ok(vec![
+                d(
+                    4,
+                    "Which store backs the cache?",
+                    Some("Keep sqlite"),
+                    3,
+                    &["SCR-7", "SCR-8"],
+                ),
+                d(2, "Should the export be JSON or CSV?", None, 1, &["SCR-6"]),
+            ])),
+        );
+        s.back_view = View::Board;
+        s.view = View::Decisions;
+        s
+    }
+
+    #[test]
+    fn decisions_sample() {
+        let mut s = decisions_state();
+        insta::assert_snapshot!(render(&mut s, 90, 24).join("\n"));
+    }
+
+    #[test]
+    fn decisions_empty() {
+        let mut s = decisions_state();
+        crate::tui::state::update(&mut s, Event::DecisionsLoaded(Ok(vec![])));
         insta::assert_snapshot!(render(&mut s, 90, 24).join("\n"));
     }
 }
