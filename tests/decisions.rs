@@ -643,3 +643,83 @@ fn decided_flag_combinations() {
     assert_eq!(e.code_at(&repo, &["decisions", "--since", "1d"]), 2);
     assert_eq!(e.code_at(&repo, &["decisions", "--search", "x"]), 2);
 }
+
+#[test]
+fn add_reports_similar_open_and_decided_decisions() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let (a, b) = (e.ticket(&repo, "a"), e.ticket(&repo, "b"));
+
+    let first = e.ok_at(
+        &repo,
+        &["decision", "add", &a, "Which store for the cache?"],
+    );
+    assert!(first.get("similar").is_none());
+
+    let near = e.ok_at(
+        &repo,
+        &["decision", "add", &b, "which STORE for the cache layer"],
+    );
+    assert_eq!(near["id"], "D-2");
+    assert_eq!(near["similar"].as_array().unwrap().len(), 1);
+    assert_eq!(near["similar"][0]["id"], "D-1");
+    assert_eq!(near["similar"][0]["question"], "Which store for the cache?");
+    assert_eq!(near["similar"][0]["status"], "open");
+    assert_eq!(near["similar"][0]["tickets"], serde_json::json!([a]));
+    assert!(near["similar"][0].get("answer").is_none());
+
+    let other = e.ok_at(
+        &repo,
+        &["decision", "add", &b, "Which format for the export?"],
+    );
+    assert!(other.get("similar").is_none());
+
+    assert_eq!(e.human(&repo, &["decision", "answer", "D-1", "sqlite"]), 0);
+    let again = e.ok_at(
+        &repo,
+        &["decision", "add", &b, "Which store for the cache?"],
+    );
+    let ids: Vec<&str> = again["similar"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"D-1"));
+    let decided = &again["similar"][ids.iter().position(|i| *i == "D-1").unwrap()];
+    assert_eq!(decided["status"], "decided");
+    assert_eq!(decided["answer"], "sqlite");
+}
+
+#[test]
+fn add_ignores_similar_decisions_of_other_projects() {
+    let e = Env::new();
+    let (r1, r2) = (e.repo("one"), e.repo("two"));
+    let (a, b) = (e.ticket(&r1, "a"), e.ticket(&r2, "b"));
+    e.ok_at(&r1, &["decision", "add", &a, "Which store for the cache?"]);
+    let d = e.ok_at(&r2, &["decision", "add", &b, "Which store for the cache?"]);
+    assert!(d.get("similar").is_none());
+}
+
+#[test]
+fn add_text_output_shows_link_hint() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.ticket(&repo, "a");
+    e.ok_at(
+        &repo,
+        &["decision", "add", &a, "Which store for the cache?"],
+    );
+    let out = e.run_at(
+        &repo,
+        &[
+            "--text",
+            "decision",
+            "add",
+            &a,
+            "Which store for the cache?",
+        ],
+    );
+    let out = String::from_utf8(out.stdout).unwrap();
+    assert!(out.contains("scree decision link <id> <ticket>"), "{out}");
+}

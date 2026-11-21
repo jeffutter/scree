@@ -2,6 +2,7 @@
 //! to tickets. Ids are `D-<n>` per Project; `KEY-D-<n>` names one in another
 //! Project. A decision is never deleted, only superseded.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -12,12 +13,97 @@ use crate::error::{Error, Result};
 use crate::identity::{Identity, Role};
 use crate::model::{
     DecidedDecision, DecidedResult, DecisionDetail, DecisionsResult, OpenDecision, ProjectRef,
+    SimilarDecision,
 };
 use crate::project;
 use crate::scope::{self, Scope, path_str};
 use crate::ticket::{display_id, resolve, scope_project, time_bound, touch};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
+
+/// Minimum Jaccard similarity (shared tokens over all tokens, stopwords
+/// removed) at which `decision add` reports an existing decision as similar.
+/// Chosen by hand against short question pairs: a rewording that adds or
+/// swaps one content word of three ("which store for the cache" vs "which
+/// store for the cache layer") scores 0.75, while questions sharing only a
+/// word or two of four to six ("which store for the cache" vs "which format
+/// for the export") score 0.2 or less. 0.5 sits in the gap, so a hint needs
+/// at least half of the combined vocabulary in common.
+const SIMILARITY_THRESHOLD: f64 = 0.5;
+
+/// Decided decisions considered for hints, newest first, so the cost of an
+/// add stays bounded in a long-lived Project.
+const DECIDED_CANDIDATES: i64 = 50;
+
+/// Words too common in questions to say anything about the topic.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "how",
+    "i", "if", "in", "is", "it", "of", "on", "or", "our", "should", "that", "the", "this", "to",
+    "we", "what", "with", "would",
+];
+
+/// Lowercased alphanumeric words of `q` without stopwords.
+fn tokens(q: &str) -> BTreeSet<String> {
+    q.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && !STOPWORDS.contains(w))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Jaccard similarity of two token sets; 0.0 when either is empty.
+fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    a.intersection(b).count() as f64 / a.union(b).count() as f64
+}
+
+/// Open decisions and recently decided ones of the Project whose question
+/// resembles `question`, best match first. Superseded decisions are skipped.
+fn similar(conn: &Connection, project_id: i64, question: &str) -> Result<Vec<SimilarDecision>> {
+    let want = tokens(question);
+    let mut stmt = conn.prepare(
+        "SELECT id, number, question, status, answer FROM (
+             SELECT id, number, question, status, answer FROM decisions
+             WHERE project_id = ?1 AND status = 'open' AND superseded_by IS NULL
+             UNION ALL
+             SELECT id, number, question, status, answer FROM (
+                 SELECT id, number, question, status, answer FROM decisions
+                 WHERE project_id = ?1 AND status = 'decided' AND superseded_by IS NULL
+                 ORDER BY decided_at DESC, number DESC LIMIT ?2))",
+    )?;
+    let rows = stmt
+        .query_map(params![project_id, DECIDED_CANDIDATES], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut hits = Vec::new();
+    for (id, number, q, status, answer) in rows {
+        let score = jaccard(&want, &tokens(&q));
+        if score >= SIMILARITY_THRESHOLD {
+            hits.push((score, number, id, q, status, answer));
+        }
+    }
+    hits.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    hits.into_iter()
+        .map(|(_, number, id, question, status, answer)| {
+            Ok(SimilarDecision {
+                answer,
+                id: format!("D-{number}"),
+                question,
+                status,
+                tickets: linked_tickets(conn, id)?,
+            })
+        })
+        .collect()
+}
 
 /// Where a bare `D-<n>` is looked up: the caller's directory and the global
 /// `--project`.
@@ -166,6 +252,8 @@ pub fn add(
     db::write(conn, |tx| {
         let row = resolve(tx, ticket)?;
         let project_id = ticket_project(tx, row)?;
+        // Before the INSERT, so the new decision cannot match itself.
+        let hints = similar(tx, project_id, question)?;
         let number: i64 = tx.query_row(
             "UPDATE projects SET next_decision_number = next_decision_number + 1
              WHERE id = ?1 RETURNING next_decision_number - 1",
@@ -185,7 +273,9 @@ pub fn add(
             [id, row],
         )?;
         touch(tx, row, who)?;
-        load(tx, id)
+        let mut d = load(tx, id)?;
+        d.similar = hints;
+        Ok(d)
     })
 }
 
@@ -555,21 +645,24 @@ fn load(conn: &Connection, row: i64) -> Result<DecisionDetail> {
                 decided_at: r.get(8)?,
                 superseded_by: r.get::<_, Option<i64>>(9)?.map(|n| format!("D-{n}")),
                 created_at: r.get(10)?,
+                similar: Vec::new(),
                 tickets: Vec::new(),
             })
         },
     )?;
+    d.tickets = linked_tickets(conn, row)?;
+    Ok(d)
+}
+
+/// Display ids of the tickets linked to a decision row, in ticket order.
+fn linked_tickets(conn: &Connection, row: i64) -> Result<Vec<String>> {
     let rows: Vec<i64> = conn
         .prepare(
             "SELECT ticket_id FROM decision_tickets WHERE decision_id = ?1 ORDER BY ticket_id",
         )?
         .query_map([row], |r| r.get(0))?
         .collect::<std::result::Result<_, _>>()?;
-    d.tickets = rows
-        .into_iter()
-        .map(|t| display_id(conn, t))
-        .collect::<Result<_>>()?;
-    Ok(d)
+    rows.into_iter().map(|t| display_id(conn, t)).collect()
 }
 
 #[cfg(test)]
@@ -592,6 +685,25 @@ mod tests {
                 number: 12
             }
         );
+    }
+
+    #[test]
+    fn tokens_ignore_case_punctuation_and_stopwords() {
+        let t = tokens("Which store should we use for the Cache?!");
+        assert_eq!(
+            t.into_iter().collect::<Vec<_>>(),
+            vec!["cache", "store", "use", "which"]
+        );
+    }
+
+    #[test]
+    fn jaccard_separates_near_duplicates_from_unrelated() {
+        let base = tokens("Which store for the cache?");
+        let near = tokens("which store for the cache layer");
+        let other = tokens("Which format for the export?");
+        assert!(jaccard(&base, &near) >= SIMILARITY_THRESHOLD);
+        assert!(jaccard(&base, &other) < SIMILARITY_THRESHOLD);
+        assert_eq!(jaccard(&base, &BTreeSet::new()), 0.0);
     }
 
     #[test]

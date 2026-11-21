@@ -220,6 +220,35 @@ pub fn render_text_decision(d: &DecisionDetail) -> String {
     if !d.tickets.is_empty() {
         let _ = writeln!(out, "tickets: {}", d.tickets.join(", "));
     }
+    let open: Vec<_> = d.similar.iter().filter(|s| s.status == "open").collect();
+    if !open.is_empty() {
+        let _ = writeln!(
+            out,
+            "similar open decisions - use `scree decision link <id> <ticket>` instead:"
+        );
+        for s in open {
+            let _ = writeln!(
+                out,
+                "  {}  {}  [{}]",
+                s.id,
+                s.question,
+                s.tickets.join(", ")
+            );
+        }
+    }
+    let decided: Vec<_> = d.similar.iter().filter(|s| s.status != "open").collect();
+    if !decided.is_empty() {
+        let _ = writeln!(out, "already decided:");
+        for s in decided {
+            let _ = writeln!(
+                out,
+                "  {}  {}  answer: {}",
+                s.id,
+                s.question,
+                s.answer.as_deref().unwrap_or("")
+            );
+        }
+    }
     out.trim_end_matches('\n').to_string()
 }
 

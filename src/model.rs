@@ -198,8 +198,23 @@ pub struct DecisionDetail {
     pub question: String,
     pub rationale: Option<String>,
     pub recommendation: Option<String>,
+    /// Hints from `decision add` only: similar decisions of the Project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub similar: Vec<SimilarDecision>,
     pub status: String,
     pub superseded_by: Option<String>,
+    pub tickets: Vec<String>,
+}
+
+/// A decision that resembles a newly added question: open (link to it
+/// instead) or decided (read its `answer`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SimilarDecision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    pub id: String,
+    pub question: String,
+    pub status: String,
     pub tickets: Vec<String>,
 }
 
