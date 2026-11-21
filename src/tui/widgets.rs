@@ -167,6 +167,36 @@ pub fn render_header(
     Paragraph::new(line).render(area, buf);
 }
 
+/// The pending-decisions banner: a full-width inverse bold row, so it reads
+/// with or without color. Shown on every view except the decisions view while
+/// any decision is open.
+pub fn render_banner(
+    buf: &mut Buffer,
+    area: Rect,
+    decisions: usize,
+    tickets: usize,
+    theme: &Theme,
+) {
+    let warn = if theme.unicode { "\u{26a0}" } else { "!!" };
+    let d = if decisions == 1 {
+        "DECISION"
+    } else {
+        "DECISIONS"
+    };
+    let t = if tickets == 1 { "ticket" } else { "tickets" };
+    let text = format!(
+        " {warn}  {decisions} OPEN {d} NEED A HUMAN ANSWER - blocking {tickets} {t} - press W to answer "
+    );
+    let mut style = Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED);
+    if theme.color {
+        style = style.fg(ratatui::style::Color::Yellow);
+    }
+    // Fill the whole row so the bar spans the terminal.
+    let pad = usize::from(area.width).saturating_sub(text.chars().count());
+    let line = Line::from(Span::styled(format!("{text}{}", " ".repeat(pad)), style));
+    Paragraph::new(line).render(area, buf);
+}
+
 /// A bordered pane: yellow border when active, gray otherwise.
 pub fn bordered_pane(title: &str, active: bool, theme: &Theme) -> Block<'static> {
     let mut block = Block::new()

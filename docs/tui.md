@@ -13,6 +13,8 @@ It runs as Role human with author `human` unless `--role`, `--author` or their `
 
 The header shows the scope, the caller and the ticket count.
 
+While any decision is open, every view except the decisions view shows a full-width banner under the header: `2 OPEN DECISIONS NEED A HUMAN ANSWER - blocking 3 tickets - press W to answer`. It is bold inverse video (yellow when color is on), so it reads without color, and it disappears when the last decision is answered. It follows the current scope and refreshes with every reload, so it also appears when another process opens a decision.
+
 ## Scope
 
 `s` cycles how wide the view reads: this Worktree, its whole Project, or all Projects. Only modes the current directory can satisfy are offered (Worktree needs a linked worktree, Project needs a repository). `a` shows or hides archived tickets and `c` hides the closed columns (done, abandoned).

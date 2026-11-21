@@ -442,17 +442,26 @@ impl State {
         }
     }
 
-    /// Effects that refresh what is on screen: the tickets, plus the
-    /// decisions queue while that view is open.
+    /// Effects that refresh what is on screen: the tickets, plus the open
+    /// decisions queue, which feeds both its own view and the banner every
+    /// other view shows while any decision is open.
     fn reload_effects(&self) -> Vec<Effect> {
-        let mut fx = vec![Effect::Reload(self.load_spec())];
-        if self.view == View::Decisions {
-            fx.push(Effect::LoadDecisions(self.mode));
-        }
+        let mut fx = vec![
+            Effect::Reload(self.load_spec()),
+            Effect::LoadDecisions(self.mode),
+        ];
         if self.wants_descriptions() {
             fx.push(Effect::LoadDescriptions);
         }
         fx
+    }
+
+    /// How many distinct tickets the open decisions are holding up.
+    pub fn decision_ticket_count(&self) -> usize {
+        let mut ids: Vec<&String> = self.decisions.iter().flat_map(|d| &d.tickets).collect();
+        ids.sort();
+        ids.dedup();
+        ids.len()
     }
 
     /// Position of the selected decision in `decisions`.
@@ -1587,10 +1596,10 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         }
         (KeyCode::Char('a'), false) => {
             state.show_archived = !state.show_archived;
-            return vec![Effect::Reload(state.load_spec())];
+            return state.reload_effects();
         }
         (KeyCode::Char('s'), false) if state.cycle_scope() => {
-            return vec![Effect::Reload(state.load_spec())];
+            return state.reload_effects();
         }
         _ => {}
     }
@@ -1874,14 +1883,17 @@ mod tests {
         assert!(s.show_archived);
         assert_eq!(
             fx,
-            vec![Effect::Reload(LoadSpec {
-                mode: ScopeMode::AllProjects,
-                show_archived: true
-            })]
+            vec![
+                Effect::Reload(LoadSpec {
+                    mode: ScopeMode::AllProjects,
+                    show_archived: true
+                }),
+                Effect::LoadDecisions(ScopeMode::AllProjects)
+            ]
         );
         let fx = update(&mut s, press('a'));
         assert!(!s.show_archived);
-        assert_eq!(fx.len(), 1);
+        assert_eq!(fx.len(), 2);
     }
 
     fn worktree_scope() -> Scope {
@@ -1898,7 +1910,10 @@ mod tests {
         assert_eq!(s.display_scope(), worktree_scope());
         let fx = update(&mut s, press('s'));
         assert_eq!(s.mode, ScopeMode::Project);
-        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(
+            fx,
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDecisions(s.mode)]
+        );
         assert_eq!(
             s.display_scope(),
             Scope::Checkout {
@@ -1986,11 +2001,17 @@ mod tests {
     fn db_changed_reloads_and_reloads_open_detail() {
         let mut s = loaded(vec![]);
         let fx = update(&mut s, Event::DbChanged);
-        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(
+            fx,
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDecisions(s.mode)]
+        );
         let mut s = loaded(vec![Event::DetailLoaded(Ok(Box::new(detail_of("D1"))))]);
         let fx = update(&mut s, Event::DbChanged);
         // The detail refresh rides on the Loaded event the reload produces.
-        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(
+            fx,
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDecisions(s.mode)]
+        );
     }
 
     #[test]
@@ -2354,12 +2375,18 @@ mod tests {
     fn action_ok_reloads_and_refreshes_detail() {
         let mut s = at_col(1);
         let fx = update(&mut s, Event::ActionDone(Ok("R1 -> active".into())));
-        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(
+            fx,
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDecisions(s.mode)]
+        );
         assert_eq!(s.notice.as_deref(), Some("R1 -> active"));
         let mut s = opened();
         let fx = update(&mut s, Event::ActionDone(Ok("ok".into())));
         // The detail refresh rides on the Loaded event the reload produces.
-        assert_eq!(fx, vec![Effect::Reload(s.load_spec())]);
+        assert_eq!(
+            fx,
+            vec![Effect::Reload(s.load_spec()), Effect::LoadDecisions(s.mode)]
+        );
     }
 
     fn type_str(s: &mut State, text: &str) {
@@ -3080,7 +3107,11 @@ mod tests {
         s.filter.query = "r2".into();
         assert_eq!(
             update(&mut s, Event::DbChanged),
-            vec![Effect::Reload(s.load_spec()), Effect::LoadDescriptions]
+            vec![
+                Effect::Reload(s.load_spec()),
+                Effect::LoadDecisions(s.mode),
+                Effect::LoadDescriptions
+            ]
         );
         update(&mut s, Event::Loaded(Ok(sample())));
         assert_eq!(all_ids(&s), ["R2"]);
@@ -3155,7 +3186,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_events_also_load_decisions_only_in_that_view() {
+    fn every_reload_also_loads_decisions_for_the_banner() {
         let mut s = in_decisions(three());
         let fx = update(&mut s, Event::DbChanged);
         assert!(fx.contains(&Effect::LoadDecisions(s.mode)));
@@ -3163,7 +3194,16 @@ mod tests {
         assert!(fx.contains(&Effect::LoadDecisions(s.mode)));
         let mut b = loaded(vec![]);
         let fx = update(&mut b, Event::DbChanged);
-        assert!(!fx.iter().any(|e| matches!(e, Effect::LoadDecisions(_))));
+        assert!(fx.contains(&Effect::LoadDecisions(b.mode)));
+    }
+
+    #[test]
+    fn decision_ticket_count_is_distinct_tickets() {
+        let s = in_decisions(vec![
+            decision(1, None, &["SCR-1", "SCR-2"]),
+            decision(2, None, &["SCR-2", "SCR-3"]),
+        ]);
+        assert_eq!(s.decision_ticket_count(), 3);
     }
 
     #[test]

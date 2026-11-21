@@ -740,8 +740,10 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
     let show_filter = !in_decisions
         && state.detail.is_none()
         && (state.filter.is_active() || state.search.is_some());
-    let [header, filter_row, body, footer] = Layout::vertical([
+    let show_banner = !in_decisions && !state.decisions.is_empty();
+    let [header, banner, filter_row, body, footer] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(u16::from(show_banner)),
         Constraint::Length(u16::from(show_filter)),
         Constraint::Min(0),
         Constraint::Length(footer_h),
@@ -758,6 +760,15 @@ pub fn draw(frame: &mut Frame, state: &mut State) {
         state.visible_count(),
         &state.theme,
     );
+    if show_banner {
+        widgets::render_banner(
+            frame.buffer_mut(),
+            banner,
+            state.decisions.len(),
+            state.decision_ticket_count(),
+            &state.theme,
+        );
+    }
     if show_filter {
         let line = filter_line(&state.filter, state.search.is_some());
         frame.render_widget(Paragraph::new(line), filter_row);
@@ -1829,6 +1840,51 @@ mod tests {
     fn decisions_sample() {
         let mut s = decisions_state();
         insta::assert_snapshot!(render(&mut s, 90, 24).join("\n"));
+    }
+
+    #[test]
+    fn pending_decisions_banner_on_board() {
+        let mut s = decisions_state();
+        s.view = View::Board;
+        let rows = render(&mut s, 90, 24);
+        assert!(
+            rows[1].contains("2 OPEN DECISIONS NEED A HUMAN ANSWER"),
+            "{}",
+            rows[1]
+        );
+        assert!(rows[1].contains("blocking 3 tickets"));
+        assert!(rows[1].contains("press W"));
+        insta::assert_snapshot!(rows.join("\n"));
+    }
+
+    #[test]
+    fn banner_is_inverse_bold_so_it_reads_without_color() {
+        let mut s = decisions_state();
+        s.view = View::Board;
+        let mut t = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        t.draw(|f| draw(f, &mut s)).unwrap();
+        let cell = &t.backend().buffer()[(0, 1)];
+        assert!(
+            cell.modifier
+                .contains(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn no_banner_without_decisions_or_inside_the_decisions_view() {
+        let mut s = decisions_state();
+        assert!(
+            !render(&mut s, 90, 24)
+                .iter()
+                .any(|r| r.contains("NEED A HUMAN ANSWER"))
+        );
+        s.view = View::Board;
+        crate::tui::state::update(&mut s, Event::DecisionsLoaded(Ok(vec![])));
+        assert!(
+            !render(&mut s, 90, 24)
+                .iter()
+                .any(|r| r.contains("NEED A HUMAN ANSWER"))
+        );
     }
 
     #[test]

@@ -66,7 +66,10 @@ pub fn run(
         &mut state,
         Event::Resize(term.size().map_err(terminal_err)?.height),
     );
-    let mut pending = vec![Effect::Reload(state.load_spec())];
+    let mut pending = vec![
+        Effect::Reload(state.load_spec()),
+        Effect::LoadDecisions(state.mode),
+    ];
     while !state.should_quit {
         while let Some(effect) = pending.pop() {
             let ev = match effect {
