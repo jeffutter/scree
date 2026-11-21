@@ -214,3 +214,25 @@ fn open_decision_queue_json_and_text() {
         &redact(&e.stdout(&["--text", "decisions", "--open"])),
     );
 }
+
+#[test]
+fn decided_ledger_json_and_text() {
+    let e = Env::with_flags(FLAGS);
+    e.stdout(&["add", "Needs answers", "--status", "ready"]);
+    e.stdout(&["add", "Also waits", "--status", "ready"]);
+    e.exec_batch(
+        "INSERT INTO decisions (id, project_id, number, question, options, created_at, status, answer, rationale, decided_by, decided_at, superseded_by)
+           VALUES (1, 1, 1, 'Which store?', '[]', '2026-01-01T00:00:00Z', 'decided', 'sqlite', 'no server', 'jeff', '2026-01-03T00:00:00Z', NULL),
+                  (2, 1, 2, 'Which format?', '[\"json\",\"toml\"]', '2026-01-01T00:00:00Z', 'decided', 'json', NULL, 'jeff', '2026-01-04T00:00:00Z', NULL),
+                  (3, 1, 3, 'Old store?', '[]', '2026-01-01T00:00:00Z', 'decided', 'files', 'legacy', 'jeff', '2026-01-02T00:00:00Z', 1);
+         INSERT INTO decision_tickets (decision_id, ticket_id) VALUES (1, 1), (2, 1), (2, 2), (3, 2);",
+    );
+    check(
+        "decisions_decided.json",
+        &redact(&e.stdout(&["decisions", "--decided", "--include-superseded"])),
+    );
+    check(
+        "decisions_decided.txt",
+        &redact(&e.stdout(&["--text", "decisions", "--decided", "--include-superseded"])),
+    );
+}

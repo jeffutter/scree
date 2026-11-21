@@ -522,3 +522,124 @@ fn queue_scope_flags_behave_as_in_list() {
         serde_json::json!({"decisions": []})
     );
 }
+
+fn decided_fixture(e: &Env) -> PathBuf {
+    let repo = e.repo("scree");
+    let t = e.ticket(&repo, "a");
+    for q in [
+        "Which store?",
+        "Which format?",
+        "Pick a 50% rule",
+        "Old call",
+    ] {
+        e.ok_at(&repo, &["decision", "add", &t, q]);
+    }
+    e.ok_at(&repo, &["decision", "add", &t, "Still open"]);
+    for (id, a, r) in [
+        ("D-1", "SQLite file", "no server"),
+        ("D-2", "json", "Easy to Parse"),
+        ("D-3", "yes", "the 50% rule holds"),
+        ("D-4", "old answer", "was fine"),
+    ] {
+        assert_eq!(
+            e.human(&repo, &["decision", "answer", id, a, "--rationale", r]),
+            0
+        );
+    }
+    e.exec_batch(
+        "UPDATE decisions SET decided_at = '2026-01-0' || number || 'T00:00:00Z' WHERE number <= 4;",
+    );
+    repo
+}
+
+fn numbers(v: &serde_json::Value) -> Vec<i64> {
+    v["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["number"].as_i64().unwrap())
+        .collect()
+}
+
+#[test]
+fn decided_lists_newest_first_with_ledger_fields() {
+    let e = Env::new();
+    let repo = decided_fixture(&e);
+    let q = e.ok_at(&repo, &["decisions", "--decided"]);
+    assert_eq!(numbers(&q), [4, 3, 2, 1]);
+    let d = &q["decisions"][3];
+    assert_eq!(d["answer"], "SQLite file");
+    assert_eq!(d["rationale"], "no server");
+    assert_eq!(d["decided_by"], "jeff");
+    assert_eq!(d["decided_at"], "2026-01-01T00:00:00Z");
+    assert_eq!(d["tickets"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn decided_since_applies_before_limit() {
+    let e = Env::new();
+    let repo = decided_fixture(&e);
+    let q = e.ok_at(
+        &repo,
+        &["decisions", "--decided", "--since", "2026-01-02T00:00:00Z"],
+    );
+    assert_eq!(numbers(&q), [4, 3, 2]);
+    // The limit cuts the filtered rows, not the other way round.
+    let q = e.ok_at(
+        &repo,
+        &[
+            "decisions",
+            "--decided",
+            "--since",
+            "2026-01-03T00:00:00Z",
+            "--limit",
+            "1",
+        ],
+    );
+    assert_eq!(numbers(&q), [4]);
+    e.exec_batch(
+        "UPDATE decisions SET decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE number = 1;",
+    );
+    let q = e.ok_at(
+        &repo,
+        &["decisions", "--decided", "--since", "1h", "--limit", "1"],
+    );
+    assert_eq!(numbers(&q), [1]);
+    assert_eq!(
+        e.code_at(&repo, &["decisions", "--decided", "--since", "bogus"]),
+        e.code_at(&repo, &["list", "--done-since", "bogus"])
+    );
+}
+
+#[test]
+fn decided_search_matches_each_field_case_insensitively_and_literally() {
+    let e = Env::new();
+    let repo = decided_fixture(&e);
+    let s = |t: &str| numbers(&e.ok_at(&repo, &["decisions", "--decided", "--search", t]));
+    assert_eq!(s("WHICH STORE"), [1]);
+    assert_eq!(s("JSON"), [2]);
+    assert_eq!(s("easy to parse"), [2]);
+    assert_eq!(s("%"), [3]);
+    assert_eq!(s("_"), Vec::<i64>::new());
+}
+
+#[test]
+fn decided_hides_superseded_unless_asked() {
+    let e = Env::new();
+    let repo = decided_fixture(&e);
+    e.ok_at(&repo, &["decision", "supersede", "D-4", "--by", "D-5"]);
+    let q = e.ok_at(&repo, &["decisions", "--decided"]);
+    assert_eq!(numbers(&q), [3, 2, 1]);
+    let q = e.ok_at(&repo, &["decisions", "--decided", "--include-superseded"]);
+    assert_eq!(numbers(&q), [4, 3, 2, 1]);
+    assert_eq!(q["decisions"][0]["superseded_by"], "D-5");
+}
+
+#[test]
+fn decided_flag_combinations() {
+    let e = Env::new();
+    let repo = decided_fixture(&e);
+    assert_eq!(e.code_at(&repo, &["decisions", "--decided", "--open"]), 2);
+    assert_eq!(e.code_at(&repo, &["decisions", "--since", "1d"]), 2);
+    assert_eq!(e.code_at(&repo, &["decisions", "--search", "x"]), 2);
+}

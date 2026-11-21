@@ -1,0 +1,15 @@
+D-2  Which format?
+  answer: json
+  decided TS by jeff
+  tickets: LOCAL-1, LOCAL-2
+D-1  Which store?
+  answer: sqlite
+  rationale: no server
+  decided TS by jeff
+  tickets: LOCAL-1
+D-3  Old store?
+  answer: files
+  rationale: legacy
+  decided TS by jeff
+  tickets: LOCAL-2
+  superseded by D-1

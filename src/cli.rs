@@ -257,12 +257,31 @@ pub struct StartArgs {
 
 #[derive(Debug, Args)]
 pub struct DecisionsArgs {
-    /// Open Decisions, the default and today the only listing. Ordered by how
+    /// Open Decisions, the default listing. Ordered by how
     /// many linked unfinished tickets (draft, ready or active, not archived)
     /// each has, highest first, then oldest. The count is a plain count of
     /// linked tickets, not only those this Decision alone blocks.
     #[arg(long)]
     pub open: bool,
+    /// The ledger of decided Decisions, newest first, with answer, rationale,
+    /// who decided, when, and every linked ticket. Superseded ones are hidden
+    /// unless --include-superseded.
+    #[arg(long, conflicts_with = "open")]
+    pub decided: bool,
+    /// With --decided: only Decisions decided at or after this time: `Nd`, `Nh`, `Nm` or an
+    /// RFC 3339 timestamp. Applies before --limit
+    #[arg(long, value_name = "WHEN", requires = "decided")]
+    pub since: Option<String>,
+    /// With --decided: only Decisions whose question, answer or rationale contains this text
+    /// (case-insensitive for ASCII letters; `%` and `_` match themselves)
+    #[arg(long, value_name = "TEXT", requires = "decided")]
+    pub search: Option<String>,
+    /// With --decided: default 50
+    #[arg(long, requires = "decided")]
+    pub limit: Option<u32>,
+    /// With --decided: also list superseded Decisions, with the Decision that replaced them
+    #[arg(long, requires = "decided")]
+    pub include_superseded: bool,
     /// A Decision belongs to a Project, so --all-worktrees equals the default
     #[command(flatten)]
     pub scope: ScopeArgs,

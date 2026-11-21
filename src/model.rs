@@ -158,6 +158,31 @@ pub struct DecisionsResult {
     pub decisions: Vec<OpenDecision>,
 }
 
+/// One row of the decided ledger. `tickets` is every linked ticket, finished
+/// or not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecidedDecision {
+    pub answer: Option<String>,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+    pub decided_by: Option<String>,
+    pub id: String,
+    pub number: i64,
+    pub options: Vec<String>,
+    pub project: ProjectRef,
+    pub question: String,
+    pub rationale: Option<String>,
+    pub recommendation: Option<String>,
+    pub superseded_by: Option<String>,
+    pub tickets: Vec<String>,
+}
+
+/// The `{"decisions": [...]}` shape returned by `decisions --decided`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecidedResult {
+    pub decisions: Vec<DecidedDecision>,
+}
+
 /// What every `decision` command returns: a `Decision` plus the ids of the
 /// tickets it is linked to. Fields are listed out (not flattened) so the JSON
 /// key order stays alphabetical.

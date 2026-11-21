@@ -10,10 +10,12 @@ use crate::cli::{ScopeArgs, Status};
 use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::{Identity, Role};
-use crate::model::{DecisionDetail, DecisionsResult, OpenDecision, ProjectRef};
+use crate::model::{
+    DecidedDecision, DecidedResult, DecisionDetail, DecisionsResult, OpenDecision, ProjectRef,
+};
 use crate::project;
 use crate::scope::{self, Scope, path_str};
-use crate::ticket::{display_id, resolve, scope_project, touch};
+use crate::ticket::{display_id, resolve, scope_project, time_bound, touch};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
@@ -420,6 +422,116 @@ pub fn open_queue(conn: &Connection, cwd: &Path, scope: &ScopeArgs) -> Result<De
     Ok(DecisionsResult { decisions })
 }
 
+/// Wrap `text` for a LIKE pattern that uses `ESCAPE '\\'`, escaping `%`, `_`
+/// and `\\` so they match themselves.
+fn like_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('%');
+    for c in text.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// The decided ledger: decided decisions in scope, newest first. `since`
+/// (the `--done-since` grammar) and `search` filter before `limit` applies.
+/// Superseded ones are hidden unless `include_superseded`. `tickets` is every
+/// linked ticket. LIKE is case-insensitive for ASCII only.
+pub fn decided_log(
+    conn: &Connection,
+    cwd: &Path,
+    scope: &ScopeArgs,
+    since: Option<&str>,
+    search: Option<&str>,
+    limit: u32,
+    include_superseded: bool,
+) -> Result<DecidedResult> {
+    use rusqlite::types::Value as Sql;
+    let bound = since.map(|w| time_bound(conn, "--since", w)).transpose()?;
+    let Some(project) = scope_project(conn, cwd, scope)? else {
+        return Ok(DecidedResult { decisions: vec![] });
+    };
+    let mut conds = vec!["d.status = 'decided'".to_string()];
+    let mut args: Vec<Sql> = vec![];
+    if let Some(p) = project {
+        conds.push("d.project_id = ?".into());
+        args.push(Sql::Integer(p));
+    }
+    if let Some(b) = bound {
+        conds.push("d.decided_at >= ?".into());
+        args.push(Sql::Text(b));
+    }
+    if let Some(text) = search {
+        let pat = like_literal(text);
+        conds.push(
+            "(d.question LIKE ? ESCAPE '\\' OR d.answer LIKE ? ESCAPE '\\'
+              OR d.rationale LIKE ? ESCAPE '\\')"
+                .into(),
+        );
+        args.extend(std::iter::repeat_n(Sql::Text(pat), 3));
+    }
+    if !include_superseded {
+        conds.push("d.superseded_by IS NULL".into());
+    }
+    args.push(Sql::Integer(i64::from(limit)));
+    let mut stmt = conn.prepare(&format!(
+        "SELECT d.id, d.number, d.question, d.options, d.recommendation, d.created_at,
+                p.key, p.root_path, d.answer, d.rationale, d.decided_by, d.decided_at, s.number
+         FROM decisions d JOIN projects p ON p.id = d.project_id
+         LEFT JOIN decisions s ON s.id = d.superseded_by
+         WHERE {}
+         ORDER BY d.decided_at DESC, d.number DESC, p.key
+         LIMIT ?",
+        conds.join(" AND ")
+    ))?;
+    let rows: Vec<(i64, DecidedDecision)> = stmt
+        .query_map(rusqlite::params_from_iter(args), |r| {
+            let number = r.get::<_, i64>(1)?;
+            Ok((
+                r.get::<_, i64>(0)?,
+                DecidedDecision {
+                    answer: r.get(8)?,
+                    created_at: r.get(5)?,
+                    decided_at: r.get(11)?,
+                    decided_by: r.get(10)?,
+                    id: format!("D-{number}"),
+                    number,
+                    options: parse_options(r.get::<_, String>(3)?, 3)?,
+                    project: ProjectRef {
+                        key: r.get(6)?,
+                        root: r.get(7)?,
+                    },
+                    question: r.get(2)?,
+                    rationale: r.get(9)?,
+                    recommendation: r.get(4)?,
+                    superseded_by: r.get::<_, Option<i64>>(12)?.map(|n| format!("D-{n}")),
+                    tickets: vec![],
+                },
+            ))
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut linked =
+        conn.prepare("SELECT ticket_id FROM decision_tickets WHERE decision_id = ?1")?;
+    let mut decisions = Vec::with_capacity(rows.len());
+    for (row, mut d) in rows {
+        let ids: Vec<i64> = linked
+            .query_map([row], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut names = ids
+            .into_iter()
+            .map(|t| display_id(conn, t))
+            .collect::<Result<Vec<_>>>()?;
+        names.sort();
+        d.tickets = names;
+        decisions.push(d);
+    }
+    Ok(DecidedResult { decisions })
+}
+
 /// A decision with its linked tickets.
 fn load(conn: &Connection, row: i64) -> Result<DecisionDetail> {
     let mut d = conn.query_row(
@@ -480,6 +592,11 @@ mod tests {
                 number: 12
             }
         );
+    }
+
+    #[test]
+    fn like_text_is_escaped() {
+        assert_eq!(like_literal("50%_a\\"), "%50\\%\\_a\\\\%");
     }
 
     #[test]

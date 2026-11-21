@@ -1382,7 +1382,7 @@ fn select_ids(
 /// the `YYYY-MM-DDTHH:MM:SSZ` form timestamps are stored in, using SQLite's
 /// date functions so no time dependency is needed. `flag` names the option
 /// in the error.
-fn time_bound(conn: &Connection, flag: &str, when: &str) -> Result<String> {
+pub(crate) fn time_bound(conn: &Connection, flag: &str, when: &str) -> Result<String> {
     let bad = || {
         Error::Usage(format!(
             "invalid {flag} {when:?}: use an RFC 3339 timestamp or Nd, Nh or Nm (ago)"

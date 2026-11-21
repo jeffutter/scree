@@ -494,6 +494,18 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         Command::Decisions(mut a) => {
             apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
             sweep::sweep_auto(&mut conn, env, cwd, Some(&a.scope), None)?;
+            if a.decided {
+                let q = decision::decided_log(
+                    &conn,
+                    cwd,
+                    &a.scope,
+                    a.since.as_deref(),
+                    a.search.as_deref(),
+                    a.limit.unwrap_or(50),
+                    a.include_superseded,
+                )?;
+                return emit(format, &q, || output::render_text_decided(&q));
+            }
             let q = decision::open_queue(&conn, cwd, &a.scope)?;
             emit(format, &q, || output::render_text_decisions(&q))
         }

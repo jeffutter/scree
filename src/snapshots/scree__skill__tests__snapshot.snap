@@ -359,7 +359,12 @@ Mark a decided decision as replaced by another decision of the same Project
 
 The queue of open Decisions awaiting a human answer
 
-- `--open`: Open Decisions, the default and today the only listing. Ordered by how many linked unfinished tickets (draft, ready or active, not archived) each has, highest first, then oldest. The count is a plain count of linked tickets, not only those this Decision alone blocks
+- `--open`: Open Decisions, the default listing. Ordered by how many linked unfinished tickets (draft, ready or active, not archived) each has, highest first, then oldest. The count is a plain count of linked tickets, not only those this Decision alone blocks
+- `--decided`: The ledger of decided Decisions, newest first, with answer, rationale, who decided, when, and every linked ticket. Superseded ones are hidden unless --include-superseded
+- `--since <WHEN>`: With --decided: only Decisions decided at or after this time: `Nd`, `Nh`, `Nm` or an RFC 3339 timestamp. Applies before --limit
+- `--search <TEXT>`: With --decided: only Decisions whose question, answer or rationale contains this text (case-insensitive for ASCII letters; `%` and `_` match themselves)
+- `--limit <LIMIT>`: With --decided: default 50
+- `--include-superseded`: With --decided: also list superseded Decisions, with the Decision that replaced them
 - `--all-worktrees`: Every Worktree of the Project
 - `--all-projects`: Every Project
 - `--project-root <PROJECT_ROOT>`: Narrow to the Project at this root

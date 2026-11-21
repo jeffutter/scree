@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli::Status;
 use crate::error::{Error, Result};
 use crate::identity::{Env, Role};
-use crate::model::{DecisionDetail, DecisionsResult, ListResult, TicketDetail};
+use crate::model::{DecidedResult, DecisionDetail, DecisionsResult, ListResult, TicketDetail};
 
 pub fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Other(e.to_string()))
@@ -254,6 +254,40 @@ pub fn render_text_decisions(q: &DecisionsResult) -> String {
             let _ = writeln!(out, "  recommended: {r}");
         }
         let _ = writeln!(out, "  created {}", d.created_at);
+    }
+    out.trim_end_matches('\n').to_string()
+}
+
+/// One block per decided decision: `D-3  <question>`, answer, rationale,
+/// who and when, linked tickets, and the replacing decision if superseded.
+pub fn render_text_decided(q: &DecidedResult) -> String {
+    let multi = q
+        .decisions
+        .windows(2)
+        .any(|w| w[0].project.key != w[1].project.key);
+    let mut out = String::new();
+    for d in &q.decisions {
+        let id = if multi {
+            format!("{}-{}", d.project.key, d.id)
+        } else {
+            d.id.clone()
+        };
+        let _ = writeln!(out, "{id}  {}", d.question);
+        if let Some(a) = &d.answer {
+            let _ = writeln!(out, "  answer: {a}");
+        }
+        if let Some(r) = &d.rationale {
+            let _ = writeln!(out, "  rationale: {r}");
+        }
+        if let (Some(by), Some(at)) = (&d.decided_by, &d.decided_at) {
+            let _ = writeln!(out, "  decided {at} by {by}");
+        }
+        if !d.tickets.is_empty() {
+            let _ = writeln!(out, "  tickets: {}", d.tickets.join(", "));
+        }
+        if let Some(s) = &d.superseded_by {
+            let _ = writeln!(out, "  superseded by {s}");
+        }
     }
     out.trim_end_matches('\n').to_string()
 }
