@@ -16,9 +16,10 @@ use super::theme::Theme;
 use super::widgets;
 use crate::model::{Claimer, Ticket};
 
-const HINTS: [(&str, &str); 14] = [
+const HINTS: [(&str, &str); 15] = [
     ("Enter", "open"),
     ("Tab", "board/list"),
+    ("W", "decisions"),
     ("h/l", "column"),
     ("j/k", "row"),
     ("PgUp/PgDn", "page"),

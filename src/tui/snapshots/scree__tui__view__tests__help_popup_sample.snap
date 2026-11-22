@@ -61,4 +61,4 @@ scre+help (j/k scroll, Esc closes) - more below---------------------------------
 |x S|  Picker: type               filter tickets                                    |    |
 +---|  Picker: Up/Down, Ctrl-p/n  move                                              |----+
 [Ent|  Picker: Enter, Esc         apply, cancel                                     |
-[g/G+-------------------------------------------------------------------------------+pe
+[PgU+-------------------------------------------------------------------------------+
