@@ -39,6 +39,8 @@ The exception is a subtask added under a ticket you hold, which may be `ready`:
 
     scree add "Add a test" --parent SCR-12 --status ready
 
+An acceptance criterion is a check on finished work, never a question. Do not record an open question or a choice as a ticket whose criterion is "decide X" or "agree on Y": that ticket can only be closed by guessing. Raise a Decision instead (below), linked to the ticket the choice affects.
+
 Decisions are for questions only a human can settle. Raise one only when the choice is costly to reverse; otherwise pick the best option, note it with a comment, and continue.
 
     scree comment add SCR-12 "Chose a flat file layout; easy to change later"
@@ -51,7 +53,7 @@ If a matching open or decided Decision exists, or `decision add` prints a `simil
 
     scree decision link D-3 SCR-12
 
-Otherwise raise it, with the options and your recommendation (a 1-based option number):
+Otherwise raise it. Options are suggestions: a human picks one (`decision answer --option N`) or writes their own answer. Offer 2 to 4 distinct options and put your preferred one in `--recommend` (a 1-based option number):
 
     scree decision add SCR-12 "Which layout?" --option "Flat files" --option "Nested folders" --recommend 1
 

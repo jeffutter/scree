@@ -92,6 +92,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Ctrl-u/Ctrl-d", "half page up/down"),
             ("g/G, Home/End", "first/last decision"),
             ("y", "accept the recommendation (confirm)"),
+            ("1-9", "answer with that numbered option (confirm)"),
             ("a", "answer with typed text (prompt)"),
             ("t", "open the linked ticket (picker when several)"),
             ("s", "cycle scope worktree/project/all"),
@@ -132,11 +133,12 @@ const HINTS_DETAIL: [(&str, &str); 11] = [
     ("?", "help"),
 ];
 
-const HINTS_DECISIONS: [(&str, &str); 8] = [
+const HINTS_DECISIONS: [(&str, &str); 9] = [
     ("Esc/q", "back"),
     ("j/k", "row"),
     ("g/G", "first/last"),
     ("y", "accept"),
+    ("1-9", "option"),
     ("a", "answer"),
     ("t", "ticket"),
     ("s", "scope"),

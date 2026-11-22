@@ -73,8 +73,8 @@ pub fn run_effect(
                     conn,
                     &ctx,
                     &id,
-                    text.as_deref(),
-                    text.is_none(),
+                    text.as_deref()
+                        .map_or(decision::Resolution::Accept, decision::Resolution::Text),
                     None,
                     identity,
                 )

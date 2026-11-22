@@ -57,6 +57,8 @@ The exception is a subtask added under a ticket you hold, which may be `ready`:
 
     scree add "Add a test" --parent SCR-12 --status ready
 
+An acceptance criterion is a check on finished work, never a question. Do not record an open question or a choice as a ticket whose criterion is "decide X" or "agree on Y": that ticket can only be closed by guessing. Raise a Decision instead (below), linked to the ticket the choice affects.
+
 Decisions are for questions only a human can settle. Raise one only when the choice is costly to reverse; otherwise pick the best option, note it with a comment, and continue.
 
     scree comment add SCR-12 "Chose a flat file layout; easy to change later"
@@ -69,7 +71,7 @@ If a matching open or decided Decision exists, or `decision add` prints a `simil
 
     scree decision link D-3 SCR-12
 
-Otherwise raise it, with the options and your recommendation (a 1-based option number):
+Otherwise raise it. Options are suggestions: a human picks one (`decision answer --option N`) or writes their own answer. Offer 2 to 4 distinct options and put your preferred one in `--recommend` (a 1-based option number):
 
     scree decision add SCR-12 "Which layout?" --option "Flat files" --option "Nested folders" --recommend 1
 
@@ -124,7 +126,7 @@ Create a ticket
 - `--parent <PARENT>`: Make this a subtask of the given top-level ticket
 - `--description <DESCRIPTION>`: Description text, or `-` for stdin (an empty read is an error)
 - `--plan <PLAN>`: Plan text, or `-` for stdin (an empty read is an error)
-- `--criterion <CRITERIA>`: An acceptance criterion, or `-` for stdin; repeatable
+- `--criterion <CRITERIA>`: An acceptance criterion, or `-` for stdin; repeatable. A criterion verifies finished work; an open question belongs in `decision add`, not in a "decide X" criterion
 - `--for <FOR_WHO>` (values: agent, human; default agent)
 - `--status <STATUS>` (values: draft, ready; default draft)
 - `--blocked-by <BLOCKED_BY>`: A ticket that must be done first; repeatable
@@ -338,7 +340,7 @@ Questions a human must answer, shared by tickets
 
 ### `scree decision add [OPTIONS] <TICKET> <QUESTION>`
 
-Ask a question linked to a ticket; ids are D-<n> per Project (KEY-D-<n> names another Project)
+Ask a human a question or choice, linked to a ticket, instead of a ticket with a "decide X" criterion; ids are D-<n> per Project (KEY-D-<n> names another Project)
 
 - `<TICKET>` (required)
 - `<QUESTION>` (required)
@@ -361,10 +363,11 @@ Remove the link; a missing link is not an error
 
 ### `scree decision answer [OPTIONS] <ID> [TEXT]`
 
-Human only: answer with TEXT, or --accept to take the recommendation; an agent is refused
+Human only: answer with TEXT, pick an offered option with --option N, or take the recommendation with --accept; an agent is refused
 
 - `<ID>` (required)
 - `<ANSWER>`
+- `--option <N>`: Take the offered option with this 1-based number as the answer
 - `--rationale <RATIONALE>`: Why this answer
 - `--accept`: Take the recommended option as the answer
 

@@ -3,11 +3,11 @@ source: src/tui/view.rs
 expression: "bottom.join(\"\\n\")"
 ---
 +help (j/k scroll, Esc closes) - end-------------------------------------------+
-|Decisions:                                                                    |
 |  j/k, PgUp/PgDn             next/previous decision, page                     |
 |  Ctrl-u/Ctrl-d              half page up/down                                |
 |  g/G, Home/End              first/last decision                              |
 |  y                          accept the recommendation (confirm)              |
+|  1-9                        answer with that numbered option (confirm)       |
 |  a                          answer with typed text (prompt)                  |
 |  t                          open the linked ticket (picker when several)     |
 |  s                          cycle scope worktree/project/all                 |

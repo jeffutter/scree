@@ -24,5 +24,5 @@ scree  |  all Projects  |  agent/jeff  |  8 tickets
 
 
 
-[Esc/q] back | [j/k] row | [g/G] first/last | [y] accept | [a] answer | [t] ticket
-[s] scope | [?] help
+[Esc/q] back | [j/k] row | [g/G] first/last | [y] accept | [1-9] option | [a] answer
+[t] ticket | [s] scope | [?] help

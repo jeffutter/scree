@@ -47,18 +47,18 @@ scre+help (j/k scroll, Esc closes) - more below---------------------------------
 |   |  Ctrl-u/Ctrl-d              half page up/down                                 |    |
 |   |  g/G, Home/End              first/last decision                               |    |
 |   |  y                          accept the recommendation (confirm)               |    |
-+---|  a                          answer with typed text (prompt)                   |----+
-+rea|  t                          open the linked ticket (picker when several)      |----+
-|o S|  s                          cycle scope worktree/project/all                  |    |
-+---|  Esc, q, h, Left, Tab, W    back to board/list                                |----+
-+act|  ?                          this help                                         |----+
-|* S|  Ctrl-c                     quit                                              |    |
-+---|                                                                               |----+
-+don|Popups and prompts:                                                            |----+
-|+ S|  Filter: s f b              cycle status / for / blocked                      |    |
-+---|  Filter: x                  clear all filters                                 |----+
-+aba|  Filter: Esc, Enter         close                                             |----+
-|x S|  Picker: type               filter tickets                                    |    |
-+---|  Picker: Up/Down, Ctrl-p/n  move                                              |----+
-[Ent|  Picker: Enter, Esc         apply, cancel                                     |
++---|  1-9                        answer with that numbered option (confirm)        |----+
++rea|  a                          answer with typed text (prompt)                   |----+
+|o S|  t                          open the linked ticket (picker when several)      |    |
++---|  s                          cycle scope worktree/project/all                  |----+
++act|  Esc, q, h, Left, Tab, W    back to board/list                                |----+
+|* S|  ?                          this help                                         |    |
++---|  Ctrl-c                     quit                                              |----+
++don|                                                                               |----+
+|+ S|Popups and prompts:                                                            |    |
++---|  Filter: s f b              cycle status / for / blocked                      |----+
++aba|  Filter: x                  clear all filters                                 |----+
+|x S|  Filter: Esc, Enter         close                                             |    |
++---|  Picker: type               filter tickets                                    |----+
+[Ent|  Picker: Up/Down, Ctrl-p/n  move                                              |
 [PgU+-------------------------------------------------------------------------------+

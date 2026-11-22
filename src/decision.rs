@@ -333,30 +333,32 @@ pub fn unlink(
     })
 }
 
-/// Answer with `text`, or with the stored recommendation when `accept`.
+/// How a human settles a decision.
+pub enum Resolution<'a> {
+    /// Free text of their own.
+    Text(&'a str),
+    /// The offered option with this 1-based number.
+    Option(usize),
+    /// The stored recommendation.
+    Accept,
+}
+
+/// Answer with `how`.
 /// Humans only. An already decided decision is a Conflict (exit 5); a
 /// superseded one is Refused (exit 4).
 pub fn answer(
     conn: &mut Connection,
     ctx: &Ctx,
     id: &str,
-    text: Option<&str>,
-    accept: bool,
+    how: Resolution,
     rationale: Option<&str>,
     who: &Identity,
 ) -> Result<DecisionDetail> {
     require_human(who)?;
-    match (text, accept) {
-        (Some(_), true) => {
-            return Err(Error::Usage("give an answer or --accept, not both".into()));
-        }
-        (None, false) => {
-            return Err(Error::Usage("give an answer text or --accept".into()));
-        }
-        (Some(t), false) if t.trim().is_empty() => {
-            return Err(Error::Usage("answer must not be empty".into()));
-        }
-        _ => {}
+    if let Resolution::Text(t) = how
+        && t.trim().is_empty()
+    {
+        return Err(Error::Usage("answer must not be empty".into()));
     }
     db::write(conn, |tx| {
         let d = locate(tx, ctx, id)?;
@@ -372,9 +374,25 @@ pub fn answer(
         if status == "decided" {
             return Err(Error::Conflict(format!("{id} is already decided")));
         }
-        let answer = match text {
-            Some(t) => t.trim().to_string(),
-            None => recommendation.ok_or_else(|| {
+        let answer = match how {
+            Resolution::Text(t) => t.trim().to_string(),
+            Resolution::Option(n) => {
+                let options: String =
+                    tx.query_row("SELECT options FROM decisions WHERE id = ?1", [d], |r| {
+                        r.get(0)
+                    })?;
+                let options = parse_options(options, 0)?;
+                n.checked_sub(1)
+                    .and_then(|i| options.get(i))
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Usage(format!(
+                            "--option {n} is not one of the {} option(s) of {id}; numbers start at 1",
+                            options.len()
+                        ))
+                    })?
+            }
+            Resolution::Accept => recommendation.ok_or_else(|| {
                 Error::Usage(format!("{id} has no recommendation; give an answer text"))
             })?,
         };

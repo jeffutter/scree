@@ -539,6 +539,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                 DecisionCommand::Answer {
                     id,
                     answer,
+                    option,
                     rationale,
                     accept,
                 } => {
@@ -552,15 +553,22 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                         .as_deref()
                         .map(|r| text_arg("--rationale", Some(r)))
                         .transpose()?;
-                    decision::answer(
-                        &mut conn,
-                        &ctx,
-                        &id,
-                        text.as_deref(),
-                        accept,
-                        rationale.as_deref(),
-                        &identity,
-                    )?
+                    let how = match (text.as_deref(), option, accept) {
+                        (Some(t), None, false) => decision::Resolution::Text(t),
+                        (None, Some(n), false) => decision::Resolution::Option(n),
+                        (None, None, true) => decision::Resolution::Accept,
+                        (None, None, false) => {
+                            return Err(Error::Usage(
+                                "give an answer text, --option N or --accept".into(),
+                            ));
+                        }
+                        _ => {
+                            return Err(Error::Usage(
+                                "give one of an answer text, --option N or --accept".into(),
+                            ));
+                        }
+                    };
+                    decision::answer(&mut conn, &ctx, &id, how, rationale.as_deref(), &identity)?
                 }
                 DecisionCommand::Supersede { id, by } => {
                     decision::supersede(&mut conn, &ctx, &id, &by)?

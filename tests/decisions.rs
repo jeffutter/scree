@@ -723,3 +723,42 @@ fn add_text_output_shows_link_hint() {
     let out = String::from_utf8(out.stdout).unwrap();
     assert!(out.contains("scree decision link <id> <ticket>"), "{out}");
 }
+
+#[test]
+fn option_records_the_numbered_option_and_rejects_bad_input() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.ticket(&repo, "a");
+    e.ok_at(
+        &repo,
+        &[
+            "decision", "add", &a, "Which?", "--option", "x", "--option", "y",
+        ],
+    );
+    // Out of range, zero, and combined with --accept or text: usage errors.
+    assert_eq!(
+        e.human(&repo, &["decision", "answer", "D-1", "--option", "3"]),
+        2
+    );
+    assert_eq!(
+        e.human(&repo, &["decision", "answer", "D-1", "--option", "0"]),
+        2
+    );
+    assert_eq!(
+        e.human(
+            &repo,
+            &["decision", "answer", "D-1", "--option", "1", "--accept"]
+        ),
+        2
+    );
+    assert_eq!(
+        e.human(&repo, &["decision", "answer", "D-1", "t", "--option", "1"]),
+        2
+    );
+    assert_eq!(
+        e.human(&repo, &["decision", "answer", "D-1", "--option", "2"]),
+        0
+    );
+    let q = e.ok_at(&repo, &["decisions", "--decided"]);
+    assert_eq!(q["decisions"][0]["answer"], "y");
+}

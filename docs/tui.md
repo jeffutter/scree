@@ -74,6 +74,7 @@ Decisions:
 | Ctrl-u/Ctrl-d | half page up/down |
 | `g`/`G`, Home/End | first/last decision |
 | `y` | accept the recommendation (confirm) |
+| `1`-`9` | answer with that numbered option (confirm) |
 | `a` | answer with typed text (prompt) |
 | `t` | open the linked ticket (picker when several) |
 | `s` | cycle scope |
@@ -98,7 +99,7 @@ Popups and prompts:
 
 Lifecycle keys act on the selected ticket and only when valid for its status. `D` and `x` ask for `y` first; abandon uses the fixed reason "abandoned from tui". Refusals appear in the status line. The footer lists the keys valid for the current view and selection.
 
-Answering and accepting call the same library code as `scree decision answer`, so they record the TUI's caller as `decided_by`, and a TUI started as an agent is refused with the library's message in the status line. A decision with no recommendation refuses `y`. An empty typed answer is refused. Answering removes the decision from the queue; if another process answers or supersedes it first, the view reloads and the selection moves to the neighbouring decision.
+Answering and accepting call the same library code as `scree decision answer`, so they record the TUI's caller as `decided_by`, and a TUI started as an agent is refused with the library's message in the status line. Picking an option (`1`-`9`) answers with that option's text after a confirm; a number past the last option shows an error. A decision with no recommendation refuses `y`. An empty typed answer is refused. Answering removes the decision from the queue; if another process answers or supersedes it first, the view reloads and the selection moves to the neighbouring decision.
 
 ## Search and filters
 

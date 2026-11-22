@@ -152,7 +152,7 @@ pub struct AddArgs {
     /// Plan text, or `-` for stdin (an empty read is an error)
     #[arg(long, allow_hyphen_values = true)]
     pub plan: Option<String>,
-    /// An acceptance criterion, or `-` for stdin; repeatable
+    /// An acceptance criterion, or `-` for stdin; repeatable. A criterion verifies finished work; an open question belongs in `decision add`, not in a "decide X" criterion
     #[arg(long = "criterion", allow_hyphen_values = true)]
     pub criteria: Vec<String>,
     #[arg(long = "for", value_enum, default_value_t = ForWho::Agent)]
@@ -418,7 +418,7 @@ pub enum CommentCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DecisionCommand {
-    /// Ask a question linked to a ticket; ids are D-<n> per Project (KEY-D-<n> names another Project)
+    /// Ask a human a question or choice, linked to a ticket, instead of a ticket with a "decide X" criterion; ids are D-<n> per Project (KEY-D-<n> names another Project)
     Add {
         ticket: String,
         #[arg(allow_hyphen_values = true)]
@@ -434,16 +434,19 @@ pub enum DecisionCommand {
     Link { id: String, ticket: String },
     /// Remove the link; a missing link is not an error
     Unlink { id: String, ticket: String },
-    /// Human only: answer with TEXT, or --accept to take the recommendation; an agent is refused
+    /// Human only: answer with TEXT, pick an offered option with --option N, or take the recommendation with --accept; an agent is refused
     Answer {
         id: String,
         // Not named `text`: that is the global --text flag's argument id.
         #[arg(
             value_name = "TEXT",
             allow_hyphen_values = true,
-            conflicts_with = "accept"
+            conflicts_with_all = ["accept", "option"]
         )]
         answer: Option<String>,
+        /// Take the offered option with this 1-based number as the answer
+        #[arg(long, value_name = "N", conflicts_with = "accept")]
+        option: Option<usize>,
         /// Why this answer
         #[arg(long, allow_hyphen_values = true)]
         rationale: Option<String>,

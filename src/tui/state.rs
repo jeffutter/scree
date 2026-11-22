@@ -240,6 +240,10 @@ pub enum ConfirmAction {
     },
     /// Accept the recommendation of the decision in `Confirm::id`.
     AcceptDecision,
+    /// Answer the decision in `Confirm::id` with its option at this 0-based index.
+    PickDecisionOption {
+        index: usize,
+    },
 }
 
 /// A ticket text field the prompt or $EDITOR edits.
@@ -1347,6 +1351,18 @@ fn on_confirm_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
                 id: c.id,
                 text: None,
             },
+            ConfirmAction::PickDecisionOption { index } => {
+                let Some(text) = state
+                    .selected_decision()
+                    .and_then(|d| d.options.get(index).cloned())
+                else {
+                    return vec![];
+                };
+                Effect::AnswerDecision {
+                    id: c.id,
+                    text: Some(text),
+                }
+            }
         }],
         _ => vec![],
     }
@@ -1428,6 +1444,23 @@ fn on_decisions_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
                     });
                 }
                 None => state.error = Some(format!("{id} has no recommendation to accept")),
+            }
+        }
+        (KeyCode::Char(c @ '1'..='9'), false) => {
+            let Some(d) = state.selected_decision() else {
+                return vec![];
+            };
+            let index = usize::from(c as u8 - b'1');
+            let id = decision_key(d);
+            match d.options.get(index) {
+                Some(o) => {
+                    state.confirm = Some(Confirm {
+                        prompt: format!("answer \"{o}\" for {id}?"),
+                        id,
+                        action: ConfirmAction::PickDecisionOption { index },
+                    });
+                }
+                None => state.error = Some(format!("{id} has no option {c}")),
             }
         }
         (KeyCode::Char('a'), false) => {
@@ -3222,6 +3255,21 @@ mod tests {
         update(&mut s, press('y'));
         assert!(update(&mut s, press('n')).is_empty());
         assert!(s.confirm.is_none());
+    }
+
+    #[test]
+    fn a_digit_confirms_then_answers_with_that_option() {
+        let mut s = in_decisions(three());
+        assert!(update(&mut s, press('2')).is_empty() && s.confirm.is_some());
+        assert_eq!(
+            update(&mut s, press('y')),
+            vec![Effect::AnswerDecision {
+                id: "SCR-D-1".into(),
+                text: Some("y".into())
+            }]
+        );
+        update(&mut s, press('9'));
+        assert!(s.confirm.is_none() && s.error.as_deref().unwrap().contains("no option 9"));
     }
 
     #[test]
