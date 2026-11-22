@@ -18,7 +18,7 @@ Where a ticket is in its life: draft, ready, active, done or abandoned. The same
 A computed property: the ticket is ready and nothing blocks it. Never stored.
 
 **Position**
-A ticket's place among its siblings: the root tickets of one Scope, or the subtasks of one parent. Lower goes first. Among root tickets it only orders those already Available; among subtasks it is the running order. Changed by placing a ticket relative to another, never by typing a number.
+A ticket's place among its siblings: the root tickets of one Scope, or the subtasks of one parent. Lower goes first. Among root tickets it only orders those already Available; among subtasks it is the running order, except that `human` subtasks do not hold up agent ones. Changed by placing a ticket relative to another, never by typing a number.
 _Avoid_: Priority, rank
 
 **Blocked**

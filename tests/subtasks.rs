@@ -325,6 +325,35 @@ fn move_refusals() {
 }
 
 #[test]
+fn a_human_sibling_does_not_hold_up_agent_siblings() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let h1 = e.add(&repo, "h1", &["--parent", &p, "--for", "human"]);
+    let a1 = e.sub(&repo, &p, "a1");
+    let a2 = e.sub(&repo, &p, "a2");
+    let h2 = e.add(&repo, "h2", &["--parent", &p, "--for", "human"]);
+
+    // The agent skips the human head and sees the first agent sibling only.
+    assert_eq!(e.next(&repo), [a1.as_str()]);
+    assert_eq!(e.ok_at(&repo, &["show", &a1])["available"], true);
+    assert_eq!(e.ok_at(&repo, &["show", &a2])["available"], false);
+    assert_eq!(
+        e.ok_at(&repo, &["--role", "agent", "start", &a1])["id"],
+        a1.as_str()
+    );
+
+    // A human ticket still waits on every earlier open sibling.
+    assert_eq!(e.ok_at(&repo, &["show", &h1])["available"], true);
+    assert_eq!(e.ok_at(&repo, &["show", &h2])["available"], false);
+    e.ok_at(&repo, &["done", &h1, "--force"]);
+    assert_eq!(e.ok_at(&repo, &["show", &h2])["available"], false);
+    e.ok_at(&repo, &["done", &a1, "--force"]);
+    e.ok_at(&repo, &["done", &a2, "--force"]);
+    assert_eq!(e.ok_at(&repo, &["show", &h2])["available"], true);
+}
+
+#[test]
 fn start_refuses_a_later_sibling_until_earlier_ones_settle() {
     let e = Env::new();
     let repo = e.repo("scree");

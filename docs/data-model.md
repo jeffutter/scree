@@ -59,7 +59,7 @@ Position:
 - New tickets get max + 1000 within their sibling set. There is no priority column.
 - Reordering is relative (`--before`, `--after`, `--first`, `--last`): the new position is the midpoint of its neighbours, and when no integer gap remains the whole set is renumbered in 1000 steps, in the same `BEGIN IMMEDIATE` transaction. Done and abandoned tickets are refused.
 - Sort for `next` and `list` is `(position, number)`. Cross-Scope reads sort by Project key first.
-- Among subtasks only the first unsettled sibling by position is Available. A dependency decides Available; position never unblocks anything.
+- Among subtasks only the first unsettled sibling by position is Available. An agent ticket does not queue behind an earlier `human` sibling (the agent could never take it); a human ticket waits on every earlier open sibling. A dependency decides Available; position never unblocks anything.
 - `move` to another Worktree places the tree last in the new set.
 
 Uniqueness:

@@ -53,7 +53,10 @@ fn blocked_sql() -> String {
 
 /// Available, for a ticket aliased `t`, apart from being blocked: ready,
 /// not archived, and either top-level or the first unsettled sibling by
-/// position among its parent's subtasks.
+/// position among its parent's subtasks. An agent ticket does not queue
+/// behind an earlier `--for human` sibling (an agent could never take it, so
+/// it would stall the rest); a human ticket still waits on every earlier
+/// sibling. Caller-independent, so `list`, `show`, `next` and `start` agree.
 fn ready_first_sql() -> String {
     format!(
         "t.status = 'ready' AND t.archived_at IS NULL
@@ -61,6 +64,7 @@ fn ready_first_sql() -> String {
         SELECT c.id FROM tickets c
         WHERE c.parent_id = t.parent_id AND c.archived_at IS NULL
           AND c.status IN ({})
+          AND (t.\"for\" = 'human' OR c.\"for\" = 'agent')
         ORDER BY c.position, c.number LIMIT 1))",
         Status::sql_list(&Status::OPEN)
     )
@@ -597,8 +601,13 @@ pub fn transition(
                     |r| r.get(0),
                 )?;
                 if !first {
+                    let waits_on = if for_who == "human" {
+                        "subtask"
+                    } else {
+                        "agent subtask (human subtasks do not hold it up)"
+                    };
                     return Err(Error::Refused(format!(
-                        "{id} is not the first unsettled subtask of its parent"
+                        "{id} is not the first unsettled {waits_on} of its parent"
                     )));
                 }
                 if who.role == crate::identity::Role::Agent && for_who == "human" {
