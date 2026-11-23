@@ -370,3 +370,134 @@ pub fn assert_spawn_is_scrubbed() {
         "a harness command must not run in the checkout hosting nextest"
     );
 }
+
+/// A running `scree web` child. Dropping it kills the process.
+pub struct Web {
+    child: Child,
+    pub addr: String,
+}
+
+/// A parsed HTTP response.
+pub struct Reply {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl Reply {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+impl Env {
+    /// Start `scree web --port 0` on this environment's database and wait for
+    /// its `listening on http://ADDR` line. `extra_env` is applied after the
+    /// scrub. Panics when the line does not arrive in 10 seconds.
+    pub fn spawn_web(&self, extra_env: &[(&str, &str)], extra_args: &[&str]) -> Web {
+        let mut cmd = self.cmd(&["web", "--port", "0"]);
+        cmd.args(extra_args);
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(|l| l.ok())
+            {
+                if let Some(i) = line.find("listening on http://") {
+                    let _ = tx.send(line[i + "listening on http://".len()..].trim().to_string());
+                    // Keep draining so the child never blocks on a full pipe.
+                }
+            }
+        });
+        let addr = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("no 'listening on' line from scree web");
+        Web { child, addr }
+    }
+}
+
+impl Web {
+    pub fn port(&self) -> u16 {
+        self.addr.rsplit(':').next().unwrap().parse().unwrap()
+    }
+
+    /// GET or POST `path` with the default headers (valid Host, `Connection:
+    /// close`) plus `extra`. A header in `extra` named `Host` replaces the
+    /// default one.
+    pub fn request(&self, method: &str, path: &str, extra: &[(&str, &str)]) -> Reply {
+        use std::io::{Read, Write};
+        let mut head = format!("{method} {path} HTTP/1.1\r\n");
+        if !extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
+            head.push_str(&format!("Host: {}\r\n", self.addr));
+        }
+        for (k, v) in extra {
+            head.push_str(&format!("{k}: {v}\r\n"));
+        }
+        head.push_str("Content-Length: 0\r\nConnection: close\r\n\r\n");
+        let mut s = std::net::TcpStream::connect(&self.addr).unwrap();
+        let t = Some(std::time::Duration::from_secs(5));
+        s.set_read_timeout(t).unwrap();
+        s.set_write_timeout(t).unwrap();
+        s.write_all(head.as_bytes()).unwrap();
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).unwrap();
+        let raw = String::from_utf8_lossy(&raw).into_owned();
+        let (h, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+        let mut lines = h.lines();
+        let status = lines
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|c| c.parse().ok())
+            .unwrap_or_else(|| panic!("bad response: {raw:?}"));
+        let headers = lines
+            .filter_map(|l| l.split_once(':'))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect();
+        Reply {
+            status,
+            headers,
+            body: body.to_string(),
+        }
+    }
+
+    pub fn get(&self, path: &str) -> Reply {
+        self.request("GET", path, &[])
+    }
+
+    /// Send SIGINT and wait up to `within` for the child to exit; true when it did.
+    pub fn interrupt(&mut self, within: std::time::Duration) -> bool {
+        Command::new("kill")
+            .args(["-INT", &self.child.id().to_string()])
+            .status()
+            .unwrap();
+        let start = std::time::Instant::now();
+        while start.elapsed() < within {
+            if self.child.try_wait().unwrap().is_some() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+}
+
+impl Drop for Web {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}

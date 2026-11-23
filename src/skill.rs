@@ -25,7 +25,7 @@ const SLOTS: [(&str, &str); 5] = [
 ];
 
 /// Human and maintenance commands the skill does not document.
-const OMITTED: [&str; 5] = ["skill", "project", "sweep", "archive", "unarchive"];
+const OMITTED: [&str; 6] = ["skill", "project", "sweep", "archive", "unarchive", "web"];
 
 const DESCRIPTION: &str =
     "Track and work tickets with scree. Use when picking up, creating or finishing work items.";

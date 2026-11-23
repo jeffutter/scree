@@ -17,6 +17,10 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
+# scree web (ADR 0003): axum serves, maud renders HTML, tokio is axum's runtime.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+maud = "0.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "signal", "sync", "time", "macros"] }
 
 [dev-dependencies]
 insta = "1.49.0"

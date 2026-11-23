@@ -165,6 +165,17 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         )?;
         return Ok(Outcome::Quiet);
     }
+    if let Some(Command::Web { port, bind }) = &cli.command {
+        // The web UI is a human surface and never sweeps. Role is forced to
+        // human: --role and SCREE_ROLE (which clap folds into cli.role) are
+        // ignored, so a browser page can never act as an agent.
+        let identity = identity::resolve(Some(Role::Human), cli.author, cli.session, env);
+        let config = web::config::Config::parse(bind, *port)?;
+        let path = db::resolve_path_from_env(cli.db)?;
+        drop(db::open(&path)?);
+        web::run(path, &identity, config)?;
+        return Ok(Outcome::Quiet);
+    }
     let identity = identity::resolve(cli.role, cli.author, cli.session, env);
     let bare = cli.command.is_none();
     if bare && !(identity.role == Role::Human && env.stdout_tty) {
@@ -422,7 +433,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             let t = ticket::link(&mut conn, &id, &links)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
-        Command::Tui => unreachable!("handled before identity resolves"),
+        Command::Tui | Command::Web { .. } => unreachable!("handled before identity resolves"),
         Command::Skill { .. } => unreachable!("handled before the database opens"),
         Command::Sweep { dry_run } => {
             let r = sweep::sweep_command(&mut conn, cwd, cli.project.as_deref(), dry_run)?;

@@ -155,3 +155,89 @@ fn key_and_parent_are_rejected() {
         Err(Error::Usage(_))
     ));
 }
+
+// ---- scree web server skeleton (SCR-76) ----
+
+use std::time::Duration;
+
+const ADR_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+#[test]
+fn serves_placeholder_with_csp() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/");
+    assert_eq!(r.status, 200);
+    assert!(r.body.contains("Scree"));
+    assert_eq!(r.header("content-security-policy"), Some(ADR_CSP));
+}
+
+#[test]
+fn guard_rejects_hostile_requests() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let origin = format!("http://{}", w.addr);
+    let get = |h: &[(&str, &str)]| w.request("GET", "/", h).status;
+    assert_eq!(get(&[("Host", "evil.test")]), 403, "foreign Host");
+    assert_eq!(
+        get(&[("Origin", "http://evil.test")]),
+        403,
+        "foreign Origin"
+    );
+    assert_eq!(get(&[("Origin", "null")]), 403, "Origin null");
+    assert_eq!(get(&[("Sec-Fetch-Site", "same-site")]), 403);
+    assert_eq!(get(&[("Sec-Fetch-Site", "cross-site")]), 403);
+    assert_eq!(get(&[("Sec-Fetch-Site", "same-origin")]), 200);
+    assert_eq!(get(&[("Origin", &origin)]), 200);
+    // A refusal still carries the CSP.
+    let r = w.request("GET", "/", &[("Host", "evil.test")]);
+    assert_eq!(r.header("content-security-policy"), Some(ADR_CSP));
+
+    let no_origin = w.request("POST", "/", &[]);
+    assert_eq!(no_origin.status, 403);
+    assert!(no_origin.body.contains("Origin"));
+    // A valid POST passes the guard; there is no POST route, so the router answers.
+    let ok = w.request("POST", "/", &[("Origin", &origin)]);
+    assert_ne!(ok.status, 403);
+    assert!(!ok.body.contains("forbidden"));
+}
+
+#[test]
+fn non_loopback_bind_is_refused() {
+    let e = Env::new();
+    for bind in ["0.0.0.0", "192.0.2.1"] {
+        let out = e.run(&["web", "--port", "0", "--bind", bind]);
+        assert_eq!(out.status.code(), Some(2), "{bind}: {out:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("listening on"), "{err}");
+        assert!(err.contains("loopback"), "{err}");
+    }
+}
+
+#[test]
+fn port_clash_names_the_port() {
+    let e = Env::new();
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port().to_string();
+    let out = e.run(&["web", "--port", &port]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains(&port));
+}
+
+#[test]
+fn role_is_human_even_when_the_environment_says_agent() {
+    let e = Env::new();
+    // The placeholder page prints the Role the server resolved, so the body
+    // is the observable. The environment variable and the flag both say agent.
+    let w = e.spawn_web(&[("SCREE_ROLE", "agent"), ("CLAUDECODE", "1")], &[]);
+    assert!(w.get("/").body.contains("role: human"));
+    let w2 = e.spawn_web(&[], &["--role", "agent"]);
+    assert!(w2.get("/").body.contains("role: human"));
+}
+
+#[test]
+fn sigint_exits_promptly() {
+    let e = Env::new();
+    let mut w = e.spawn_web(&[], &[]);
+    assert!(w.interrupt(Duration::from_secs(1)));
+}

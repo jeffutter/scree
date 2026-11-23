@@ -26,12 +26,13 @@ Flat under `src/`, one per concept. Commands are plain functions that take a `&m
 | `output` | JSON or text decision and rendering |
 | `tui` | `scree tui` (see [tui.md](tui.md)): submodules `mod` (event loop), `state` (pure `update`), `effects` (effect runner), `view` (drawing, help table), `terminal` (panic-safe restore), `widgets`, `theme` |
 | `watch` | database change polling, shared by the TUI and the web UI |
+| `web` | `scree web` (see [web-ui.md](web-ui.md)): `config` (loopback listen address, Host allowlist), `guard` (Host, Origin, Sec-Fetch-Site checks and the CSP), `create` (create a ticket from a picked Project and Worktree), `mod` (axum server, placeholder page) |
 | `skill` | generated SKILL.md and `--check` |
 | `error` | thiserror type and exit codes |
 
 ## Dependencies
 
-Runtime: `rusqlite` (feature `bundled`), `clap` (`derive`, `env`), `serde` (`derive`), `serde_json`, `thiserror`, `ratatui` (its re-exported `crossterm` is used for terminal control, so there is no separate crossterm dependency). Dev: `insta`, `tempfile`. Anything else needs a reason in the change that adds it.
+Runtime: `rusqlite` (feature `bundled`), `clap` (`derive`, `env`), `serde` (`derive`), `serde_json`, `thiserror`, `axum`, `maud` and `tokio` (the web UI, ADR 0003), `ratatui` (its re-exported `crossterm` is used for terminal control, so there is no separate crossterm dependency). Dev: `insta`, `tempfile`. Anything else needs a reason in the change that adds it.
 
 ## Tests
 

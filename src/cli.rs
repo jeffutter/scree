@@ -562,6 +562,14 @@ pub enum Command {
     },
     /// Open the interactive terminal UI
     Tui,
+    /// Serve the web UI on loopback (hidden while it is built)
+    #[command(hide = true)]
+    Web {
+        #[arg(long, default_value_t = 7733)]
+        port: u16,
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+    },
     /// Hide a ticket (and its subtasks) from list without --archived
     Archive { id: String },
     /// Undo archive; a subtask of an archived parent is refused
