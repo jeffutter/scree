@@ -1,6 +1,6 @@
 # Web UI (`scree web`)
 
-Status: server skeleton, page shell, error contract and live updates. The command is hidden from `--help` and the generated skill, and serves a placeholder page in the shell. Design: [ADR 0003](adr/0003-web-ui-is-server-rendered-with-axum-and-datastar.md), plan: [designs/web-ui-plan.md](designs/web-ui-plan.md).
+Status: server skeleton, page shell, error contract, live updates, scope picker and the List screen (home). The command is hidden from `--help` and the generated skill. Design: [ADR 0003](adr/0003-web-ui-is-server-rendered-with-axum-and-datastar.md), plan: [designs/web-ui-plan.md](designs/web-ui-plan.md).
 
 ## Run
 
@@ -51,6 +51,32 @@ Every page takes its scope from the URL, never from the process cwd, so the same
 
 The picker is a GET form with two selects and open counts. Choosing a Project submits and the server renders that Project's Worktree select; there is no repopulating script (`shell.js` only submits on change, and an Apply button covers no script). The Content-Security-Policy therefore says `form-action 'self'` (it was `'none'` in ADR 0003, which blocks the form).
 
+## List
+
+`/` is the List screen (`src/web/pages/list.rs`, rows in `src/web/view/ticket_row.rs`). Everything is in the URL, so a reload shows the same view. The scope is `p` and `w` (see Scope); the filters reuse the CLI `list` flag names:
+
+| Parameter | Meaning |
+|---|---|
+| `status` (repeatable) | `draft`, `ready`, `active`, `done`, `abandoned`; none means draft, ready and active, as the CLI does. This is also how closed tickets are hidden: the TUI's "hide closed" toggle has no CLI flag, so there is no `hide-closed` parameter. |
+| `for` | `agent` or `human` |
+| `blocked`, `available`, `archived`, `stale` | `1` to turn on; `blocked` with `available` is refused |
+| `older-than` | with `stale`: `Nd`, `Nh`, `Nm` or an RFC 3339 timestamp (default 4h) |
+| `q` | search the id, title and description (library `ListArgs.search`) |
+| `limit` | rows to render; default 200, at most 5000 |
+
+A blank value counts as absent. An unknown value or a conflict answers 400 with the `err-filter` fragment. Unknown parameters are ignored.
+
+- **Rows**: status as text with a colour, id, title, and markers for available, human, claimed and `[blocked by ...]` (the same text the CLI list writes). The id is plain text until the detail screen exists.
+- **Grouping**: a heading per Project, only when the scope can hold more than one Project (`picker::qualify_ids`).
+- **200-row cap**: the first render shows 200 rows and "showing N of M" with a "show more" link that doubles `limit`. M is one count query; only the shown rows are built.
+- **Empty states**: "No tickets here" when the scope holds no tickets at all (any status, archived included), "No tickets match" with a "Clear filters" link when tickets exist but the filters or search hide them.
+- **Saved links**: "Next for me" is `available=1&for=<role>` (Available tickets for the web's Role, in the order `scree next` uses), "Stale claims" is `stale=1`. Both keep the scope.
+- **Live**: the rows sit in `#list-region`, patched by `/stream?view=<this URL>` (the inner URL is percent-encoded). The page and the stream render through one function, so they agree. The filter bar is outside the region and is never patched.
+- **Keys**: `j` and `k` move the selection, `Enter` opens the selected row's link, `Esc` clears the selection (or closes help first, or leaves the search box), `/` focuses the search box. The selection is remembered by ticket id in `shell.js` and re-applied after every patch.
+- **Selected row removed**: when another process removes or archives the selected ticket the list still patches, and the hidden `#list-changed` notice ("This ticket changed or was removed") is shown until a key moves or clears the selection.
+
+Manual browser check for the selected-row behaviour (no headless browser is a dependency): open `/`, press `j`, run `scree abandon <that id> "x"` in a terminal, and confirm the row disappears and the notice appears; press `Esc` and confirm it goes away.
+
 ## Assets
 
 `src/web/assets.rs` embeds every static file with `include_str!` and serves it at a fixed route:
@@ -60,7 +86,7 @@ The picker is a GET form with two selects and open counts. Choosing a Project su
 | `/assets/tokens.css` | `docs/design-system/tokens.css` (one copy, embedded from the design system) |
 | `/assets/app.css` | `src/web/assets/app.css` (semantic tokens only) |
 | `/assets/datastar.js` | `src/web/assets/datastar.js` (hash pinned in `DATASTAR-LICENSE.md`, checked by `tests/web.rs`) |
-| `/assets/shell.js` | `src/web/assets/shell.js` (the `?` help overlay) |
+| `/assets/shell.js` | `src/web/assets/shell.js` (the `?` help overlay, the scope picker submit, the List keys) |
 | `/assets/errors.js` | `src/web/assets/errors.js` (places error fragments, see Errors) |
 
 Each response has a strong `ETag` (quoted SHA-256 of the body), `Cache-Control: no-cache` and `X-Content-Type-Options: nosniff`. `If-None-Match` (a tag, a `W/` tag, a comma list or `*`) gets 304 with no body. Assets pass through the same guard and CSP as pages. Pages must not use inline style or script; `tests/web.rs` lints every rendered page. A new asset is one row in the `ASSETS` table.

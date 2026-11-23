@@ -429,7 +429,7 @@ fn help_overlay_lists_exactly_the_defined_keys() {
         .skip(1)
         .map(|s| s.split("</kbd>").next().unwrap())
         .collect();
-    assert_eq!(keys, ["?", "Esc"]);
+    assert_eq!(keys, ["?", "Esc", "j", "k", "Enter", "/"]);
     assert!(body.contains("/assets/shell.js"));
 }
 
@@ -625,4 +625,247 @@ fn picker_never_reads_the_server_cwd() {
         assert_eq!(a.status, b.status, "{url}");
         assert_eq!(a.body, b.body, "{url}");
     }
+}
+
+// ---- List screen (SCR-81) ----
+
+fn rows(body: &str) -> usize {
+    body.matches("data-id=\"").count()
+}
+
+/// Add `n` draft tickets titled `Bulk i` to the unscoped Project, in one
+/// process (a CLI call per ticket would take minutes).
+fn bulk(e: &Env, n: usize) {
+    let mut c = conn(e);
+    for i in 0..n {
+        let title = format!("Bulk {i}");
+        scree::ticket::add(&mut c, &scree::scope::Scope::Unscoped, &new(&title)).unwrap();
+    }
+}
+
+#[test]
+fn list_filters_narrow_the_rows_and_bad_values_are_400() {
+    let e = Env::new();
+    e.ok(&["add", "Alpha", "--status", "ready"]);
+    e.ok(&["add", "Beta", "--status", "ready", "--for", "human"]);
+    let done = e.ok(&["add", "Gamma", "--status", "ready"]);
+    e.ok(&["start", done["id"].as_str().unwrap()]);
+    e.ok(&["done", done["id"].as_str().unwrap()]);
+    let w = e.spawn_web(&[], &[]);
+    let body = w.get("/").body;
+    assert_eq!(rows(&body), 2, "closed tickets are hidden by default");
+    assert_eq!(rows(&w.get("/?for=human").body), 1);
+    assert_eq!(rows(&w.get("/?status=done").body), 1);
+    assert_eq!(rows(&w.get("/?status=done&status=ready").body), 3);
+    assert_eq!(rows(&w.get("/?q=alp").body), 1);
+    assert_eq!(rows(&w.get("/?available=1&for=human").body), 1);
+    for bad in [
+        "/?status=nope",
+        "/?for=robot",
+        "/?limit=0",
+        "/?blocked=1&available=1",
+        "/?older-than=4h",
+        "/?blocked=maybe",
+    ] {
+        let r = w.get(bad);
+        assert_eq!(r.status, 400, "{bad}");
+        assert!(r.body.contains("id=\"err-filter\""), "{bad}: {}", r.body);
+    }
+    assert_eq!(w.get("/?older-than=4h&stale=1").status, 200);
+}
+
+#[test]
+fn first_render_is_capped_at_200_of_2000() {
+    let e = Env::new();
+    bulk(&e, 2000);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/");
+    assert_eq!(r.status, 200);
+    assert_eq!(rows(&r.body), 200);
+    assert!(r.body.contains("showing 200 of 2000"), "capped footer");
+    assert!(r.body.contains("href=\"/?limit=400\""));
+    let more = w.get("/?limit=400");
+    assert_eq!(rows(&more.body), 400);
+    assert!(more.body.contains("showing 400 of 2000"));
+    let all = w.get("/?limit=2000");
+    assert_eq!(rows(&all.body), 2000);
+    assert!(!all.body.contains("showing "));
+}
+
+/// The region of the live stream's first frame for `view`, as HTML.
+fn first_frame(w: &common::Web, view: &str) -> String {
+    let mut s = w.stream(&format!("/stream?view={}", enc(view)));
+    assert_eq!(s.status, 200);
+    let ev = s.next_event(Duration::from_secs(3)).expect("first frame");
+    ev.lines()
+        .filter_map(|l| l.strip_prefix("data: elements "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn filters_and_search_survive_reload_and_match_the_stream() {
+    let e = Env::new();
+    e.ok(&["add", "Find me", "--status", "ready"]);
+    e.ok(&["add", "Other", "--status", "ready"]);
+    let w = e.spawn_web(&[], &[]);
+    let url = "/?status=ready&for=agent&q=find+me";
+    let a = w.get(url);
+    let b = w.get(url);
+    assert_eq!(a.body, b.body);
+    assert_eq!(rows(&a.body), 1);
+    // The filter bar shows what the URL says.
+    assert!(a.body.contains("value=\"find me\""), "{}", a.body);
+    assert!(a.body.contains("<option value=\"agent\" selected>"));
+    // The page's live view is this URL, and the stream's first frame is the
+    // fragment the page already contains.
+    let frame = first_frame(&w, "/?status=ready&for=agent&q=find+me");
+    assert!(frame.starts_with("<div id=\"list-region\">"), "{frame}");
+    assert!(a.body.contains(&frame), "stream and page disagree");
+    assert!(
+        a.body.contains(&format!(
+            "@get('/stream?view={}')",
+            enc("/?status=ready&for=agent&q=find+me")
+        )),
+        "{}",
+        a.body
+    );
+}
+
+#[test]
+fn the_stream_view_keeps_the_scope() {
+    let e = Env::new();
+    scope_setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/?p=MA&q=seed").body;
+    assert!(
+        page.contains(&format!("@get('/stream?view={}')", enc("/?p=MA&q=seed"))),
+        "{page}"
+    );
+    let frame = first_frame(&w, "/?p=MA&q=seed");
+    assert!(page.contains(&frame));
+    assert_eq!(rows(&frame), 1);
+}
+
+#[test]
+fn rows_group_by_project_only_when_the_scope_spans_projects() {
+    let e = Env::new();
+    scope_setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let all = w.get("/").body;
+    assert!(all.contains("class=\"group-title\">MA<"), "{all}");
+    assert!(all.contains("class=\"group-title\">LOCAL<"), "{all}");
+    assert_eq!(all.matches("class=\"group\"").count(), 3);
+    let one = w.get("/?p=MA").body;
+    assert!(!one.contains("group-title"), "{one}");
+    assert_eq!(rows(&one), 1);
+}
+
+#[test]
+fn empty_scope_and_no_match_are_different_states() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let empty = w.get("/").body;
+    assert!(empty.contains("No tickets here"), "{empty}");
+    assert!(!empty.contains("No tickets match"));
+    e.ok(&["add", "Something"]);
+    let none = w.get("/?q=zzz").body;
+    assert!(none.contains("No tickets match"), "{none}");
+    assert!(none.contains("Clear filters"));
+    assert!(!none.contains("No tickets here"));
+    // A scope with only closed tickets has tickets: it is a no-match, not empty.
+    let closed = e.ok(&["add", "Old", "--status", "ready"]);
+    e.ok(&["start", closed["id"].as_str().unwrap()]);
+    e.ok(&["done", closed["id"].as_str().unwrap()]);
+    assert!(w.get("/?q=Old").body.contains("No tickets match"));
+}
+
+#[test]
+fn hostile_titles_are_escaped() {
+    let e = Env::new();
+    for t in [
+        "<script>alert(1)</script>",
+        "\"><img src=x onerror=alert(1)>",
+    ] {
+        e.ok(&["add", t]);
+    }
+    let w = e.spawn_web(&[], &[]);
+    for url in ["/", "/?q=%3Cscript%3E"] {
+        let body = w.get(url).body;
+        assert!(!body.contains("<script>alert"), "{url}");
+        assert!(!body.contains("<img src=x"), "{url}");
+        assert!(
+            body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "{url}"
+        );
+        assert_no_inline(url, &body);
+    }
+    // The search text is echoed into an attribute: it must be escaped too.
+    let body = w.get("/?q=%22%3E%3Cimg+src%3Dx%3E").body;
+    assert!(!body.contains("<img src=x>"), "{body}");
+    let frame = first_frame(&w, "/");
+    assert!(!frame.contains("<script>alert"));
+}
+
+#[test]
+fn saved_links_return_the_expected_rows() {
+    let e = Env::new();
+    let a = e.ok(&["add", "Agent ready", "--status", "ready"]);
+    e.ok(&["add", "Human ready", "--status", "ready", "--for", "human"]);
+    e.ok(&["add", "Just a draft"]);
+    e.ok(&["start", a["id"].as_str().unwrap()]);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/").body;
+    assert!(
+        page.contains("href=\"/?available=1&amp;for=human\""),
+        "{page}"
+    );
+    assert!(page.contains("href=\"/?stale=1\""));
+    // Next for me: Available tickets for the web's role (human).
+    let next = w.get("/?available=1&for=human").body;
+    assert_eq!(rows(&next), 1);
+    assert!(next.contains("Human ready"));
+    // Fresh claims are not stale; a bound in the future makes the claim stale.
+    assert_eq!(rows(&w.get("/?stale=1").body), 0);
+    assert_eq!(
+        rows(&w.get("/?stale=1&older-than=2099-01-01T00:00:00Z").body),
+        1
+    );
+}
+
+#[test]
+fn a_removed_ticket_leaves_the_stream_and_the_page_ships_the_selection_hooks() {
+    let e = Env::new();
+    let keep = e.ok(&["add", "Keep"])["id"].as_str().unwrap().to_string();
+    let gone = e.ok(&["add", "Gone"])["id"].as_str().unwrap().to_string();
+    let w = e.spawn_web(&[], &[]);
+    let mut s = w.stream(&format!("/stream?view={}", enc("/")));
+    let first = s.next_event(Duration::from_secs(3)).unwrap();
+    assert!(first.contains(&gone) && first.contains(&keep));
+    e.ok(&["abandon", &gone, "no longer needed"]);
+    let next = s
+        .next_event(Duration::from_secs(3))
+        .expect("patch after abandon");
+    assert!(next.contains(&keep) && !next.contains(&gone), "{next}");
+    // The selection state itself is client script (manual browser check in
+    // docs/web-ui.md); the page must ship its element and the script hook.
+    let page = w.get("/").body;
+    assert!(page.contains("id=\"list-changed\" hidden"), "{page}");
+    assert!(page.contains("This ticket changed or was removed"));
+    let js = w.get("/assets/shell.js").body;
+    assert!(js.contains("list-changed") && js.contains("MutationObserver"));
+}
+
+#[test]
+fn bad_scope_or_filter_on_the_stream_is_an_error_fragment() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    assert_eq!(
+        w.get(&format!("/stream?view={}", enc("/?p=NOPE"))).status,
+        404
+    );
+    assert_eq!(
+        w.get(&format!("/stream?view={}", enc("/?status=x"))).status,
+        400
+    );
 }

@@ -77,7 +77,14 @@ pub fn stale(message: &str) -> Markup {
 /// Every key the UI defines, as `(keys, what it does)`. Each screen ticket
 /// adds its own rows here, together with a test; the overlay lists exactly
 /// this table.
-pub const KEYS: &[(&str, &str)] = &[("?", "Show this help"), ("Esc", "Close this help")];
+pub const KEYS: &[(&str, &str)] = &[
+    ("?", "Show this help"),
+    ("Esc", "Close this help, or clear the selected ticket"),
+    ("j", "Select the next ticket"),
+    ("k", "Select the previous ticket"),
+    ("Enter", "Open the selected ticket"),
+    ("/", "Search tickets"),
+];
 
 /// The keyboard help overlay, hidden until `shell.js` opens it on `?`.
 pub fn help_overlay() -> Markup {

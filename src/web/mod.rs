@@ -7,6 +7,7 @@ pub mod config;
 pub mod create;
 mod error;
 mod guard;
+mod pages;
 pub mod scope;
 mod sse;
 mod state;
@@ -20,20 +21,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::State;
-use axum::http::StatusCode;
 use axum::middleware;
-use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use maud::html;
 use tokio::sync::watch;
 
 use crate::error::{Error, Result};
 use crate::identity::Identity;
-use scope::Scoped;
-use state::{Live, blocking};
-use view::components;
-use view::layout::{self, PageCtx, Route};
+use state::Live;
 
 /// How long a signal waits for open requests before exiting anyway.
 const DRAIN: Duration = Duration::from_secs(2);
@@ -76,7 +70,7 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
     })?;
     let live = state.live.clone();
     let router = Router::new()
-        .route("/", get(index))
+        .route("/", get(pages::list::index))
         .route("/stream", get(sse::stream))
         .merge(assets::router());
     #[cfg(feature = "test-routes")]
@@ -122,38 +116,4 @@ async fn wait_for_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
-}
-
-async fn index(State(state): State<AppState>, Scoped(scope): Scoped) -> Response {
-    let db = state.db.clone();
-    let counts = blocking(move || view::banner_counts(&crate::db::open(&db)?)).await;
-    let (status, ctx, body) = match counts {
-        Ok(banner) => (
-            StatusCode::OK,
-            PageCtx {
-                route: Route::List,
-                role: state.role,
-                banner,
-            },
-            html! {
-                h1 { "Scree" }
-                (view::picker::picker(&scope, Route::List.path()))
-                p { "The web UI is not built yet." }
-            },
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            PageCtx {
-                route: Route::List,
-                role: state.role,
-                banner: None,
-            },
-            components::error("Could not read the database", &e.to_string()),
-        ),
-    };
-    (
-        status,
-        Html(layout::page(&ctx, "Scree", body).into_string()),
-    )
-        .into_response()
 }

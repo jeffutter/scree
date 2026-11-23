@@ -6,6 +6,7 @@
 pub mod components;
 pub mod layout;
 pub mod picker;
+pub mod ticket_row;
 
 use std::collections::HashSet;
 

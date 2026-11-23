@@ -65,24 +65,41 @@ pub fn parse(p: Option<&str>, w: Option<&str>) -> Result<ScopeFilter> {
     }
 }
 
+/// The inverse of [`parse`] as query pairs: empty for all Projects.
+pub fn pairs(filter: &ScopeFilter) -> Vec<(&'static str, String)> {
+    match filter {
+        ScopeFilter::All => vec![],
+        ScopeFilter::Project { key } if key == LOCAL => vec![("p", String::new())],
+        ScopeFilter::Project { key } => vec![("p", key.clone())],
+        ScopeFilter::Worktree { key, path } => vec![
+            ("p", key.clone()),
+            ("w", path.clone().unwrap_or_else(|| ROOT.into())),
+        ],
+    }
+}
+
 /// The inverse of [`parse`]: the query string (no leading `?`, empty for all
 /// Projects) that names `filter`, percent-encoded.
 pub fn query(filter: &ScopeFilter) -> String {
     let mut s = form_urlencoded::Serializer::new(String::new());
-    match filter {
-        ScopeFilter::All => {}
-        ScopeFilter::Project { key } if key == LOCAL => {
-            s.append_pair("p", "");
-        }
-        ScopeFilter::Project { key } => {
-            s.append_pair("p", key);
-        }
-        ScopeFilter::Worktree { key, path } => {
-            s.append_pair("p", key);
-            s.append_pair("w", path.as_deref().unwrap_or(ROOT));
-        }
+    for (k, v) in pairs(filter) {
+        s.append_pair(k, &v);
     }
     s.finish()
+}
+
+/// The scope named by the `p` and `w` pairs of a query. A repeated `p` or `w`
+/// is [`Error::NotFound`], like any other bad scope.
+pub fn filter_from_pairs(pairs: &[(String, String)]) -> Result<ScopeFilter> {
+    let get = |name: &str| -> Result<Option<&str>> {
+        let mut found = pairs.iter().filter(|(k, _)| k == name);
+        let first = found.next().map(|(_, v)| v.as_str());
+        if found.next().is_some() {
+            return Err(bad(&format!("{name} given twice")));
+        }
+        Ok(first)
+    };
+    parse(get("p")?, get("w")?)
 }
 
 /// Check `filter` against the Projects and Worktrees `list_with_counts`
@@ -127,18 +144,7 @@ impl FromRequestParts<AppState> for Scoped {
         let reject = |e| WebError::new(e, "scope");
         let Query(pairs) = Query::<Vec<(String, String)>>::try_from_uri(&parts.uri)
             .map_err(|e| reject(Error::Usage(e.to_string())))?;
-        let get = |name: &str| -> Result<Option<&str>> {
-            let mut found = pairs.iter().filter(|(k, _)| k == name);
-            let first = found.next().map(|(_, v)| v.as_str());
-            if found.next().is_some() {
-                return Err(bad(&format!("{name} given twice")));
-            }
-            Ok(first)
-        };
-        let filter = get("p")
-            .and_then(|p| Ok((p, get("w")?)))
-            .and_then(|(p, w)| parse(p, w))
-            .map_err(reject)?;
+        let filter = filter_from_pairs(&pairs).map_err(reject)?;
         let db = state.db.clone();
         blocking(move || resolve(&crate::db::open(&db)?, filter))
             .await

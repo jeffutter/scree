@@ -32,6 +32,8 @@ const CONTROL: &str = "stream";
 pub fn render_view(db: &Path, view: &str) -> crate::error::Result<String> {
     let _ = db;
     match view {
+        "/" => super::pages::list::live(db, ""),
+        v if v.starts_with("/?") => super::pages::list::live(db, &v[2..]),
         #[cfg(feature = "test-routes")]
         super::test_routes::LIVE_VIEW => Ok(super::test_routes::live(db)?.into_string()),
         _ => Err(Error::NotFound(format!("no live view {view}"))),
