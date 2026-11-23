@@ -20,6 +20,8 @@ thiserror = "2.0.21"
 # scree web (ADR 0003): axum serves, maud renders HTML, tokio is axum's runtime.
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
 maud = "0.27.0"
+# Encodes the scope query (src/web/scope.rs); already in the tree through axum.
+form_urlencoded = "1"
 # Body::from_stream and stream::unfold for the live-update stream (SSE is
 # framed by hand in src/web/sse.rs; the datastar crate adds only that framing).
 futures-util = { version = "0.3.34", default-features = false }

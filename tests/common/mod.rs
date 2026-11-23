@@ -459,7 +459,12 @@ impl Env {
     /// its `listening on http://ADDR` line. `extra_env` is applied after the
     /// scrub. Panics when the line does not arrive in 10 seconds.
     pub fn spawn_web(&self, extra_env: &[(&str, &str)], extra_args: &[&str]) -> Web {
-        let mut cmd = self.cmd(&["web", "--port", "0"]);
+        self.spawn_web_at(self.path(), extra_env, extra_args)
+    }
+
+    /// Like [`Env::spawn_web`] with the server's cwd set to `cwd`.
+    pub fn spawn_web_at(&self, cwd: &Path, extra_env: &[(&str, &str)], extra_args: &[&str]) -> Web {
+        let mut cmd = self.cmd_at(cwd, &["web", "--port", "0"]);
         cmd.args(extra_args);
         for (k, v) in extra_env {
             cmd.env(k, v);

@@ -160,7 +160,7 @@ fn key_and_parent_are_rejected() {
 
 use std::time::Duration;
 
-const ADR_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const ADR_CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 #[test]
 fn serves_placeholder_with_csp() {
@@ -443,4 +443,186 @@ fn database_error_renders_an_error_page_with_500() {
     assert_eq!(r.status, 500);
     assert!(r.body.contains("role=\"alert\""), "{}", r.body);
     assert!(r.body.contains("Could not read the database"));
+}
+
+// ---- scope extractor and picker (SCR-80) ----
+
+use scree::web::scope;
+
+/// Percent-encode `s` for a query value.
+fn enc(s: &str) -> String {
+    form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// The `name` select of the page: (is disabled, [(value, selected)]).
+fn select(body: &str, name: &str) -> (bool, Vec<(String, bool)>) {
+    let start = body
+        .find(&format!("<select name=\"{name}\""))
+        .unwrap_or_else(|| panic!("no select {name}: {body}"));
+    let rest = &body[start..];
+    let head_end = rest.find('>').unwrap();
+    let disabled = rest[..head_end].contains("disabled");
+    let rest = &rest[..rest.find("</select>").unwrap()];
+    let opts = rest
+        .split("<option ")
+        .skip(1)
+        .map(|o| {
+            let tag = &o[..o.find('>').unwrap()];
+            let v = tag.strip_prefix("value=\"").unwrap();
+            let v = &v[..v.find('"').unwrap()];
+            (
+                v.replace("&amp;", "&"),
+                tag.split_whitespace().any(|t| t == "selected"),
+            )
+        })
+        .collect();
+    (disabled, opts)
+}
+
+fn selected(body: &str, name: &str) -> Option<String> {
+    select(body, name)
+        .1
+        .into_iter()
+        .find(|(_, s)| *s)
+        .map(|(v, _)| v)
+}
+
+/// Two Projects (my-app with a Worktree, other) and an unscoped ticket.
+fn scope_setup(e: &Env) -> (PathBuf, PathBuf) {
+    let (r, wt) = setup(e);
+    let other = repo(e, "other");
+    e.ok_at(&other, &["add", "Other"]);
+    e.ok(&["add", "Loose"]);
+    (r, wt)
+}
+
+#[test]
+fn scope_urls_select_the_matching_view() {
+    let e = Env::new();
+    let (r, wt) = scope_setup(&e);
+    e.ok_at(&r, &["add", "Root one"]);
+    let w = e.spawn_web(&[], &[]);
+    let wt_path = wt.to_str().unwrap();
+
+    for url in ["/", "/?p=@all", "/?p=%40all"] {
+        let r = w.get(url);
+        assert_eq!(r.status, 200, "{url}");
+        assert_eq!(selected(&r.body, "p").as_deref(), Some("@all"), "{url}");
+        assert!(select(&r.body, "w").0, "w disabled for all: {url}");
+        assert!(r.body.contains("All Projects (4 open)"), "{}", r.body);
+        assert!(r.body.contains("No Project (1 open)"));
+        assert!(r.body.contains(">MA (2 open)") || r.body.contains(">MA"));
+    }
+
+    let r1 = w.get("/?p=MA");
+    assert_eq!(r1.status, 200);
+    assert_eq!(selected(&r1.body, "p").as_deref(), Some("MA"));
+    assert_eq!(selected(&r1.body, "w").as_deref(), Some("@all"));
+    assert!(!select(&r1.body, "w").0);
+    assert!(r1.body.contains("Root checkout (1)"));
+
+    let r2 = w.get(&format!("/?p=MA&w={}", enc(wt_path)));
+    assert_eq!(r2.status, 200);
+    assert_eq!(selected(&r2.body, "w").as_deref(), Some(wt_path));
+
+    let r3 = w.get("/?p=MA&w=@root");
+    assert_eq!(r3.status, 200);
+    assert_eq!(selected(&r3.body, "w").as_deref(), Some("@root"));
+
+    let r4 = w.get("/?p=");
+    assert_eq!(r4.status, 200);
+    assert_eq!(selected(&r4.body, "p").as_deref(), Some(""));
+    assert!(select(&r4.body, "w").0);
+}
+
+#[test]
+fn unknown_or_malformed_scope_is_404_with_an_inline_fragment() {
+    let e = Env::new();
+    let (_, wt) = scope_setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let missing = enc("/no/such/worktree");
+    let urls = [
+        "/?p=NOPE".to_string(),
+        format!("/?p=MA&w={missing}"),
+        "/?w=@root".to_string(),
+        "/?p=&w=@root".to_string(),
+        "/?p=LOCAL".to_string(),
+        "/?p=MA&p=OTHER".to_string(),
+        // A Worktree of another Project is not a Worktree of this one.
+        format!("/?p=OT&w={}", enc(wt.to_str().unwrap())),
+    ];
+    for url in urls {
+        let r = w.get(&url);
+        assert_eq!(r.status, 404, "{url}: {}", r.body);
+        assert!(r.body.contains("id=\"err-scope\""), "{url}: {}", r.body);
+        assert!(r.body.contains("role=\"alert\""));
+    }
+}
+
+#[test]
+fn same_url_renders_the_same_selection_and_round_trips() {
+    let e = Env::new();
+    let (_, wt) = scope_setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let wt_path = wt.to_str().unwrap();
+    let filters = [
+        scree::ticket::ScopeFilter::All,
+        scree::ticket::ScopeFilter::Project {
+            key: "LOCAL".into(),
+        },
+        scree::ticket::ScopeFilter::Project { key: "MA".into() },
+        scree::ticket::ScopeFilter::Worktree {
+            key: "MA".into(),
+            path: None,
+        },
+        scree::ticket::ScopeFilter::Worktree {
+            key: "MA".into(),
+            path: Some(wt_path.to_string()),
+        },
+    ];
+    for f in filters {
+        let q = scope::query(&f);
+        let url = if q.is_empty() {
+            "/".into()
+        } else {
+            format!("/?{q}")
+        };
+        let first = w.get(&url);
+        assert_eq!(first.status, 200, "{url}");
+        // Parse the selections back out of the page: they name the same scope.
+        let p = selected(&first.body, "p");
+        let wv = if select(&first.body, "w").0 {
+            None
+        } else {
+            selected(&first.body, "w")
+        };
+        // The page always sends p and an enabled w; map the defaults back.
+        let wv = wv.filter(|v| v != "@all");
+        let p = p.filter(|v| v != "@all");
+        assert_eq!(
+            scope::parse(p.as_deref(), wv.as_deref()).unwrap(),
+            f,
+            "{url}"
+        );
+        // Reload: identical selection.
+        let again = w.get(&url);
+        assert_eq!(selected(&again.body, "p"), selected(&first.body, "p"));
+        assert_eq!(selected(&again.body, "w"), selected(&first.body, "w"));
+    }
+}
+
+#[test]
+fn picker_never_reads_the_server_cwd() {
+    let e = Env::new();
+    scope_setup(&e);
+    let elsewhere = repo(&e, "unrelated");
+    e.ok_at(&elsewhere, &["add", "Elsewhere"]);
+    let from_tmp = e.spawn_web(&[], &[]);
+    let from_repo = e.spawn_web_at(&elsewhere, &[], &[]);
+    for url in ["/", "/?p=MA", "/?p=MA&w=@root", "/?p="] {
+        let a = from_tmp.get(url);
+        let b = from_repo.get(url);
+        assert_eq!(a.status, b.status, "{url}");
+        assert_eq!(a.body, b.body, "{url}");
+    }
 }

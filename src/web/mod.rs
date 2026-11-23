@@ -7,6 +7,7 @@ pub mod config;
 pub mod create;
 mod error;
 mod guard;
+pub mod scope;
 mod sse;
 mod state;
 #[cfg(feature = "test-routes")]
@@ -29,6 +30,7 @@ use tokio::sync::watch;
 
 use crate::error::{Error, Result};
 use crate::identity::Identity;
+use scope::Scoped;
 use state::{Live, blocking};
 use view::components;
 use view::layout::{self, PageCtx, Route};
@@ -122,7 +124,7 @@ async fn wait_for_signal() {
     }
 }
 
-async fn index(State(state): State<AppState>) -> Response {
+async fn index(State(state): State<AppState>, Scoped(scope): Scoped) -> Response {
     let db = state.db.clone();
     let counts = blocking(move || view::banner_counts(&crate::db::open(&db)?)).await;
     let (status, ctx, body) = match counts {
@@ -135,6 +137,7 @@ async fn index(State(state): State<AppState>) -> Response {
             },
             html! {
                 h1 { "Scree" }
+                (view::picker::picker(&scope, Route::List.path()))
                 p { "The web UI is not built yet." }
             },
         ),

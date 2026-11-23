@@ -44,3 +44,10 @@
     if (e.target === help || e.target.closest("[data-help-close]")) close();
   });
 })();
+
+// Scope picker: a change submits the GET form; the server renders the page for
+// the chosen scope. Without script the Apply button does the same.
+document.addEventListener("change", (e) => {
+  const form = e.target instanceof Element && e.target.closest("form[data-picker]");
+  if (form) form.requestSubmit();
+});

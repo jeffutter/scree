@@ -14,7 +14,7 @@ use super::error::Logged;
 /// Datastar compiles `data-*` expressions with `new Function`, so `script-src`
 /// needs `'unsafe-eval'` (ADR 0003). Nothing is inline.
 pub const CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; \
-    connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+    connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reason {

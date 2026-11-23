@@ -233,3 +233,43 @@ a.nav-item[aria-current="page"] {
 .btn:hover {
   background: var(--color-hover);
 }
+
+/* Scope picker */
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.picker label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.picker-label {
+  color: var(--color-text-muted);
+}
+
+.picker select {
+  font: inherit;
+  min-width: var(--size-select-min);
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  text-overflow: ellipsis;
+}
+
+.picker select:disabled {
+  color: var(--color-text-muted);
+}
+
+#err-scope:empty {
+  display: none;
+}

@@ -5,6 +5,7 @@
 
 pub mod components;
 pub mod layout;
+pub mod picker;
 
 use std::collections::HashSet;
 

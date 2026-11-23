@@ -32,8 +32,24 @@ One middleware checks every request and answers 403 when:
 Every response, refusals included, carries the policy from ADR 0003:
 
 ```
-default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 ```
+
+## Scope
+
+Every page takes its scope from the URL, never from the process cwd, so the same URL shows the same view after a reload (`src/web/scope.rs`, picker in `src/web/view/picker.rs`).
+
+| Query | Scope |
+|---|---|
+| none, or `p=@all` | every Project |
+| `p=KEY` or `p=KEY&w=@all` | one Project, every Worktree |
+| `p=KEY&w=@root` | the root checkout of that Project |
+| `p=KEY&w=<path>` | one Worktree, the path exactly as `scree` stores it |
+| `p=` (empty) | "No Project": the unscoped `LOCAL` Project |
+
+`@all` exists so the picker's selects always send a value; `@root` because stored Worktree paths are absolute and never start with `@`. An unknown key or Worktree path, `w` without `p` (or with `p=` or `p=@all`), a literal `p=LOCAL` and a repeated `p` or `w` answer 404 with the `err-scope` fragment. Other query parameters are ignored here; later screens read their own.
+
+The picker is a GET form with two selects and open counts. Choosing a Project submits and the server renders that Project's Worktree select; there is no repopulating script (`shell.js` only submits on change, and an Apply button covers no script). The Content-Security-Policy therefore says `form-action 'self'` (it was `'none'` in ADR 0003, which blocks the form).
 
 ## Assets
 
