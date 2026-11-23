@@ -80,6 +80,8 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
         .route("/decisions", get(pages::decisions::index))
         .route("/decisions/{id}/accept", post(pages::decisions::accept))
         .route("/decisions/{id}/answer", post(pages::decisions::answer))
+        .route("/ledger", get(pages::ledger::index))
+        .route("/ledger/{id}/supersede", post(pages::ledger::supersede))
         .route("/stream", get(sse::stream))
         .merge(handlers::router())
         .merge(assets::router());

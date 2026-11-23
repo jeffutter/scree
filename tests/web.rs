@@ -414,13 +414,13 @@ fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
         body.contains("<a class=\"nav-item\" href=\"/decisions\""),
         "{body}"
     );
-    for path in ["/board", "/ledger", "/graph"] {
+    for path in ["/board", "/graph"] {
         assert!(
             !body.contains(&format!("<a class=\"nav-item\" href=\"{path}\"")),
             "{path}"
         );
     }
-    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 3, "{body}");
+    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 2, "{body}");
 }
 
 #[test]
@@ -2592,6 +2592,218 @@ fn decisions_queue_is_capped_at_200_rows_with_show_more() {
         &page[page.len().saturating_sub(600)..]
     );
     let all = w.get("/decisions?limit=300").body;
+    assert_eq!(all.matches("class=\"row\"").count(), 300);
+    assert!(!all.contains("showing "));
+}
+
+// ---- Ledger (W23) ----
+
+/// Two decided Decisions (D-1 older, D-2 newer) on one ticket, plus an open D-3.
+fn ledger_fixture(e: &Env) -> String {
+    let t = e.ok(&["add", "Ledger ticket", "--status", "ready"]);
+    let id = t["id"].as_str().unwrap().to_string();
+    for q in ["First <b>question</b>?", "Second question?", "Still open?"] {
+        e.ok(&["decision", "add", &id, q]);
+    }
+    e.ok(&[
+        "--role",
+        "human",
+        "decision",
+        "answer",
+        "LOCAL-D-1",
+        "alpha",
+        "--rationale",
+        "because <i>x</i>",
+    ]);
+    std::thread::sleep(Duration::from_millis(1100));
+    e.ok(&["--role", "human", "decision", "answer", "LOCAL-D-2", "beta"]);
+    id
+}
+
+fn superseded_by(e: &Env, id: &str) -> Option<String> {
+    let c = conn(e);
+    scree::decision::get(
+        &c,
+        &scree::decision::Ctx {
+            cwd: Path::new("/"),
+            project: None,
+        },
+        id,
+    )
+    .unwrap()
+    .superseded_by
+}
+
+#[test]
+fn ledger_lists_decided_newest_first_and_nav_links_it() {
+    let e = Env::new();
+    let ticket = ledger_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/ledger");
+    assert_eq!(r.status, 200);
+    let page = r.body;
+    assert!(
+        page.contains("<a class=\"nav-item\" href=\"/ledger\" aria-current=\"page\""),
+        "{page}"
+    );
+    assert!(
+        page.find("LOCAL-D-2").unwrap() < page.find("LOCAL-D-1").unwrap(),
+        "{page}"
+    );
+    assert!(
+        page.contains("Answer: alpha") && page.contains("Answer: beta"),
+        "{page}"
+    );
+    assert!(
+        page.contains("Rationale: because &lt;i&gt;x&lt;/i&gt;"),
+        "{page}"
+    );
+    assert!(page.contains("Decided by human on "), "{page}");
+    assert!(
+        page.contains(&format!("href=\"/ticket/{ticket}\"")),
+        "{page}"
+    );
+    assert!(
+        page.contains("First &lt;b&gt;question&lt;/b&gt;?"),
+        "{page}"
+    );
+    assert!(
+        !page.contains("Still open?") && !page.contains("LOCAL-D-3"),
+        "{page}"
+    );
+    // The open Decision shows in the banner.
+    assert!(page.contains("class=\"banner\""), "{page}");
+    assert_no_inline("ledger", &page);
+}
+
+#[test]
+fn ledger_filters_search_and_since_with_distinct_empty_states() {
+    let e = Env::new();
+    ledger_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let hit = w.get("/ledger?q=alpha").body;
+    assert!(
+        hit.contains("LOCAL-D-1") && !hit.contains("LOCAL-D-2"),
+        "{hit}"
+    );
+    let none = w.get("/ledger?q=zzzz").body;
+    assert!(none.contains("No decided Decisions match"), "{none}");
+    let since = w.get("/ledger?since=1d").body;
+    assert!(
+        since.contains("LOCAL-D-1") && since.contains("LOCAL-D-2"),
+        "{since}"
+    );
+    assert_eq!(w.get("/ledger?since=garbage").status, 400);
+    let empty = Env::new();
+    let w2 = empty.spawn_web(&[], &[]);
+    assert!(
+        w2.get("/ledger").body.contains("No decided Decisions"),
+        "empty"
+    );
+    assert!(
+        !w2.get("/ledger").body.contains("match"),
+        "empty vs no-match"
+    );
+}
+
+#[test]
+fn ledger_supersede_works_with_qualified_ids_and_hides_by_default() {
+    let e = Env::new();
+    ledger_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let sel = w.get("/ledger?d=LOCAL-D-1").body;
+    assert!(
+        sel.contains("Supersede LOCAL-D-1") && sel.contains("id=\"err-supersede\""),
+        "{sel}"
+    );
+    let r = w.post_form("/ledger/LOCAL-D-1/supersede", &[("by", "local-d-2")]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.body.contains("LOCAL-D-1 superseded by LOCAL-D-2."),
+        "{}",
+        r.body
+    );
+    assert_eq!(superseded_by(&e, "LOCAL-D-1").as_deref(), Some("D-2"));
+    let hidden = w.get("/ledger").body;
+    assert!(!hidden.contains("LOCAL-D-1"), "{hidden}");
+    let shown = w.get("/ledger?superseded=1").body;
+    assert!(shown.contains("superseded by LOCAL-D-2"), "{shown}");
+}
+
+#[test]
+fn ledger_supersede_refusals_are_inline_and_change_nothing() {
+    let e = Env::new();
+    ledger_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    assert_eq!(
+        w.post_form("/ledger/LOCAL-D-1/supersede", &[("by", "LOCAL-D-2")])
+            .status,
+        200
+    );
+    // Already superseded.
+    let r = w.post_form("/ledger/LOCAL-D-1/supersede", &[("by", "LOCAL-D-2")]);
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert!(r.body.contains("id=\"err-supersede\""), "{}", r.body);
+    // Itself.
+    let r = w.post_form("/ledger/LOCAL-D-2/supersede", &[("by", "LOCAL-D-2")]);
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(superseded_by(&e, "LOCAL-D-2"), None);
+    // Blank and bare ids are Usage.
+    for by in ["", "  ", "D-2"] {
+        let r = w.post_form("/ledger/LOCAL-D-2/supersede", &[("by", by)]);
+        assert_eq!(r.status, 400, "{by:?}: {}", r.body);
+    }
+    // Unknown Decision.
+    let r = w.post_form("/ledger/LOCAL-D-9/supersede", &[("by", "LOCAL-D-2")]);
+    assert_eq!(r.status, 404, "{}", r.body);
+    assert_eq!(superseded_by(&e, "LOCAL-D-1").as_deref(), Some("D-2"));
+}
+
+#[test]
+fn ledger_respects_scope_and_updates_live() {
+    let e = Env::new();
+    ledger_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let other = w.get("/ledger?p=NOPE");
+    assert_eq!(other.status, 404);
+    let local = w.get("/ledger?p=").body;
+    assert!(local.contains("LOCAL-D-1"), "{local}");
+    let mut s = w.stream(&format!("/stream?view={}", enc("/ledger")));
+    let first = s.next_event(Duration::from_secs(3)).expect("first frame");
+    assert!(first.contains("LOCAL-D-1"), "{first}");
+    e.ok(&["decision", "supersede", "LOCAL-D-1", "--by", "LOCAL-D-2"]);
+    let next = s.next_event(Duration::from_secs(3)).expect("patch");
+    assert!(!next.contains("LOCAL-D-1"), "{next}");
+}
+
+#[test]
+fn ledger_escapes_hostile_text_and_caps_rows() {
+    let e = Env::new();
+    e.ok(&["add", "T", "--status", "ready"]);
+    {
+        let mut c = conn(&e);
+        let tx = c.transaction().unwrap();
+        let pid: i64 = tx
+            .query_row("SELECT id FROM projects WHERE key = 'LOCAL'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for n in 1..=300 {
+            tx.execute(
+                "INSERT INTO decisions (project_id, number, question, options, status, created_at, answer, decided_by, decided_at)
+                 VALUES (?1, ?2, ?3, '[]', 'decided', '2026-01-01T00:00:00Z', '<script>alert(1)</script>', 'human', '2026-01-02T00:00:00Z')",
+                rusqlite::params![pid, n, format!("Q{n}")],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/ledger").body;
+    assert_eq!(page.matches("class=\"row\"").count(), 200);
+    assert!(page.contains("showing 200 of 300"));
+    assert!(!page.contains("<script>alert"), "escaped");
+    let all = w.get("/ledger?limit=300").body;
     assert_eq!(all.matches("class=\"row\"").count(), 300);
     assert!(!all.contains("showing "));
 }

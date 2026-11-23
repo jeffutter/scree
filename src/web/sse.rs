@@ -38,6 +38,8 @@ pub fn render_view(db: &Path, view: &str) -> crate::error::Result<String> {
         v if v.starts_with("/decisions?") => {
             super::pages::decisions::live(db, &v["/decisions?".len()..])
         }
+        "/ledger" => super::pages::ledger::live(db, ""),
+        v if v.starts_with("/ledger?") => super::pages::ledger::live(db, &v["/ledger?".len()..]),
         v if v.starts_with("/ticket/") => super::pages::ticket::live(db, &v["/ticket/".len()..]),
         #[cfg(feature = "test-routes")]
         super::test_routes::LIVE_VIEW => Ok(super::test_routes::live(db)?.into_string()),

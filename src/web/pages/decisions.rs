@@ -47,7 +47,7 @@ fn usage(msg: impl Into<String>) -> Error {
 }
 
 /// `KEY-D-n` in upper case, or `Usage`. A bare `D-n` is refused on purpose.
-fn qualified(raw: &str) -> Result<String> {
+pub(super) fn qualified(raw: &str) -> Result<String> {
     let up = raw.trim().to_ascii_uppercase();
     let ok = up.split_once("-D-").is_some_and(|(key, n)| {
         project::valid_key(key) && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
@@ -124,7 +124,7 @@ fn qualified_id(d: &OpenDecision) -> String {
 
 /// The library never reads this for a qualified id (see `decision::locate`),
 /// so the web hands it a fixed neutral path instead of the process cwd.
-fn ctx() -> Ctx<'static> {
+pub(super) fn ctx() -> Ctx<'static> {
     Ctx {
         cwd: FsPath::new("/"),
         project: None,

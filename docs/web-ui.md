@@ -236,6 +236,17 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - States: empty "No open Decisions"; error `err-accept`, `err-answer` and the 400/404 page fragment `err-decision`; stale the "This Decision changed" notice; long content wraps (questions, options, answers); scale 200 rows plus "show more".
 - Browser check: not done by hand in this change; the server side is covered by `tests/web.rs`, the two-step button by reading `shell.js` only.
 
+## Ledger
+
+`GET /ledger` (`src/web/pages/ledger.rs`) lists the decided Decisions of the scope, newest first (`decision::decided_log_in`). Each row shows the qualified id (a link that selects it), the question, the answer, the rationale, who decided and when, the linked tickets, and a "superseded by ID" tag. The Ledger nav entry is a link.
+
+- Filters (a GET form in the URL, so they survive a reload): `q` searches question, answer and rationale; `since` takes the `--done-since` grammar (`7d`, `2026-01-01`), and a bad value is 400; `superseded=1` also lists superseded Decisions, which are hidden by default. Capped at 200 rows with "showing 200 of N" and "show more" (`limit`).
+- Supersede: select a row (`?d=SCR-D-3`) and the form below the list takes the replacing Decision as a qualified id. It posts `POST /ledger/ID/supersede` with `by`. The library's rules decide: already superseded, itself, a different Project, or not decided is 422 inline in `err-supersede`; a blank or bare (`D-2`) id is 400; an unknown Decision is 404. Success replaces `#ledger-actions` with "ID superseded by ID."
+- The form sits outside the live region (`#ledger`), so a patch never wipes typed text. The live view is `/stream?view=/ledger?...`.
+- The banner shows here (only the Decisions screen hides it). No new keys, so the help overlay is unchanged. Never sweeps.
+- States: empty "No decided Decisions" and, apart from it, "No decided Decisions match" for a filter with no hits; error page fragment `err-ledger` (400/404) and `err-supersede`; stale is the 422 for a row superseded elsewhere; long content wraps; scale 200 rows plus "show more".
+- Browser check: not done by hand in this change; the server side is covered by `tests/web.rs`.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.
