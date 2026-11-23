@@ -762,3 +762,73 @@ fn option_records_the_numbered_option_and_rejects_bad_input() {
     let q = e.ok_at(&repo, &["decisions", "--decided"]);
     assert_eq!(q["decisions"][0]["answer"], "y");
 }
+
+#[test]
+fn qualified_ids_work_from_an_unrelated_cwd() {
+    let e = Env::new();
+    let (r1, r2) = (e.repo("scree"), e.repo("other"));
+    let (a, b) = (e.ticket(&r1, "a"), e.ticket(&r2, "b"));
+    let key = |t: &str| t.rsplit_once('-').unwrap().0.to_string();
+    let (k1, k2) = (key(&a), key(&b));
+    assert_ne!(k1, k2);
+    for q in ["one", "two"] {
+        e.ok_at(&r1, &["decision", "add", &a, q]);
+    }
+    e.ok_at(&r2, &["decision", "add", &b, "other"]);
+
+    // The unrelated cwd is outside any repo: no scope, so a bare id means LOCAL.
+    let cwd = e.path().to_path_buf();
+    let (d1, d2) = (format!("{k1}-D-1"), format!("{k1}-D-2"));
+
+    // Qualified answer decides the right Project's Decision, not the other D-1.
+    assert_eq!(e.human(&cwd, &["decision", "answer", &d1, "yes"]), 0);
+    // Already decided is still a conflict (exit 5), qualified or not.
+    assert_eq!(e.human(&cwd, &["decision", "answer", &d1, "again"]), 5);
+    let ledger = e.ok_at(&r1, &["decisions", "--decided", "--all-projects"]);
+    let rows = ledger["decisions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["answer"], "yes");
+    assert_eq!(rows[0]["tickets"], serde_json::json!([a]));
+    // The other Project's D-1 is still open.
+    let open = e.ok_at(&r2, &["decisions", "--all-projects"]);
+    let open_tickets: Vec<_> = open["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|d| d["tickets"].as_array().unwrap().clone())
+        .collect();
+    assert!(open_tickets.contains(&serde_json::json!(b)));
+
+    // Qualified supersede from the unrelated cwd.
+    assert_eq!(e.human(&cwd, &["decision", "answer", &d2, "no"]), 0);
+    assert_eq!(
+        e.code_at(&cwd, &["decision", "supersede", &d1, "--by", &d2]),
+        0
+    );
+    let ledger = e.ok_at(
+        &r1,
+        &[
+            "decisions",
+            "--decided",
+            "--all-projects",
+            "--include-superseded",
+        ],
+    );
+    let superseded: Vec<_> = ledger["decisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["superseded_by"].is_string() || d["superseded_by"].is_object())
+        .collect();
+    assert_eq!(superseded.len(), 1);
+
+    // A bare id from that cwd resolves against LOCAL, which has no Decisions:
+    // refused as not found, and neither Project's D-1 is touched.
+    assert_eq!(e.human(&cwd, &["decision", "answer", "D-1", "x"]), 3);
+    let k2_open = e.ok_at(&r2, &["decisions", "--all-projects"]);
+    assert_eq!(k2_open["decisions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        e.human(&cwd, &["decision", "answer", &format!("{k2}-D-1"), "ok"]),
+        0
+    );
+}
