@@ -211,6 +211,21 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - **State walk**: empty (no blockers, "No matching tickets"), loading n/a, error (inline `err-...`), stale (409 above), long content (inputs and textareas are full width, rows wrap), scale (the picker caps at 20).
 - **Browser check** (by hand against Datastar 1.0.5, `scree web` on a temporary `SCREE_DB`): typed text in the plan textarea and the subtask title, focus in the textarea, then `scree comment add` and `scree criterion add` from a terminal. The region showed the new comment, and the typed text and focus stayed. Save then showed the 409 text next to the form with the text kept. After a reload, a save worked, a second save right after it did not 409, Preview showed the rendered text, the picker found and added a ticket and the Blocked by list showed a Remove blocker button, and Add subtask listed the child and emptied the title field.
 
+## Reorder
+
+A "Move before or after" form on the ticket detail page, in the tools region (outside the live-patched `id="ticket"` region, like the picker, so a chosen neighbour survives a live update). It calls `actions::reorder` (the library `reorder` with `Place::Before` or `Place::After`). No schema, CLI or JSON change. Errors, the Origin guard, the human Identity and "no sweep" are as in "Ticket detail writes".
+
+| Route | Form fields | Control (`err-...`) |
+|---|---|---|
+| `POST move` | `anchor` (display id of a sibling), `where` (`before` or `after`) | `move` |
+
+- **Control**: a select of the ticket's siblings (id, status, title; read by `ticket::siblings`, which uses the same Project, parent and Worktree filter as `reorder`), two radio buttons for Before and After, and one Move button. It is a typed choice of a neighbour, never a position number.
+- **Position note**: shown in the live region. A root ticket reads "Position only orders Available root tickets."; a Blocked root ticket adds that moving it will not change what `scree next` picks until it is Available. A subtask reads "Position is the running order among its siblings."
+- **Refusals** are `Refused` (422) and show in `err-move`: an anchor outside the sibling set (another parent or Worktree), a settled ticket, the ticket itself, and a subtask move that would close a dependency cycle. An unknown id is 404, a blank or unknown `where` or a blank `anchor` is Usage (400). A successful move answers with the refreshed region and a freshly read move form.
+- **Board**: not covered on purpose. The Board groups by status, so a neighbour menu there would not show the sibling set; reorder lives on the detail page only.
+- **State walk**: empty (no siblings: "No siblings", no form), loading n/a, error (inline `err-move`), stale (the sibling list was read at page load; a sibling that moved away is refused by the library, and a successful move re-reads the list), permission (a done or abandoned ticket shows no form, and a POST is refused), long content (option text wraps with the select width), scale (the select lists at most `PICKER_ROWS` = 20 siblings in position order and says "showing 20 of N siblings").
+- **Manual check** (not in a browser, so the Datastar form submit is covered only by the HTTP tests): `scree web` on a temporary `SCREE_DB` with three ready tickets A, B, C; a `curl` `POST move` of C before A answered 200 and `scree list` then showed C, A, B.
+
 ## Create
 
 `GET /new` shows the full form for the picked scope (`?p=&w=`); the List shows the quick form above its rows, outside the live-patched region, with a "Full form" link. Both post urlencoded to `POST /new`.

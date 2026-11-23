@@ -571,4 +571,49 @@ mod tests {
             Err(Error::Refused(_))
         ));
     }
+    #[test]
+    fn siblings_are_the_reorder_anchors_in_position_order() {
+        let (_d, mut c) = db();
+        let a = ready_ticket(&mut c);
+        let b = ready_ticket(&mut c);
+        let d = ready_ticket(&mut c);
+        let ids = |c: &Connection, id: &str| -> Vec<String> {
+            ticket::siblings(c, id)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.id)
+                .collect()
+        };
+        assert_eq!(ids(&c, &a), [b.clone(), d.clone()]);
+        reorder(&mut c, &d, &a, true).unwrap();
+        assert_eq!(ids(&c, &b), [d.clone(), a.clone()]);
+        // A subtask's set is its parent's other children only.
+        let sub = |c: &mut Connection| {
+            ticket::add(
+                c,
+                &Scope::Unscoped,
+                &NewTicket {
+                    title: "s",
+                    description: "",
+                    plan: "",
+                    criteria: &[],
+                    for_who: ForWho::Agent,
+                    status: NewStatus::Ready,
+                    key: None,
+                    parent: Some(&a),
+                    blocked_by: &[],
+                },
+            )
+            .unwrap()
+            .ticket
+            .id
+        };
+        let s1 = sub(&mut c);
+        let s2 = sub(&mut c);
+        assert_eq!(ids(&c, &s1), [s2]);
+        assert!(matches!(
+            ticket::siblings(&c, "NOPE-99"),
+            Err(Error::NotFound(_))
+        ));
+    }
 }

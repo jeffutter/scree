@@ -12,10 +12,11 @@ use axum::response::{Html, IntoResponse, Response};
 use maud::{Markup, html};
 use rusqlite::Connection;
 
+use crate::cli::Status;
 use crate::error::{Error, Result};
 use crate::identity::Role;
 use crate::model::{Blocked, Blocker, Comment, Criterion, TicketDetail};
-use crate::ticket::{self, Move};
+use crate::ticket::{self, Move, SiblingRef};
 use crate::web::AppState;
 use crate::web::error::{LoggedExt, unreadable};
 use crate::web::state::blocking;
@@ -350,6 +351,7 @@ pub fn region(conn: &Connection, id: &str, role: Role) -> Result<Markup> {
                 }
             }
             (actions(&d, role))
+            (position_note(&d))
             (prose("Description", &d.description))
             (prose("Plan", &d.plan))
             (prose("Handoff", &d.handoff))
@@ -534,6 +536,69 @@ pub fn preview(field: &str, src: &str) -> Markup {
     }
 }
 
+/// What Position means for this ticket. In the live region, because whether a
+/// root ticket is Blocked changes while the page is open.
+fn position_note(d: &TicketDetail) -> Markup {
+    let t = &d.ticket;
+    html! {
+        p class="meta" id="position-note" {
+            @if t.parent.is_some() {
+                "Position is the running order among its siblings."
+            } @else {
+                "Position only orders Available root tickets."
+                @if t.blocked {
+                    " This ticket is Blocked, so moving it will not change what scree next picks until it is Available."
+                }
+            }
+        }
+    }
+}
+
+/// The "Move before/after" form, or the reason there is none. Rendered with
+/// the tools (outside the live-patched region) so a chosen anchor survives.
+/// Lists at most [`PICKER_ROWS`] siblings, in position order.
+pub fn move_section(d: &TicketDetail, siblings: &[SiblingRef]) -> Markup {
+    let t = &d.ticket;
+    let id = t.id.as_str();
+    html! {
+        div id="ticket-move" {
+            h2 { "Move before or after" }
+            @if Status::is_settled(&t.status) {
+                p class="meta" { "A " (t.status) " ticket keeps its Position and cannot be moved." }
+            } @else if siblings.is_empty() {
+                (components::empty("No siblings", "Nothing to move this ticket before or after."))
+            } @else {
+                (post_form(id, "move", "move", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Neighbour" }
+                        select name="anchor" {
+                            @for s in siblings.iter().take(PICKER_ROWS) {
+                                option value=(s.id) { (s.id) " (" (s.status) ") " (s.title) }
+                            }
+                        }
+                    }
+                    @if siblings.len() > PICKER_ROWS {
+                        p class="meta" { "showing " (PICKER_ROWS) " of " (siblings.len()) " siblings" }
+                    }
+                    fieldset class="filter-group" {
+                        legend class="meta" { "Place" }
+                        label class="check" { input type="radio" name="where" value="before" checked; " Before the neighbour" }
+                        label class="check" { input type="radio" name="where" value="after"; " After the neighbour" }
+                    }
+                    (button_labeled("Move", &format!("Move {id}")))
+                }))
+            }
+        }
+    }
+}
+
+/// [`move_section`] from a fresh read; the answer to a successful move.
+pub fn move_section_read(conn: &Connection, id: &str) -> Result<Markup> {
+    let d = ticket::show(conn, id)?;
+    let siblings = ticket::siblings(conn, id)?;
+    Ok(move_section(&d, &siblings))
+}
+
 /// The add-subtask form; a fresh copy replaces it after a success so the
 /// typed text is cleared. The form's id carries the number of subtasks: the
 /// morph keeps what was typed into an element it matches by id, so a new id is
@@ -617,13 +682,14 @@ pub fn blocker_results(id: &str, candidates: &[(String, String, String)], total:
     }
 }
 
-/// The write forms that must survive a live update: edit, blocker picker and
-/// add-subtask. Rendered once by the page, outside the patched region.
-pub fn tools(d: &TicketDetail) -> Markup {
+/// The write forms that must survive a live update: edit, move, blocker picker
+/// and add-subtask. Rendered once by the page, outside the patched region.
+pub fn tools(d: &TicketDetail, siblings: &[SiblingRef]) -> Markup {
     let t = &d.ticket;
     html! {
         div id="ticket-tools" {
             section class="detail-section" { (edit_form(d)) }
+            section class="detail-section" { (move_section(d, siblings)) }
             section class="detail-section" { (blocker_picker(&t.id)) }
             section class="detail-section" {
                 @if t.parent.is_some() {
@@ -654,7 +720,10 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         let banner = view::banner_counts(&conn)?;
         let found = read(&conn, &want)?;
         let region = region(&conn, &want, role_kind)?;
-        let tools = found.as_ref().map(|(d, _)| tools(d));
+        let tools = match &found {
+            Some((d, _)) => Some(tools(d, &ticket::siblings(&conn, &want)?)),
+            None => None,
+        };
         Ok((banner, found.is_some(), region, tools))
     })
     .await;
@@ -750,12 +819,13 @@ mod tests {
             "ticket-edit",
             "ticket-blockers",
             "ticket-subtask",
+            "ticket-move",
             "ticket-tools",
         ] {
             assert!(!html.contains(form), "{form}: {html}");
         }
         let d = ticket::show(&c, &id).unwrap();
-        assert!(tools(&d).into_string().contains("ticket-edit"));
+        assert!(tools(&d, &[]).into_string().contains("ticket-edit"));
     }
 
     #[test]

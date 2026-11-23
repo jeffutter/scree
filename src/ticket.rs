@@ -1910,6 +1910,43 @@ fn slot_position(others: &[i64], at: usize) -> Option<i64> {
     (mid > lo && mid < hi).then_some(mid)
 }
 
+/// One member of a ticket's sibling set, as the web's reorder menu lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SiblingRef {
+    pub id: String,
+    pub status: String,
+    pub title: String,
+}
+
+/// The tickets `reorder` accepts as an anchor for `id`: same Project, parent
+/// and Worktree, excluding `id`, in position order. Done and abandoned
+/// siblings are included, as they are neighbours there too. Read only.
+pub fn siblings(conn: &Connection, id: &str) -> Result<Vec<SiblingRef>> {
+    let row = resolve(conn, id)?;
+    let (project, parent, worktree): (i64, Option<i64>, Option<String>) = conn.query_row(
+        "SELECT project_id, parent_id, worktree_path FROM tickets WHERE id = ?1",
+        [row],
+        |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)),
+    )?;
+    let rows = conn
+        .prepare(&format!(
+            "SELECT {ID_EXPR}, t.status, t.title
+             FROM tickets t JOIN projects p ON p.id = t.project_id
+             LEFT JOIN tickets pt ON pt.id = t.parent_id
+             WHERE t.project_id = ?1 AND t.parent_id IS ?2 AND t.worktree_path IS ?3 AND t.id <> ?4
+             ORDER BY t.position, t.number"
+        ))?
+        .query_map(params![project, parent, worktree, row], |r| {
+            Ok(SiblingRef {
+                id: r.get(0)?,
+                status: r.get(1)?,
+                title: r.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// Move one open ticket within its sibling set (same Project, parent and
 /// Worktree). Done and abandoned siblings keep their positions and count as
 /// neighbours. Refused (exit 4) when a subtask's new place would close a

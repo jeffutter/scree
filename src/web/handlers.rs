@@ -54,6 +54,7 @@ pub fn router() -> Router<AppState> {
         .route("/ticket/{id}/edit", post(edit))
         .route("/ticket/{id}/preview", post(preview))
         .route("/ticket/{id}/subtasks", post(subtask_add))
+        .route("/ticket/{id}/move", post(reorder))
 }
 
 /// A parsed urlencoded body. An absent field and an empty one read the same
@@ -333,6 +334,37 @@ async fn comment_delete(
     exec(state, id, format!("comment-{cid}"), move |c, id, who| {
         actions::comment_remove(c, id, number(&cid, "comment")?, who).map(drop)
     })
+    .await
+}
+
+/// Move before or after a neighbour (`anchor`, `where`). The library refuses a
+/// non-sibling, a settled ticket, itself and a dependency cycle (422). Only the
+/// move form is sent again, so its list reflects the new order.
+async fn reorder(State(state): State<AppState>, Path(id): Path<String>, body: Bytes) -> Response {
+    let f = Form::parse(&body);
+    let anchor = f.get("anchor").trim().to_string();
+    let place = f.get("where").to_string();
+    exec_with(
+        state,
+        id,
+        "move".into(),
+        page::move_section_read,
+        move |c, id, _| {
+            let before = match place.as_str() {
+                "before" => true,
+                "after" => false,
+                other => {
+                    return Err(Error::Usage(format!(
+                        "{other:?} is not a place: use before or after"
+                    )));
+                }
+            };
+            if anchor.is_empty() {
+                return Err(Error::Usage("pick a neighbour to move next to".into()));
+            }
+            actions::reorder(c, id, &anchor, before).map(drop)
+        },
+    )
     .await
 }
 

@@ -3267,3 +3267,154 @@ fn graph_live_stream_carries_the_region() {
     assert!(frame.contains(&format!("href=\"/ticket/{id}\"")), "{frame}");
     assert!(first_frame(&w, "/graph?all=1").contains("graph-region"));
 }
+
+// ---- Reorder: move before/after ----
+
+fn sibling_ids(e: &Env, id: &str) -> Vec<String> {
+    scree::ticket::siblings(&conn(e), id)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect()
+}
+
+fn subtask(e: &Env, parent: &str, title: &str) -> String {
+    e.ok(&["add", title, "--status", "ready", "--parent", parent])["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn reorder_moves_before_and_after_and_the_page_offers_the_menu() {
+    let e = Env::new();
+    let a = add_titled(&e, "Alpha", "ready");
+    let b = add_titled(&e, "Bravo", "ready");
+    let c = add_titled(&e, "Charlie", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{c}")).body;
+    assert!(page.contains("id=\"ticket-move\""), "{page}");
+    assert!(page.contains(&format!("value=\"{a}\"")), "{page}");
+    assert!(
+        !page.contains(&format!("<option value=\"{c}\"")),
+        "self: {page}"
+    );
+    assert!(
+        page.contains("Position only orders Available root tickets."),
+        "{page}"
+    );
+    assert!(
+        !page.contains("will not change what scree next picks"),
+        "{page}"
+    );
+
+    let r = w.post_form(
+        &format!("/ticket/{c}/move"),
+        &[("anchor", &a), ("where", "before")],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains("id=\"ticket-move\""), "{}", r.body);
+    assert_eq!(sibling_ids(&e, &b), [c.clone(), a.clone()]);
+
+    let r = w.post_form(
+        &format!("/ticket/{c}/move"),
+        &[("anchor", &a), ("where", "after")],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(sibling_ids(&e, &b), [a.clone(), c.clone()]);
+}
+
+#[test]
+fn reorder_refusals_show_inline_and_change_nothing() {
+    let e = Env::new();
+    let a = add_titled(&e, "Alpha", "ready");
+    let b = add_titled(&e, "Bravo", "ready");
+    let done = add_titled(&e, "Finished", "ready");
+    e.ok(&["start", &done]);
+    e.ok(&["done", &done]);
+    let s1 = subtask(&e, &a, "Sub one");
+    let s2 = subtask(&e, &a, "Sub two");
+    let w = e.spawn_web(&[], &[]);
+    let before = sibling_ids(&e, &a);
+    let mv = |id: &str, anchor: &str, place: &str| {
+        w.post_form(
+            &format!("/ticket/{id}/move"),
+            &[("anchor", anchor), ("where", place)],
+        )
+    };
+
+    // Cross-set: a root ticket is no neighbour of a subtask, nor the reverse.
+    let r = mv(&s1, &b, "before");
+    assert_err(&r, 422, "move");
+    assert!(r.body.contains("not in the same sibling set"), "{}", r.body);
+    assert_err(&mv(&b, &s1, "after"), 422, "move");
+    // Settled ticket: no form on the page, and the POST is refused.
+    let page = w.get(&format!("/ticket/{done}")).body;
+    assert!(page.contains("id=\"ticket-move\""), "{page}");
+    assert!(!page.contains("name=\"anchor\""), "{page}");
+    assert!(page.contains("cannot be moved"), "{page}");
+    assert_err(&mv(&done, &a, "before"), 422, "move");
+    // Itself.
+    assert_err(&mv(&a, &a, "before"), 422, "move");
+    // Cycle: s2 waits for s1; moving s1 after s2 would close the loop.
+    e.ok(&["dep", "add", &s2, &s1]);
+    let r = mv(&s1, &s2, "after");
+    assert_err(&r, 422, "move");
+    assert!(r.body.contains("dependency cycle"), "{}", r.body);
+    // Unknown anchor and bad input.
+    assert_err(&mv(&a, "LOCAL-99", "before"), 404, "move");
+    assert_err(&mv(&a, &b, "sideways"), 400, "move");
+    assert_err(&mv(&a, &b, ""), 400, "move");
+    assert_err(&mv(&a, "", "before"), 400, "move");
+    assert_err(&mv("LOCAL-99", &a, "before"), 404, "move");
+    // Same-origin guard.
+    assert_eq!(
+        w.request("POST", &format!("/ticket/{a}/move"), &[]).status,
+        403
+    );
+    assert_eq!(sibling_ids(&e, &a), before);
+}
+
+#[test]
+fn reorder_states_no_siblings_subtask_note_and_blocked_root_note() {
+    let e = Env::new();
+    let only = add_titled(&e, "Alone", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{only}")).body;
+    assert!(page.contains("No siblings"), "{page}");
+    assert!(!page.contains("name=\"anchor\""), "{page}");
+
+    let blocker = add_titled(&e, "Blocker", "ready");
+    let blocked = add_titled(&e, "Blocked", "ready");
+    e.ok(&["dep", "add", &blocked, &blocker]);
+    let page = w.get(&format!("/ticket/{blocked}")).body;
+    assert!(
+        page.contains("Position only orders Available root tickets."),
+        "{page}"
+    );
+    assert!(
+        page.contains("will not change what scree next picks"),
+        "{page}"
+    );
+
+    let s = subtask(&e, &only, "Child");
+    let page = w.get(&format!("/ticket/{s}")).body;
+    assert!(
+        page.contains("Position is the running order among its siblings."),
+        "{page}"
+    );
+    assert!(!page.contains("Available root tickets"), "{page}");
+}
+
+#[test]
+fn reorder_menu_caps_at_twenty_siblings_and_says_so() {
+    let e = Env::new();
+    let first = add_titled(&e, "First", "ready");
+    for i in 0..24 {
+        add_titled(&e, &format!("Other {i}"), "ready");
+    }
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{first}")).body;
+    assert_eq!(page.matches("<option value=\"LOCAL-").count(), 20, "{page}");
+    assert!(page.contains("showing 20 of 24 siblings"), "{page}");
+}
