@@ -71,7 +71,7 @@ The display id (`SCR-12`, `SCR-12.3`) is the Key plus the ticket's `label`, whic
 
 ### dependencies
 
-`dependencies(ticket_id, blocked_by_id)`: composite primary key, both reference `tickets` with ON DELETE CASCADE, `CHECK (ticket_id <> blocked_by_id)`. A row means `ticket_id` waits for `blocked_by_id` to be done.
+`dependencies(ticket_id, blocked_by_id)`: composite primary key, both reference `tickets` with ON DELETE CASCADE, `CHECK (ticket_id <> blocked_by_id)`. A row means `ticket_id` waits for `blocked_by_id` to be done. The library query `ticket::blocks` reads the rows in reverse (direct dependents, and the parent of a subtask, as `Blocked` values with a `holding` flag); it is not part of `scree show`.
 
 ### acceptance_criteria
 

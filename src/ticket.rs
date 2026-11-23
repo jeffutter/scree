@@ -10,8 +10,8 @@ use crate::db;
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::model::{
-    Blocker, BlockingDecision, Claimer, Comment, Commit, CriteriaSummary, Criterion, Decision,
-    ListResult, NextResult, ProjectRef, Subtask, Ticket, TicketDetail,
+    Blocked, Blocker, BlockingDecision, Claimer, Comment, Commit, CriteriaSummary, Criterion,
+    Decision, ListResult, NextResult, ProjectRef, Subtask, Ticket, TicketDetail,
 };
 use crate::project::{self, Project};
 use crate::scope::{self, Scope, path_str};
@@ -381,6 +381,46 @@ pub fn dep_rm(
 
 pub fn show(conn: &Connection, id: &str) -> Result<TicketDetail> {
     build(conn, resolve(conn, id)?)
+}
+
+/// The tickets `id` holds up: its direct dependents, and its parent when it is
+/// a subtask. The reverse of the blockers in [`show`], read from the database
+/// directly so it sees dependents in other Worktrees, archived or done ones,
+/// which a listed set (and so `scree graph`) can miss. `holding` copies the
+/// rule of `blocked_by`: a dependency edge holds while this ticket is not
+/// `done` (abandoned still holds); a subtask edge holds while this ticket is
+/// in an open status.
+pub fn blocks(conn: &Connection, id: &str) -> Result<Vec<Blocked>> {
+    let row = resolve(conn, id)?;
+    let open_sql = Status::sql_list(&Status::OPEN);
+    let out = conn
+        .prepare(&format!(
+            "SELECT * FROM (
+               SELECT {ID_EXPR}, t.title, t.status, t.worktree_path,
+                      me.status <> 'done' AS holding, t.number AS o1, t.id AS o2
+               FROM dependencies d JOIN tickets t ON t.id = d.ticket_id
+               JOIN projects p ON p.id = t.project_id
+               JOIN tickets me ON me.id = d.blocked_by_id
+               WHERE d.blocked_by_id = ?1
+               UNION ALL
+               SELECT {ID_EXPR}, t.title, t.status, t.worktree_path,
+                      me.status IN ({open_sql}), t.number, t.id
+               FROM tickets me JOIN tickets t ON t.id = me.parent_id
+               JOIN projects p ON p.id = t.project_id
+               WHERE me.id = ?1
+             ) ORDER BY o1, o2"
+        ))?
+        .query_map([row], |r| {
+            Ok(Blocked {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                status: r.get(2)?,
+                worktree: r.get(3)?,
+                holding: r.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(out)
 }
 
 /// Archive or unarchive a ticket, whatever its status (archived is separate

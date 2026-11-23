@@ -54,7 +54,7 @@ The spike proved the stack works (live push in about 0.5 s, clean shutdown, no `
 
 *   **Datastar licence**: The licence (MIT) was read in W1 and allows embedding; terms and bundle sha256 are in `src/web/assets/DATASTAR-LICENSE.md`.
 *   **Inline error mechanism**: Datastar does not patch the body of a non-2xx response by default (a reviewer's claim in ADR 0003 review, not yet tried). W13 tries Datastar's own handling first, in a real browser. If it does not place a 422 or 409 body next to the control, the fallback is decided now: a small pinned first-party script served from `'self'` (no CSP change) that listens for Datastar's fetch-error event and patches the response body. Pushing the fragment over the page's SSE stream is rejected (Alternative J). W13 records the result in `docs/web-ui.md`.
-*   **Reverse dependencies**: the shape of the new library query for "what this ticket blocks" is open (check first whether `graph::build` already gives it); decided in W7.
+*   **Reverse dependencies**: decided in W7. `graph::build` does not give it (it only sees listed tickets), so `ticket::blocks(conn, id)` reads the database and returns `Vec<Blocked>`: direct dependents (plus the parent for a subtask), each with a `holding` flag that copies the `blocked_by` rule. Library only; `show` is unchanged.
 *   **Prototype route**: this plan assumes the prototype's default route is the list (Alternative H); confirm against the prototype in `docs/designs/`.
 *   **Limits**: starting values are 32 streams, a 30 s handler timeout and 200 first-render rows; W13 may adjust them.
 

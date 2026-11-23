@@ -255,6 +255,133 @@ fn add_subtask_blocked_by_parent_chain_is_a_cycle() {
     e.add(&repo, "s", &["--parent", &p, "--blocked-by", &y]);
 }
 
+/// What `blocks` returns for `id`, as (id, holding) pairs, on the env's database.
+fn blocks_of(e: &Env, id: &str) -> Vec<(String, bool)> {
+    let conn = scree::db::open(&e.db()).unwrap();
+    scree::ticket::blocks(&conn, id)
+        .unwrap()
+        .into_iter()
+        .map(|b| (b.id, b.holding))
+        .collect()
+}
+
+#[test]
+fn blocks_chain_is_direct_only_and_empty_when_nothing_waits() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.add(&repo, "a", &[]);
+    let b = e.add(&repo, "b", &["--blocked-by", &a]);
+    let c = e.add(&repo, "c", &["--blocked-by", &b]);
+    assert_eq!(blocks_of(&e, &a), vec![(b.clone(), true)]);
+    assert_eq!(blocks_of(&e, &b), vec![(c.clone(), true)]);
+    assert!(blocks_of(&e, &c).is_empty());
+}
+
+#[test]
+fn blocks_crosses_worktrees_and_reports_the_worktree() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let wa = e.worktree(&repo, "feat-a");
+    let wb = e.worktree(&repo, "feat-b");
+    let a = e.add(&wa, "a", &[]);
+    let b = e.add(&wb, "b", &["--blocked-by", &a]);
+    let conn = scree::db::open(&e.db()).unwrap();
+    let got = scree::ticket::blocks(&conn, &a).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].id, b);
+    assert!(got[0].holding);
+    assert_eq!(
+        got[0].worktree.as_deref(),
+        Some(wb.to_str().unwrap()),
+        "the dependent's Worktree, not the blocker's"
+    );
+}
+
+#[test]
+fn blocks_keeps_dependents_of_a_done_blocker_without_holding() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let a = e.add(&repo, "a", &[]);
+    let b = e.add(&repo, "b", &["--blocked-by", &a]);
+    e.ok_at(&repo, &["done", &a, "--force"]);
+    assert_eq!(blocks_of(&e, &a), vec![(b.clone(), false)]);
+
+    // An abandoned blocker still holds, as in `blocked_by`.
+    let c = e.add(&repo, "c", &[]);
+    let d = e.add(&repo, "d", &["--blocked-by", &c]);
+    e.ok_at(&repo, &["abandon", &c, "nope"]);
+    assert_eq!(blocks_of(&e, &c), vec![(d, true)]);
+}
+
+#[test]
+fn blocks_of_a_subtask_includes_its_parent_while_open() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let p = e.add(&repo, "p", &[]);
+    let s = e.sub(&repo, &p, "s");
+    assert_eq!(blocks_of(&e, &s), vec![(p.clone(), true)]);
+    e.ok_at(&repo, &["done", &s, "--force"]);
+    assert_eq!(blocks_of(&e, &s), vec![(p, false)]);
+}
+
+#[test]
+fn blocks_holding_edges_match_scree_graph() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let wa = e.worktree(&repo, "feat-a");
+    let a = e.add(&repo, "a", &[]);
+    let b = e.add(&wa, "b", &["--blocked-by", &a]);
+    let c = e.add(&repo, "c", &["--blocked-by", &a, "--blocked-by", &b]);
+    let p = e.add(&repo, "p", &[]);
+    let s = e.sub(&repo, &p, "s");
+    let x = e.add(&repo, "x", &[]);
+    e.add(&repo, "y", &["--blocked-by", &x]);
+    e.ok_at(&repo, &["done", &x, "--force"]);
+
+    let g = e.ok_at(
+        &repo,
+        &[
+            "graph",
+            "--json",
+            "--all-worktrees",
+            "--status",
+            "draft",
+            "--status",
+            "ready",
+            "--status",
+            "active",
+            "--status",
+            "done",
+            "--status",
+            "abandoned",
+        ],
+    );
+    let mut graph: Vec<(String, String)> = g["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["from"].as_str().unwrap().to_string(),
+                d["to"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    graph.sort();
+    assert!(!graph.is_empty());
+
+    let mut query = Vec::new();
+    for id in [&a, &b, &c, &p, &s, &x] {
+        for (to, holding) in blocks_of(&e, id) {
+            if holding {
+                query.push((id.clone(), to));
+            }
+        }
+    }
+    query.sort();
+    assert_eq!(query, graph);
+}
+
 /// A configured `git` run in `dir`, through the shared scrub.
 fn git(dir: &Path, args: &[&str]) {
     let out = git_cmd(dir).args(args).output().unwrap();

@@ -27,6 +27,18 @@ pub struct Blocker {
     pub worktree: Option<String>,
 }
 
+/// A ticket held up by another: the reverse of [`Blocker`]. `holding` says
+/// whether the edge holds it up right now; a done blocker keeps its
+/// dependents listed with `holding: false`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Blocked {
+    pub holding: bool,
+    pub id: String,
+    pub status: String,
+    pub title: String,
+    pub worktree: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Subtask {
     pub id: String,
