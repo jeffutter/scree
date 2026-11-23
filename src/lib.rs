@@ -14,6 +14,7 @@ pub mod sweep;
 pub mod ticket;
 pub mod tui;
 pub mod watch;
+pub mod web;
 
 use clap::CommandFactory;
 
