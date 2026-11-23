@@ -34,6 +34,7 @@ pub fn render_view(db: &Path, view: &str) -> crate::error::Result<String> {
     match view {
         "/" => super::pages::list::live(db, ""),
         v if v.starts_with("/?") => super::pages::list::live(db, &v[2..]),
+        v if v.starts_with("/ticket/") => super::pages::ticket::live(db, &v["/ticket/".len()..]),
         #[cfg(feature = "test-routes")]
         super::test_routes::LIVE_VIEW => Ok(super::test_routes::live(db)?.into_string()),
         _ => Err(Error::NotFound(format!("no live view {view}"))),

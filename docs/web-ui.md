@@ -156,3 +156,13 @@ One line per request on stderr: `scree web: METHOD ROUTE STATUS`, plus the error
 ## Markdown
 
 `web::view::markdown::render` turns ticket text (plans, handoffs, comments) into HTML. Raw HTML in the text is shown as escaped text, never emitted. Links keep their `href` only for `http`, `https` and relative targets (whitespace and control characters are ignored when reading the scheme, case does not matter); any other scheme renders as the link's plain text. Images render as their alt text: no `<img>` is emitted and nothing is fetched. Escaping is done by pulldown-cmark's HTML writer, not by hand.
+
+## Ticket detail
+
+`GET /ticket/ID` (`src/web/pages/ticket.rs`) is the read-only detail of one ticket: header (id, title, status, `for`, Project, Worktree or root checkout, claimer, times), description, plan and handoff (rendered by `view::markdown`), criteria with evidence and who checked them, blocked by (tickets and open Decisions), blocks (`ticket::blocks`; an edge that no longer holds is marked), subtasks, linked Decisions (plain text until the Decisions screen exists), commits and every comment with its `edited_at`. It reads through `ticket::show` and `ticket::blocks`; there is no SQL in the handler. List rows link to it. The detail has no nav entry, so List stays highlighted. It defines no keys, so the help overlay is unchanged.
+
+The page and the live view `/ticket/ID` (an arm of `sse::render_view`) share `ticket::region`. A ticket that does not exist, or was removed by another process while the page was open, renders an inline "This ticket was removed or never existed" state with a link back to the List: the page answers 404, the stream sends it as a normal patch so an open page shows it in place. Every comment is rendered (no cap); long titles and ids wrap.
+
+## Sweep
+
+The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.

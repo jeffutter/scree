@@ -324,7 +324,9 @@ fn no_inline_style_or_script_in_pages() {
     e.ok(&["decision", "add", &ids[0], "Populate the banner?"]);
     let w = e.spawn_web(&[], &[]);
     // Add each new rendered page here.
-    let pages = ["/"];
+    let ids2 = e.ok(&["add", "Detail page"]);
+    let detail = format!("/ticket/{}", ids2["id"].as_str().unwrap());
+    let pages = ["/", detail.as_str()];
     for page in pages {
         let r = w.get(page);
         assert_eq!(r.status, 200, "{page}");
@@ -913,4 +915,235 @@ mod markdown_hostile {
             assert!(o.contains(&format!("href=\"{h}\"")), "{h}: {o}");
         }
     }
+}
+
+// ---- Ticket detail (SCR-83) ----
+
+/// Text of `<li ... id="comment-N">` entries in a page.
+fn comment_count(body: &str) -> usize {
+    body.matches("id=\"comment-").count()
+}
+
+#[test]
+fn detail_page_matches_scree_show() {
+    let e = Env::new();
+    let blocker = e.ok(&["add", "Blocker one", "--status", "ready"]);
+    let blocker = blocker["id"].as_str().unwrap().to_string();
+    let t = e.ok(&[
+        "add",
+        "Rich ticket",
+        "--status",
+        "ready",
+        "--description",
+        "Describe **this**",
+        "--plan",
+        "Plan step one",
+        "--criterion",
+        "first criterion",
+        "--criterion",
+        "second criterion",
+    ]);
+    let id = t["id"].as_str().unwrap().to_string();
+    e.ok(&["start", &id]);
+    e.ok(&["check", &format!("{id}#1"), "--evidence", "ran the thing"]);
+    let sub = e.ok(&["add", "A subtask", "--parent", &id, "--status", "ready"]);
+    let sub = sub["id"].as_str().unwrap().to_string();
+    e.ok(&["comment", "add", &id, "hello from a comment"]);
+    e.ok(&["decision", "add", &id, "Which way should this go?"]);
+    e.ok(&["dep", "add", &id, &blocker]);
+    let show = e.ok(&["show", &id]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get(&format!("/ticket/{id}"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_no_inline("ticket", &r.body);
+    let b = r.body;
+    assert!(b.contains("Rich ticket"));
+    assert!(b.contains("Describe <strong>this</strong>"), "{b}");
+    assert!(b.contains("Plan step one"));
+    for c in show["criteria"].as_array().unwrap() {
+        assert!(b.contains(c["text"].as_str().unwrap()));
+    }
+    assert!(b.contains("ran the thing"));
+    assert!(b.contains("1 of 2 checked"));
+    for c in show["comments"].as_array().unwrap() {
+        assert!(b.contains(c["body"].as_str().unwrap()));
+    }
+    assert_eq!(
+        comment_count(&b),
+        show["comments"].as_array().unwrap().len()
+    );
+    assert!(b.contains("Blocked by") && b.contains("Blocker one"));
+    assert!(b.contains("Subtasks") && b.contains("A subtask") && b.contains(&sub));
+    assert!(b.contains("Which way should this go?"));
+    assert!(b.contains("claimed by"));
+    // The blocker page lists what it blocks.
+    let r = w.get(&format!("/ticket/{blocker}"));
+    assert!(r.body.contains("Blocks") && r.body.contains("Rich ticket"));
+    // Rows on the List link to the detail.
+    assert!(w.get("/").body.contains(&format!("href=\"/ticket/{id}\"")));
+}
+
+#[test]
+fn unknown_ticket_is_404_with_the_gone_state() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    for id in ["LOCAL-999", "nonsense"] {
+        let r = w.get(&format!("/ticket/{id}"));
+        assert_eq!(r.status, 404, "{id}");
+        assert!(r.body.contains("removed or never existed"), "{id}");
+    }
+}
+
+#[test]
+fn scale_ticket_renders_in_one_response() {
+    let e = Env::new();
+    let title = "very long title ".repeat(20) + &"x".repeat(300);
+    let mut args = vec![
+        "add".to_string(),
+        title.clone(),
+        "--status".into(),
+        "ready".into(),
+    ];
+    for i in 0..30 {
+        args.push("--criterion".into());
+        args.push(format!("criterion number {i} {}", "w".repeat(80)));
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let id = e.ok(&refs)["id"].as_str().unwrap().to_string();
+    {
+        let mut c = conn(&e);
+        let tx = c.transaction().unwrap();
+        for i in 0..120 {
+            tx.execute(
+                "INSERT INTO comments (ticket_id, author, body, created_at)
+                 SELECT t.id, 'agent', ?1, '2026-01-01T00:00:00Z' FROM tickets t
+                 JOIN projects p ON p.id = t.project_id WHERE p.key || '-' || t.label = ?2",
+                rusqlite::params![format!("comment body {i}"), id],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let show = e.ok(&["show", &id]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get(&format!("/ticket/{id}"));
+    assert_eq!(r.status, 200);
+    assert_no_inline("scale", &r.body);
+    assert_eq!(comment_count(&r.body), 120);
+    assert_eq!(show["comments"].as_array().unwrap().len(), 120);
+    assert!(r.body.contains(&title));
+    assert_eq!(r.body.matches("class=\"criterion\"").count(), 30);
+    assert!(r.body.contains("0 of 30 checked"));
+}
+
+#[test]
+fn hostile_ticket_text_is_inert_on_the_detail_page() {
+    let e = Env::new();
+    let evil = "<script>alert(1)</script> [x](javascript:alert(1)) <img src=x onerror=alert(1)>";
+    let id = e.ok(&[
+        "add",
+        evil,
+        "--description",
+        evil,
+        "--plan",
+        evil,
+        "--criterion",
+        evil,
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["comment", "add", &id, evil]);
+    let w = e.spawn_web(&[], &[]);
+    let url = format!("/ticket/{id}");
+    for body in [w.get(&url).body, first_frame(&w, &url)] {
+        assert!(!body.contains("<script>alert"), "{body}");
+        assert!(!body.contains("<img"), "{body}");
+        assert!(!body.contains("href=\"javascript"), "{body}");
+        assert!(body.contains("&lt;script&gt;"), "{body}");
+    }
+}
+
+#[test]
+fn a_ticket_removed_by_another_process_shows_the_gone_state_in_the_stream() {
+    let e = Env::new();
+    let id = e.ok(&["add", "Doomed"])["id"].as_str().unwrap().to_string();
+    let w = e.spawn_web(&[], &[]);
+    let mut s = w.stream(&format!("/stream?view={}", enc(&format!("/ticket/{id}"))));
+    let first = s.next_event(Duration::from_secs(3)).unwrap();
+    assert!(first.contains("Doomed"), "{first}");
+    // The CLI never deletes tickets, so a direct SQL delete is the only way to
+    // simulate another process removing one.
+    e.exec_batch(
+        "PRAGMA foreign_keys = ON;
+         DELETE FROM tickets WHERE title = 'Doomed';",
+    );
+    let next = s.next_event(Duration::from_secs(3)).expect("gone frame");
+    assert!(next.contains("removed or never existed"), "{next}");
+}
+
+#[test]
+fn web_never_sweeps() {
+    // No file under src/web may call into the sweep module.
+    let needle = concat!("sweep", "::");
+    let mut stack = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/web")];
+    let mut seen = 0;
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                seen += 1;
+                let text = std::fs::read_to_string(&p).unwrap();
+                assert!(!text.contains(needle), "{} calls {needle}", p.display());
+            }
+        }
+    }
+    assert!(seen > 5, "walked {seen} files");
+}
+
+#[test]
+fn web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep() {
+    let e = Env::new();
+    let r = repo(&e, "my-app");
+    let wt = worktree(&e, &r, "feat");
+    e.ok_at(&r, &["add", "root ticket", "--status", "ready"]);
+    let open = e.ok_at(&wt, &["add", "open one", "--status", "ready"]);
+    let open = open["id"].as_str().unwrap().to_string();
+    let closed = e.ok_at(&wt, &["add", "closed one", "--status", "ready"]);
+    let closed = closed["id"].as_str().unwrap().to_string();
+    e.ok_at(&wt, &["start", &closed]);
+    e.ok_at(&wt, &["done", &closed]);
+    git(&r, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+    let state = |id: &str| -> (String, bool) {
+        let (key, label) = id.split_once('-').unwrap();
+        e.sql(
+            &format!(
+                "SELECT t.status, t.archived_at IS NOT NULL FROM tickets t
+                 JOIN projects p ON p.id = t.project_id
+                 WHERE p.key = '{key}' AND t.label = '{label}'"
+            ),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    };
+    let before = (state(&open), state(&closed));
+    assert_eq!(before.0, ("ready".to_string(), false));
+    assert_eq!(before.1, ("done".to_string(), false));
+
+    let w = e.spawn_web(&[], &[]);
+    for url in [
+        "/".to_string(),
+        "/?p=MA".to_string(),
+        format!("/ticket/{open}"),
+        format!("/ticket/{closed}"),
+    ] {
+        assert_eq!(w.get(&url).status, 200, "{url}");
+    }
+    assert_eq!((state(&open), state(&closed)), before, "web must not sweep");
+
+    // A sweeping CLI command archives and abandons them per docs/data-model.md.
+    e.ok_at(&r, &["list"]);
+    assert_eq!(state(&closed), ("done".to_string(), true));
+    assert_eq!(state(&open), ("abandoned".to_string(), true));
 }

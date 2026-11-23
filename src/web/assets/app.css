@@ -424,3 +424,67 @@ a.nav-item[aria-current="page"] {
   font-size: var(--text-sm);
   color: var(--color-status-blocked);
 }
+
+.detail-head {
+  margin-bottom: var(--space-5);
+}
+
+.detail-title {
+  overflow-wrap: anywhere;
+}
+
+.detail-facts,
+.meta {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-2);
+}
+
+.detail-section {
+  margin-bottom: var(--space-6);
+}
+
+.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.prose {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.prose pre,
+.prose code {
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  white-space: pre-wrap;
+}
+
+.criterion,
+.related,
+.comment {
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+
+.check-mark {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.check-done {
+  color: var(--color-status-done);
+}
+
+.criterion-evidence {
+  margin-top: var(--space-2);
+  padding-left: var(--space-5);
+}
+
+.comment-author {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text);
+}

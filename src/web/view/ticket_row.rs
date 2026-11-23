@@ -7,7 +7,7 @@ use crate::model::Ticket;
 
 /// Whether the ticket detail screen is served. Until it is, the id is plain
 /// text instead of a dead link. The screen's ticket flips this.
-const DETAIL_BUILT: bool = false;
+const DETAIL_BUILT: bool = true;
 
 /// The `[blocked by ...]` text of a blocked ticket, as the CLI's text list
 /// writes it: blocker ids with the Worktree directory name and `(abandoned)`,
