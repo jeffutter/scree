@@ -242,10 +242,11 @@ fn sigint_exits_promptly() {
     assert!(w.interrupt(Duration::from_secs(1)));
 }
 
-const ASSET_PATHS: [(&str, &str); 3] = [
+const ASSET_PATHS: [(&str, &str); 4] = [
     ("/assets/tokens.css", "text/css; charset=utf-8"),
     ("/assets/app.css", "text/css; charset=utf-8"),
     ("/assets/datastar.js", "text/javascript; charset=utf-8"),
+    ("/assets/shell.js", "text/javascript; charset=utf-8"),
 ];
 
 #[test]
@@ -318,6 +319,8 @@ fn assert_no_inline(page: &str, body: &str) {
 #[test]
 fn no_inline_style_or_script_in_pages() {
     let e = Env::new();
+    let ids = make_tickets(&e, 1);
+    e.ok(&["decision", "add", &ids[0], "Populate the banner?"]);
     let w = e.spawn_web(&[], &[]);
     // Add each new rendered page here.
     let pages = ["/"];
@@ -327,6 +330,7 @@ fn no_inline_style_or_script_in_pages() {
         assert_no_inline(page, &r.body);
     }
     assert!(w.get("/").body.contains("/assets/app.css"));
+    assert!(w.get("/").body.contains("class=\"banner\""));
     // The lint itself rejects what it should.
     for bad in [
         "<style>a{}</style>",
@@ -335,4 +339,107 @@ fn no_inline_style_or_script_in_pages() {
     ] {
         assert!(std::panic::catch_unwind(|| assert_no_inline("bad", bad)).is_err());
     }
+}
+
+/// Make `n` ready Tickets (unscoped, Project LOCAL) and return their ids.
+fn make_tickets(e: &Env, n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            let t = e.ok(&["add", &format!("T{i}"), "--status", "ready"]);
+            t["id"].as_str().unwrap().to_string()
+        })
+        .collect()
+}
+
+/// The numbers the library reports for the banner: (open, distinct blocked).
+fn library_counts(e: &Env) -> (usize, usize) {
+    let c = conn(e);
+    let q = scree::decision::open_queue_in(&c, &scree::ticket::ScopeFilter::All).unwrap();
+    let mut all: Vec<&String> = q.decisions.iter().flat_map(|d| &d.tickets).collect();
+    all.sort();
+    all.dedup();
+    (q.decisions.len(), all.len())
+}
+
+#[test]
+fn banner_hidden_without_decisions() {
+    let e = Env::new();
+    make_tickets(&e, 1);
+    let w = e.spawn_web(&[], &[]);
+    assert!(!w.get("/").body.contains("class=\"banner\""));
+}
+
+#[test]
+fn banner_counts_match_the_library() {
+    let e = Env::new();
+    let ids = make_tickets(&e, 3);
+    // D-1 blocks T0 and T1, D-2 blocks T1 and T2: three distinct Tickets, not four.
+    e.ok(&["decision", "add", &ids[0], "<script>alert(1)</script> one?"]);
+    e.ok(&["decision", "link", "D-1", &ids[1]]);
+    e.ok(&["decision", "add", &ids[1], "Second?"]);
+    e.ok(&["decision", "link", "D-2", &ids[2]]);
+    assert_eq!(library_counts(&e), (2, 3));
+
+    let w = e.spawn_web(&[], &[]);
+    let body = w.get("/").body;
+    assert!(body.contains("href=\"/decisions\""), "{body}");
+    assert!(
+        body.contains("2 open Decisions</span> block 3 Tickets."),
+        "{body}"
+    );
+    // Counts only: the question text never reaches the banner.
+    assert!(!body.contains("alert(1)"), "{body}");
+
+    // A finished Ticket stops counting, through the page as in the library.
+    e.ok(&["abandon", &ids[2], "not needed"]);
+    let (open, blocked) = library_counts(&e);
+    assert_eq!((open, blocked), (2, 2));
+    let body = w.get("/").body;
+    assert!(
+        body.contains("2 open Decisions</span> block 2 Tickets."),
+        "{body}"
+    );
+}
+
+#[test]
+fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let body = w.get("/").body;
+    assert!(body.contains("href=\"/\" aria-current=\"page\""), "{body}");
+    for path in ["/board", "/decisions", "/ledger", "/graph"] {
+        assert!(
+            !body.contains(&format!("<a class=\"nav-item\" href=\"{path}\"")),
+            "{path}"
+        );
+    }
+    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 4, "{body}");
+}
+
+#[test]
+fn help_overlay_lists_exactly_the_defined_keys() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let body = w.get("/").body;
+    let overlay = &body[body.find("id=\"help\"").unwrap()..];
+    let overlay = &overlay[..overlay.find("</table>").unwrap()];
+    let keys: Vec<&str> = overlay
+        .split("<kbd>")
+        .skip(1)
+        .map(|s| s.split("</kbd>").next().unwrap())
+        .collect();
+    assert_eq!(keys, ["?", "Esc"]);
+    assert!(body.contains("/assets/shell.js"));
+}
+
+#[test]
+fn database_error_renders_an_error_page_with_500() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    // Break the schema under the running server.
+    e.exec_batch("DROP TABLE decision_tickets");
+    let r = w.get("/");
+    assert_eq!(r.status, 500);
+    assert!(r.body.contains("role=\"alert\""), "{}", r.body);
+    assert!(r.body.contains("Could not read the database"));
 }

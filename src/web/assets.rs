@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 pub const TOKENS_HREF: &str = "/assets/tokens.css";
 pub const APP_HREF: &str = "/assets/app.css";
 pub const DATASTAR_HREF: &str = "/assets/datastar.js";
+pub const SHELL_HREF: &str = "/assets/shell.js";
 
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
@@ -23,7 +24,7 @@ struct Asset {
     body: &'static str,
 }
 
-static ASSETS: [Asset; 3] = [
+static ASSETS: [Asset; 4] = [
     Asset {
         path: TOKENS_HREF,
         content_type: CSS,
@@ -38,6 +39,11 @@ static ASSETS: [Asset; 3] = [
         path: DATASTAR_HREF,
         content_type: JS,
         body: include_str!("assets/datastar.js"),
+    },
+    Asset {
+        path: SHELL_HREF,
+        content_type: JS,
+        body: include_str!("assets/shell.js"),
     },
 ];
 

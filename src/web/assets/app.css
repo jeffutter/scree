@@ -1,24 +1,235 @@
 /* Scree web UI base styles. Semantic tokens only (docs/design-system/tokens.css). */
 body {
   margin: 0;
-  padding: var(--space-4);
   background: var(--color-page);
   color: var(--color-text);
   font-family: var(--font-ui);
   font-size: var(--text-base);
+  line-height: var(--leading-base);
+  overflow-wrap: anywhere;
+}
+
+main {
+  max-width: var(--size-content-max);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+}
+
+h1 {
+  font-size: var(--text-2xl);
+  letter-spacing: var(--tracking-title);
+  margin: 0 0 var(--space-5);
+}
+
+h2 {
+  font-size: var(--text-xl);
+  margin: 0 0 var(--space-5);
 }
 
 footer {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
+  padding: var(--space-5);
+  max-width: var(--size-content-max);
+  margin: 0 auto;
 }
 
 a {
   color: var(--color-accent-text);
+  text-decoration: underline;
 }
 
 code {
   font-family: var(--font-mono);
   font-size: var(--text-code);
   background: var(--color-code-bg);
+}
+
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: var(--focus-ring-offset);
+  box-shadow: 0 0 0 var(--focus-halo-width) var(--color-focus-halo);
+}
+
+kbd {
+  display: inline-block;
+  min-width: var(--size-kbd);
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  background: var(--color-sunken);
+  border: var(--border-width) solid var(--color-border-quiet);
+  border-radius: var(--radius-sm);
+}
+
+/* Shell */
+.skip {
+  position: absolute;
+  left: var(--space-4);
+  top: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-raised);
+  border-radius: var(--radius-md);
+  transform: translateY(-300%);
+}
+
+.skip:focus {
+  transform: none;
+  z-index: var(--z-overlay);
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-6);
+  min-height: var(--size-nav-height);
+  padding: 0 var(--space-5);
+  background: var(--color-surface);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.brand {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-title);
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.nav-item {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+a.nav-item:hover {
+  background: var(--color-hover);
+  transition: background var(--motion-fast) var(--motion-ease);
+}
+
+a.nav-item[aria-current="page"] {
+  background: var(--color-selected);
+  border-bottom: var(--border-width-accent) solid var(--color-accent);
+  font-weight: var(--weight-semibold);
+}
+
+.nav-disabled {
+  color: var(--color-text-faint);
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+/* Open-Decisions banner: the only amber in the UI. */
+.banner {
+  display: block;
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-attention);
+  color: var(--color-on-attention);
+  font-weight: var(--weight-medium);
+}
+
+.banner:hover {
+  background: var(--color-attention-hover);
+}
+
+.banner-count {
+  font-weight: var(--weight-semibold);
+}
+
+/* Shared empty, error and stale fragments */
+.empty,
+.notice {
+  max-width: var(--size-notice-max);
+  padding: var(--density-card-pad);
+  border-radius: var(--radius-md);
+}
+
+.empty {
+  border: var(--border-width) dashed var(--color-border-quiet);
+  color: var(--color-text-muted);
+}
+
+.notice {
+  background: var(--color-sunken);
+  border: var(--border-width) solid var(--color-border-quiet);
+  border-left: var(--border-width-accent) solid var(--color-accent);
+}
+
+.notice-error {
+  background: var(--color-danger-soft);
+  border-left-color: var(--color-danger);
+}
+
+.notice-title {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+}
+
+.notice-hint {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-muted);
+}
+
+/* Keyboard help overlay */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--color-scrim);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay-panel {
+  width: 100%;
+  max-width: var(--size-popover);
+  max-height: 100%;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: var(--space-6);
+  background: var(--color-raised);
+  border: var(--border-width) solid var(--color-border-quiet);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+}
+
+.keys {
+  border-collapse: collapse;
+  margin-bottom: var(--space-6);
+}
+
+.keys th,
+.keys td {
+  padding: var(--space-3) var(--space-5) var(--space-3) 0;
+  text-align: left;
+  font-weight: var(--weight-regular);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.btn {
+  font: inherit;
+  padding: var(--space-3) var(--space-5);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: var(--color-hover);
 }
