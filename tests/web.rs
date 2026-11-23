@@ -1603,6 +1603,14 @@ fn write_comments_add_edit_delete() {
         "{}",
         r.body
     );
+    for label in ["Edit", "Save", "Delete"] {
+        assert!(
+            r.body
+                .contains(&format!("aria-label=\"{label} comment {cid}\"")),
+            "{label}: {}",
+            r.body
+        );
+    }
     let edit = format!("/ticket/{id}/comments/{cid}/edit");
     let r = w.post_form(
         &edit,

@@ -106,6 +106,12 @@ fn button(label: &str) -> Markup {
     html! { button type="submit" class="btn" { (label) } }
 }
 
+/// A submit button whose accessible name differs from its visible text (the
+/// visible text stays a prefix, so voice control still matches).
+fn button_labeled(label: &str, aria: &str) -> Markup {
+    html! { button type="submit" class="btn" aria-label=(aria) { (label) } }
+}
+
 /// A move that is not offered: the button stays visible but disabled, with
 /// the reason as text so it is never a mystery.
 fn disabled(label: &str, reason: &str) -> Markup {
@@ -270,10 +276,10 @@ fn comment(id: &str, expected: &str, c: &Comment) -> Markup {
                 // refused (409) when the ticket changed since.
                 (post_form(id, &format!("comments/{}/edit", c.id), &format!("comment-{}", c.id), "stack-form", html! {
                     input type="hidden" name="expected_updated_at" value=(expected);
-                    textarea name="body" rows="4" { (c.body) }
-                    (button("Save"))
+                    textarea name="body" rows="4" aria-label=(format!("Edit comment {}", c.id)) { (c.body) }
+                    (button_labeled("Save", &format!("Save comment {}", c.id)))
                 }))
-                (post_form(id, &format!("comments/{}/delete", c.id), &format!("comment-del-{}", c.id), "inline-form", button("Delete")))
+                (post_form(id, &format!("comments/{}/delete", c.id), &format!("comment-del-{}", c.id), "inline-form", button_labeled("Delete", &format!("Delete comment {}", c.id))))
             }
         }
     }
