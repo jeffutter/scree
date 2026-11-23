@@ -404,6 +404,14 @@ The queue of open Decisions awaiting a human answer
 
 Open the interactive terminal UI
 
+### `scree web [OPTIONS]`
+
+Serve the web UI in a browser (loopback by default; for humans)
+
+- `--port <PORT>` (default 7733)
+- `--bind <BIND>` (default 127.0.0.1)
+- `--i-know-this-is-open`: Required to bind a non-loopback address: no login, anyone who can reach it can read and change tickets
+
 Exit codes:
 
 - 0: ok, including `next` with nothing available

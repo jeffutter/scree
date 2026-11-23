@@ -135,6 +135,10 @@ Ids work from any directory. Outside a git repository, a write needs `--project 
 
 Run `scree tui` in a terminal for a board, a list and a ticket detail view. Press `?` for every key; `q` quits. It refreshes when an agent changes tickets in another process. See [`docs/tui.md`](docs/tui.md).
 
+## Use the web UI
+
+Run `scree web` and open the printed address (loopback, port 7733 by default) for the same tickets in a browser, with live updates. See [`docs/web-ui.md`](docs/web-ui.md).
+
 ## Herdr
 
 [`herdr/`](herdr/README.md) holds a [Herdr](https://herdr.dev) mod: a side panel of the focused space's tickets and a full-window board of every project. The flake exports it as `packages.<system>.herdr-mod`.
@@ -151,7 +155,7 @@ A project is identified by the path of its root checkout. If you move the reposi
 
 ## More documentation
 
-The design is written down in [`docs/`](docs/): the [CLI reference](docs/cli.md), the [terminal UI](docs/tui.md), the [data model](docs/data-model.md), the [architecture](docs/architecture.md), the [generated skill](docs/skill.md) and the [architecture decisions](docs/adr/). Contributors should read [`CLAUDE.md`](CLAUDE.md) for the workflow used in this repository.
+The design is written down in [`docs/`](docs/): the [CLI reference](docs/cli.md), the [terminal UI](docs/tui.md), the [web UI](docs/web-ui.md), the [data model](docs/data-model.md), the [architecture](docs/architecture.md), the [generated skill](docs/skill.md) and the [architecture decisions](docs/adr/). Contributors should read [`CLAUDE.md`](CLAUDE.md) for the workflow used in this repository.
 
 ## License
 

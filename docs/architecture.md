@@ -4,7 +4,7 @@ Code layout, build, tests and release for v1. Vocabulary is in `../GLOSSARY.md`,
 
 ## Crate
 
-One Cargo package, edition 2024, not a workspace: a library (`src/lib.rs`) plus a thin binary (`src/main.rs`). The TUI, a later web UI or a runner depends on the library. Splitting into crates waits for a second consumer.
+One Cargo package, edition 2024, not a workspace: a library (`src/lib.rs`) plus a thin binary (`src/main.rs`). The TUI, the web UI or a runner depends on the library. Splitting into crates waits for a second consumer.
 
 `main.rs` only parses arguments, decides the output format, runs the command and maps the error to an exit code. All behaviour is in the library.
 
@@ -26,9 +26,13 @@ Flat under `src/`, one per concept. Commands are plain functions that take a `&m
 | `output` | JSON or text decision and rendering |
 | `tui` | `scree tui` (see [tui.md](tui.md)): submodules `mod` (event loop), `state` (pure `update`), `effects` (effect runner), `view` (drawing, help table), `terminal` (panic-safe restore), `widgets`, `theme` |
 | `watch` | database change polling, shared by the TUI and the web UI |
-| `web` | `scree web` (see [web-ui.md](web-ui.md)): `config` (loopback listen address, Host allowlist), `guard` (Host, Origin, Sec-Fetch-Site checks and the CSP), `create` (create a ticket from a picked Project and Worktree), `error` (status mapping and the `err-<control>` fragment), `state` (change publisher, per-view render cache, stream limits), `sse` (the `/stream` live-update endpoint and the live view registry), `test_routes` (feature `test-routes` only), `mod` (axum server, placeholder page) |
+| `web` | `scree web` (see [web-ui.md](web-ui.md)): `config` (loopback listen address, Host allowlist), `guard` (Host, Origin, Sec-Fetch-Site checks and the CSP), `create` (create a ticket from a picked Project and Worktree), `error` (status mapping and the `err-<control>` fragment), `state` (change publisher, per-view render cache, stream limits), `sse` (the `/stream` live-update endpoint and the live view registry), `test_routes` (feature `test-routes` only), `pages` (one module per screen: list, ticket, create, board, graph, decisions, ledger), `view` (maud components, layout, Markdown renderer, picker, graph SVG), `scope` (scope extractor), `handlers`, `assets` (embedded CSS and JS), `mod` (axum server and routes) |
 | `skill` | generated SKILL.md and `--check` |
 | `error` | thiserror type and exit codes |
+
+## Web request flow
+
+A request passes the `guard` (Host, Origin and Sec-Fetch-Site checks), reaches a handler, which opens a connection and calls a library function (the same ones the CLI and TUI use) as Role human, then renders with maud and responds. A write publishes a change on the `state` publisher; `/stream` (`sse`) re-renders the live views that subscribed and pushes the patch. The web UI never runs the sweep.
 
 ## Dependencies
 

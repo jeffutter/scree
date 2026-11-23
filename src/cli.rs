@@ -562,8 +562,7 @@ pub enum Command {
     },
     /// Open the interactive terminal UI
     Tui,
-    /// Serve the web UI on loopback (hidden while it is built)
-    #[command(hide = true)]
+    /// Serve the web UI in a browser (loopback by default; for humans)
     Web {
         #[arg(long, default_value_t = 7733)]
         port: u16,

@@ -1,5 +1,7 @@
 # Web UI: planning brief
 
+Historical input; the shipped behaviour is in [web-ui.md](web-ui.md).
+
 Input for planning and building the Scree web UI. It summarizes what was decided and lists every resource produced so far. Read it first, then the documents it points to. Vocabulary is in `../GLOSSARY.md`.
 
 ## Goal
@@ -14,7 +16,7 @@ The work so far settled the look (style brief, prototypes, design system) and th
 - **Look:** Direction "A", Slate palette: list-first, hierarchy from weight and gray-level, hairline separators, 6 px radius, soft dark gray dark mode that follows the system setting, a blue accent on blue-gray neutrals, status by icon plus color, one warm amber bar for open Decisions. Direction B contributed the dependency graph; direction C (roomy, Todoist-like) was rejected as not skimmable. Details: `web-ui-style-brief.md` and `design-system.md`.
 - **Design system:** every style value is a named token in `design-system/tokens.css` (primitive and semantic layers); screens use semantic tokens only; `design-system/check_contrast.py` must pass after any token change. The project skill `.claude/skills/web-ui-design/SKILL.md` encodes the rules for building and auditing UI.
 - **Datastar's Rocket** (its web-component API, beta) is not used for pages. It may be tried for client-only widgets such as the graph viewport, in light mode with a pinned bundle.
-- **Out of scope for now:** non-loopback binds, authentication beyond Role as a guardrail.
+- **Out of scope:** authentication beyond Role as a guardrail.
 
 ## Resources in the repository (committed on main)
 

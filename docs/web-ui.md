@@ -1,6 +1,6 @@
 # Web UI (`scree web`)
 
-Status: server skeleton, page shell, error contract, live updates, scope picker and the List screen (home). The command is hidden from `--help` and the generated skill. Design: [ADR 0003](adr/0003-web-ui-is-server-rendered-with-axum-and-datastar.md), plan: [designs/web-ui-plan.md](designs/web-ui-plan.md).
+Status: shipped. `scree web` is a public command, listed in `--help`; the generated agent skill lists it in its command reference. Design: [ADR 0003](adr/0003-web-ui-is-server-rendered-with-axum-and-datastar.md), plan: [designs/web-ui-plan.md](designs/web-ui-plan.md).
 
 ## Run
 
@@ -12,7 +12,7 @@ It prints `scree web: listening on http://127.0.0.1:PORT` to stderr and logs one
 
 ## Role
 
-Role is always human. `--role` and `SCREE_ROLE` are ignored. The placeholder page prints the resolved role in its footer.
+Role is always human. `--role` and `SCREE_ROLE` are ignored. The page footer prints the resolved role.
 
 ## Network
 

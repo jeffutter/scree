@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Scree is a local ticket tracker for humans and coding agents: one Rust binary, one sqlite file, no server. Vocabulary (Ticket, Available, Position, Project, Worktree, Role...) is defined in `GLOSSARY.md`; use those terms. Design docs live in `docs/` (`cli.md`, `data-model.md`, `architecture.md`, `tui.md`, `skill.md`, `adr/`). Scree's own tickets use the `SCR-` prefix.
+Scree is a local ticket tracker for humans and coding agents: one Rust binary, one sqlite file, no always-on service. Vocabulary (Ticket, Available, Position, Project, Worktree, Role...) is defined in `GLOSSARY.md`; use those terms. Design docs live in `docs/` (`cli.md`, `data-model.md`, `architecture.md`, `tui.md`, `web-ui.md`, `skill.md`, `adr/`). Scree's own tickets use the `SCR-` prefix.
 
 ## Commands
 
@@ -36,6 +36,7 @@ One package, library (`src/lib.rs`) plus a thin binary (`src/main.rs`). `main.rs
 - `model.rs` + `output.rs`: tickets are built once (`ticket::build` is the only producer) as typed values in `model.rs`, then rendered as JSON (default in a pipe or agent session) or text. JSON key order is part of the contract: struct fields are declared alphabetically and `tests/golden.rs` pins the bytes.
 - `skill.rs` + `skill/`: `scree skill` generates the agent SKILL.md from hand-written prose slots in `skill/*.md` plus a reference built from the clap tree in `cli.rs`. Changing a command, flag or prose changes the skill output, so snapshot tests in `tests/skill.rs` need updating, and `docs/cli.md` / `docs/skill.md` should stay in sync.
 - `tui/` (`scree tui`, ratatui): Elm-style split. `state.rs` is a pure `update` function over state and messages, `effects.rs` runs the resulting database effects, `view.rs` draws (and owns the help key table), `watch.rs` polls the database for external changes, `terminal.rs` restores the terminal on panic. Key bindings are documented in `docs/tui.md` and the help popup; keep them consistent.
+- `web/` (`scree web`, axum + maud, server-rendered with Datastar for live updates): runs as Role human (forced), never sweeps, binds loopback unless `--i-know-this-is-open`. Pages are in `web/pages/`, shared markup in `web/view/`, `guard.rs` holds the Host/Origin/CSP checks. See `docs/web-ui.md` and ADR 0003/0004.
 
 `docs/architecture.md` is the design-time description and lists some modules (`ids`, `order`) that are actually folded into other files; trust the source where they differ.
 

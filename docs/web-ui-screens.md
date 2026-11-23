@@ -1,6 +1,6 @@
 # Web UI: screen inventory (draft)
 
-Working draft, input for the design interview and prototypes. Nothing here is decided. Sources: `tui.md`, `cli.md`, `data-model.md`, `GLOSSARY.md`; the TUI is the reference for behaviour, not for layout. Vocabulary follows the glossary.
+Working draft, input for the design interview and prototypes. Historical input; the decided behaviour is in [web-ui.md](web-ui.md). Sources: `tui.md`, `cli.md`, `data-model.md`, `GLOSSARY.md`; the TUI is the reference for behaviour, not for layout. Vocabulary follows the glossary.
 
 ## Who uses it
 

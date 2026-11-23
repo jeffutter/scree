@@ -19,6 +19,8 @@ hash: <SHA-256 of the body, hex>
 
 A template with `{{slot}}` placeholders, filled in a single pass (values are not re-scanned). Slots are hand-written prose files under `skill/`, embedded with `include_str!`: `purpose`, `workflow`, `human-tickets`, `scoping`, `output`. The `reference` slot is built from the clap tree at runtime: global flags, per-command usage, and exit codes read from the error enum.
 
+The reference covers every command except the maintenance ones the skill omits (`skill`, `project`, `sweep`, `archive`, `unarchive`); `scree web` is documented, as a command for humans.
+
 Tests extract every `scree ...` command line from the prose and check that it parses against the clap tree, so prose cannot drift from the CLI. `insta` snapshots the full generated skill.
 
 ## Commands left out of the reference

@@ -97,6 +97,8 @@ Every text argument (title, description, plan, criterion text, comment body, aba
 
 `tui`: opens a terminal UI on the alternate screen with a board, a list and a ticket detail view; `?` shows every key and `q` or Ctrl-C quits. It can run lifecycle, edit, criteria, comment, dependency, reorder, search and filter actions, and refreshes by itself when another process writes the database. It runs as Role human with author `human` unless `--role`, `--author` or their `SCREE_*` variables say otherwise, and runs the automatic sweep once at startup. Needs stdin and stdout to be terminals; otherwise it exits 2 with a usage error before touching the database or the terminal. Keys and behaviour: [tui.md](tui.md). Bare `scree` is unchanged.
 
+`web [--port N] [--bind ADDR] [--i-know-this-is-open]`: serves a browser UI. `--port` defaults to 7733 (0 picks a free port); `--bind` defaults to 127.0.0.1 and a non-loopback address is refused unless `--i-know-this-is-open` is given (there is no login). It always runs as Role human (`--role` and `SCREE_ROLE` are ignored) and never runs the sweep. Behaviour: [web-ui.md](web-ui.md).
+
 ### No arguments
 
 `scree` on a terminal with a human Role runs `list` with the default scope and a one-line hint. For an agent, or when not on a terminal, it prints the clap help and exits 2.
