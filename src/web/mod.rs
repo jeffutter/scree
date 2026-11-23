@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::middleware;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tokio::sync::watch;
 
 use crate::error::{Error, Result};
@@ -77,6 +77,9 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
             get(pages::create::new_page).post(pages::create::create),
         )
         .route("/ticket/{id}", get(pages::ticket::show))
+        .route("/decisions", get(pages::decisions::index))
+        .route("/decisions/{id}/accept", post(pages::decisions::accept))
+        .route("/decisions/{id}/answer", post(pages::decisions::answer))
         .route("/stream", get(sse::stream))
         .merge(handlers::router())
         .merge(assets::router());

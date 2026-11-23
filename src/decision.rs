@@ -679,6 +679,13 @@ fn decided_log_where(
     Ok(DecidedResult { decisions })
 }
 
+/// One decision in any state, by id. A bare `D-n` is resolved through `ctx`
+/// like every other command; a qualified id never reads it.
+pub fn get(conn: &Connection, ctx: &Ctx, id: &str) -> Result<DecisionDetail> {
+    let row = locate(conn, ctx, id)?;
+    load(conn, row)
+}
+
 /// A decision with its linked tickets.
 fn load(conn: &Connection, row: i64) -> Result<DecisionDetail> {
     let mut d = conn.query_row(

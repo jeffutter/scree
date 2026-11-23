@@ -79,10 +79,10 @@ pub fn stale(message: &str) -> Markup {
 /// this table.
 pub const KEYS: &[(&str, &str)] = &[
     ("?", "Show this help"),
-    ("Esc", "Close this help, or clear the selected ticket"),
-    ("j", "Select the next ticket"),
-    ("k", "Select the previous ticket"),
-    ("Enter", "Open the selected ticket"),
+    ("Esc", "Close this help, or clear the selected row"),
+    ("j", "Select the next row"),
+    ("k", "Select the previous row"),
+    ("Enter", "Open the selected row"),
     ("/", "Search tickets"),
 ];
 

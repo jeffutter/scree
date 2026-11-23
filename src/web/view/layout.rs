@@ -50,8 +50,8 @@ impl Route {
     /// `true`; until then the nav shows it disabled instead of a dead link.
     pub fn built(self) -> bool {
         match self {
-            Route::List => true,
-            Route::Board | Route::Decisions | Route::Ledger | Route::Graph => false,
+            Route::List | Route::Decisions => true,
+            Route::Board | Route::Ledger | Route::Graph => false,
         }
     }
 }

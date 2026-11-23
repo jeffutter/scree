@@ -326,7 +326,7 @@ fn no_inline_style_or_script_in_pages() {
     // Add each new rendered page here.
     let ids2 = e.ok(&["add", "Detail page"]);
     let detail = format!("/ticket/{}", ids2["id"].as_str().unwrap());
-    let pages = ["/", detail.as_str()];
+    let pages = ["/", detail.as_str(), "/decisions", "/decisions?d=LOCAL-D-1"];
     for page in pages {
         let r = w.get(page);
         assert_eq!(r.status, 200, "{page}");
@@ -410,13 +410,17 @@ fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
     let w = e.spawn_web(&[], &[]);
     let body = w.get("/").body;
     assert!(body.contains("href=\"/\" aria-current=\"page\""), "{body}");
-    for path in ["/board", "/decisions", "/ledger", "/graph"] {
+    assert!(
+        body.contains("<a class=\"nav-item\" href=\"/decisions\""),
+        "{body}"
+    );
+    for path in ["/board", "/ledger", "/graph"] {
         assert!(
             !body.contains(&format!("<a class=\"nav-item\" href=\"{path}\"")),
             "{path}"
         );
     }
-    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 4, "{body}");
+    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 3, "{body}");
 }
 
 #[test]
@@ -2232,4 +2236,362 @@ fn the_list_keeps_the_quick_form_outside_the_live_region() {
     assert!(form < list);
     assert!(page.contains("/new?p=MA"));
     assert!(page.contains("id=\"err-create\""));
+}
+
+// ---- Decisions screen ----
+
+fn text(r: &common::Reply) -> String {
+    // The error fragment's message, for comparing with the library's text.
+    r.body.clone()
+}
+
+/// A LOCAL ticket with one open Decision (LOCAL-D-1) with options and a
+/// recommendation.
+fn decision_fixture(e: &Env) -> String {
+    let t = e.ok(&["add", "Needs a choice", "--status", "ready"]);
+    let id = t["id"].as_str().unwrap().to_string();
+    e.ok(&[
+        "decision",
+        "add",
+        &id,
+        "Which <b>store</b>?",
+        "--option",
+        "sqlite",
+        "--option",
+        "postgres",
+        "--recommend",
+        "1",
+    ]);
+    id
+}
+
+fn decision_status(e: &Env, id: &str) -> (String, Option<String>, Option<String>) {
+    let c = conn(e);
+    let d = scree::decision::get(
+        &c,
+        &scree::decision::Ctx {
+            cwd: Path::new("/"),
+            project: None,
+        },
+        id,
+    )
+    .unwrap();
+    (d.status, d.answer, d.decided_by)
+}
+
+#[test]
+fn decisions_queue_orders_by_unblocks_then_oldest_and_respects_scope() {
+    let e = Env::new();
+    let (r, wt) = setup(&e);
+    let a = e.ok(&["add", "A", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = e.ok(&["add", "B", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["decision", "add", &a, "First asked"]);
+    e.ok(&["decision", "add", &b, "Second asked"]);
+    e.ok(&["decision", "add", &a, "Third asked"]);
+    e.ok(&["decision", "link", "LOCAL-D-3", &b]);
+    let seed = e.ok_at(&wt, &["add", "In MA", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok_at(&r, &["decision", "add", &seed, "Other project?"]);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/decisions").body;
+    let at = |s: &str| {
+        page.find(s)
+            .unwrap_or_else(|| panic!("{s} missing: {page}"))
+    };
+    // D-3 unblocks two tickets; D-1 and D-2 one each, oldest first.
+    assert!(at("LOCAL-D-3") < at("LOCAL-D-1"), "{page}");
+    assert!(at("LOCAL-D-1") < at("LOCAL-D-2"), "{page}");
+    assert!(page.contains("unblocks 2"), "{page}");
+    assert!(page.contains("MA-D-1"), "{page}");
+    // Scope narrows the queue; a Worktree reads its whole Project.
+    let ma = w.get("/decisions?p=MA").body;
+    assert!(ma.contains("MA-D-1") && !ma.contains("LOCAL-D-1"), "{ma}");
+    let wtq = w
+        .get(&format!("/decisions?p=MA&w={}", enc(wt.to_str().unwrap())))
+        .body;
+    assert!(
+        wtq.contains("MA-D-1") && !wtq.contains("LOCAL-D-1"),
+        "{wtq}"
+    );
+    let local = w.get("/decisions?p=").body;
+    assert!(
+        local.contains("LOCAL-D-1") && !local.contains("MA-D-1"),
+        "{local}"
+    );
+    // The page and the live stream agree.
+    let frame = first_frame(&w, "/decisions?p=MA");
+    assert!(
+        frame.contains("MA-D-1") && !frame.contains("LOCAL-D-1"),
+        "{frame}"
+    );
+}
+
+#[test]
+fn answer_with_text_decides_as_human_with_qualified_id_and_leaves_queue() {
+    let e = Env::new();
+    decision_fixture(&e);
+    // The server's cwd is an unrelated temp directory, not a repo.
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form(
+        "/decisions/LOCAL-D-1/answer",
+        &[
+            ("answer", "  postgres, really "),
+            ("rationale", "scale"),
+            ("p", ""),
+        ],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains("id=\"decision-actions\""), "{}", r.body);
+    assert!(r.body.contains("Answered LOCAL-D-1."), "{}", r.body);
+    let (status, answer, by) = decision_status(&e, "LOCAL-D-1");
+    assert_eq!(status, "decided");
+    assert_eq!(answer.as_deref(), Some("postgres, really"));
+    assert_eq!(by.as_deref(), Some("human"));
+    let q = e.ok(&["decisions"]);
+    assert!(q["decisions"].as_array().unwrap().is_empty());
+    let page = w.get("/decisions").body;
+    assert!(page.contains("No open Decisions"), "{page}");
+}
+
+#[test]
+fn empty_answer_is_400_with_library_message_and_no_change() {
+    let e = Env::new();
+    decision_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    for blank in ["", "   \n "] {
+        let r = w.post_form("/decisions/LOCAL-D-1/answer", &[("answer", blank)]);
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert!(r.body.contains("id=\"err-answer\""), "{}", text(&r));
+        assert!(r.body.contains("answer must not be empty"), "{}", r.body);
+    }
+    assert_eq!(decision_status(&e, "LOCAL-D-1").0, "open");
+}
+
+#[test]
+fn accept_without_recommendation_is_400_with_library_message() {
+    let e = Env::new();
+    let t = e.ok(&["add", "T", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["decision", "add", &t, "No advice?"]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form("/decisions/LOCAL-D-1/accept", &[]);
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(r.body.contains("id=\"err-accept\""), "{}", r.body);
+    assert!(r.body.contains("has no recommendation"), "{}", r.body);
+    assert_eq!(decision_status(&e, "LOCAL-D-1").0, "open");
+    // No recommendation, so the page offers no accept button.
+    let page = w.get("/decisions?d=LOCAL-D-1").body;
+    assert!(!page.contains("Accept recommendation"), "{page}");
+}
+
+#[test]
+fn accept_recommendation_decides_with_the_recommendation_text() {
+    let e = Env::new();
+    decision_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/decisions?d=LOCAL-D-1").body;
+    assert!(page.contains("Accept recommendation"), "{page}");
+    assert!(page.contains("data-confirm"), "{page}");
+    let r = w.post_form("/decisions/LOCAL-D-1/accept", &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (status, answer, by) = decision_status(&e, "LOCAL-D-1");
+    assert_eq!(
+        (status.as_str(), answer.as_deref(), by.as_deref()),
+        ("decided", Some("sqlite"), Some("human"))
+    );
+}
+
+#[test]
+fn answering_an_already_answered_decision_is_409_inline_and_the_queue_updates_live() {
+    let e = Env::new();
+    decision_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let mut s = w.stream(&format!("/stream?view={}", enc("/decisions")));
+    let first = s.next_event(Duration::from_secs(3)).expect("first frame");
+    assert!(first.contains("LOCAL-D-1"), "{first}");
+    // Answered elsewhere (the CLI) after the page was loaded.
+    e.ok(&[
+        "--role",
+        "human",
+        "decision",
+        "answer",
+        "LOCAL-D-1",
+        "elsewhere",
+    ]);
+    let r = w.post_form("/decisions/LOCAL-D-1/answer", &[("answer", "late")]);
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert!(r.body.contains("id=\"err-answer\""), "{}", r.body);
+    assert!(r.body.contains("already decided"), "{}", r.body);
+    assert_eq!(
+        decision_status(&e, "LOCAL-D-1").1.as_deref(),
+        Some("elsewhere")
+    );
+    let r = w.post_form("/decisions/LOCAL-D-1/accept", &[]);
+    assert_eq!(r.status, 409, "{}", r.body);
+    // The queue stream sent the empty state.
+    let next = s
+        .next_event(Duration::from_secs(3))
+        .expect("patch after the answer");
+    assert!(next.contains("No open Decisions"), "{next}");
+}
+
+#[test]
+fn selected_decision_answered_elsewhere_shows_this_changed_not_blank() {
+    let e = Env::new();
+    decision_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let open = w.get("/decisions?d=LOCAL-D-1").body;
+    assert!(open.contains("Which &lt;b&gt;store&lt;/b&gt;?"), "{open}");
+    assert!(open.contains("aria-current=\"true\""), "{open}");
+    e.ok(&[
+        "--role",
+        "human",
+        "decision",
+        "answer",
+        "LOCAL-D-1",
+        "mongo",
+    ]);
+    let plain = w.get("/decisions?d=LOCAL-D-1").body;
+    assert!(plain.contains("This Decision changed"), "{plain}");
+    assert!(plain.contains("answered by human: mongo"), "{plain}");
+    assert!(
+        !plain.contains("Answer</button>"),
+        "no forms for a closed Decision: {plain}"
+    );
+    let live = first_frame(&w, "/decisions?d=LOCAL-D-1");
+    assert!(live.contains("This Decision changed"), "{live}");
+    assert!(live.contains("mongo"), "{live}");
+}
+
+#[test]
+fn empty_queue_and_unknown_selected_id_have_their_own_states() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/decisions");
+    assert_eq!(r.status, 200);
+    assert!(r.body.contains("No open Decisions"), "{}", r.body);
+    let r = w.get("/decisions?d=LOCAL-D-9");
+    assert_eq!(r.status, 200);
+    assert!(
+        r.body.contains("This Decision changed or was removed"),
+        "{}",
+        r.body
+    );
+    // Bare and malformed ids are refused, not guessed.
+    for bad in ["D-1", "nonsense", "LOCAL-D-x"] {
+        assert_eq!(w.get(&format!("/decisions?d={bad}")).status, 400, "{bad}");
+    }
+    assert_eq!(w.get("/decisions?p=NOPE").status, 404);
+    // Unknown Decision on a write is 404 inline.
+    let r = w.post_form("/decisions/LOCAL-D-9/answer", &[("answer", "x")]);
+    assert_eq!(r.status, 404, "{}", r.body);
+}
+
+#[test]
+fn no_banner_on_decisions_screen_and_banner_elsewhere() {
+    let e = Env::new();
+    decision_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    assert!(!w.get("/decisions").body.contains("class=\"banner\""));
+    assert!(w.get("/").body.contains("class=\"banner\""));
+    assert!(
+        w.get("/decisions")
+            .body
+            .contains("href=\"/decisions\" aria-current=\"page\"")
+    );
+}
+
+#[test]
+fn hostile_decision_text_is_escaped_and_long_content_renders() {
+    let e = Env::new();
+    let t = e.ok(&["add", "T", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let evil = "<script>alert(1)</script>";
+    let long = "word ".repeat(2000);
+    let mut args: Vec<String> = ["decision", "add", &t, evil].map(String::from).to_vec();
+    args.push("--option".into());
+    args.push(evil.into());
+    for i in 0..29 {
+        args.push("--option".into());
+        args.push(format!("option {i}"));
+    }
+    args.push("--option".into());
+    args.push(long.clone());
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    e.ok(&refs);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/decisions?d=LOCAL-D-1");
+    assert_eq!(page.status, 200);
+    assert!(!page.body.contains("<script>alert"), "{}", page.body);
+    assert!(page.body.contains("&lt;script&gt;"));
+    assert_eq!(page.body.matches("<li>").count(), 31);
+    assert!(page.body.contains(long.trim()));
+    assert_no_inline("decisions", &page.body);
+    // Hostile answer text is stored verbatim and rendered inert afterwards.
+    let r = w.post_form("/decisions/LOCAL-D-1/answer", &[("answer", evil)]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(decision_status(&e, "LOCAL-D-1").1.as_deref(), Some(evil));
+    let after = w.get("/decisions?d=LOCAL-D-1").body;
+    assert!(!after.contains("<script>alert"), "{after}");
+    assert!(
+        after.contains("answered by human: &lt;script&gt;"),
+        "{after}"
+    );
+}
+
+#[test]
+fn decisions_queue_is_capped_at_200_rows_with_show_more() {
+    let e = Env::new();
+    e.ok(&["add", "T", "--status", "ready"]);
+    {
+        // 300 Decisions through the library is much faster than 300 processes.
+        let mut c = conn(&e);
+        let tx = c.transaction().unwrap();
+        let pid: i64 = tx
+            .query_row("SELECT id FROM projects WHERE key = 'LOCAL'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let tid: i64 = tx
+            .query_row("SELECT id FROM tickets LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        for n in 1..=300 {
+            tx.execute(
+                "INSERT INTO decisions (project_id, number, question, options, status, created_at)
+                 VALUES (?1, ?2, ?3, '[]', 'open', '2026-01-01T00:00:00Z')",
+                rusqlite::params![pid, n + 10, format!("Q{n}")],
+            )
+            .unwrap();
+            let did = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO decision_tickets (decision_id, ticket_id) VALUES (?1, ?2)",
+                [did, tid],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/decisions").body;
+    assert_eq!(page.matches("class=\"row\"").count(), 200, "rows");
+    assert!(
+        page.contains("showing 200 of 300"),
+        "{}",
+        &page[page.len().saturating_sub(600)..]
+    );
+    let all = w.get("/decisions?limit=300").body;
+    assert_eq!(all.matches("class=\"row\"").count(), 300);
+    assert!(!all.contains("showing "));
 }

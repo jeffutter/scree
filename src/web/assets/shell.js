@@ -52,13 +52,13 @@ document.addEventListener("change", (e) => {
   if (form) form.requestSubmit();
 });
 
-// List keys: j/k move a selection among the rows, Enter opens it, Esc clears
-// it, "/" focuses the search box. The selection is remembered by ticket id and
+// List and Decisions keys: j/k move a selection among the rows, Enter opens
+// it, Esc clears it, "/" focuses the search box (List only). The selection is remembered by ticket id and
 // re-applied after every live patch (a patch rewrites the attributes). When
 // the selected ticket is no longer in the list the page says so instead of
 // quietly dropping the selection.
 (() => {
-  const list = document.getElementById("list");
+  const list = document.getElementById("list") || document.getElementById("decisions");
   if (!list) return;
   const notice = document.getElementById("list-changed");
   const help = document.getElementById("help");
@@ -135,5 +135,37 @@ document.addEventListener("change", (e) => {
         q.focus();
       }
     }
+  });
+})();
+
+// Two-step buttons: a button with data-confirm arms on the first click (its
+// label becomes the data-confirm text) and acts on the second. Leaving the
+// button or pressing Esc disarms it. Without script the first click acts.
+(() => {
+  const disarm = (b) => {
+    if (b.dataset.armed === undefined) return;
+    b.textContent = b.dataset.label;
+    delete b.dataset.armed;
+    delete b.dataset.label;
+  };
+  document.addEventListener(
+    "click",
+    (e) => {
+      const b = e.target instanceof Element && e.target.closest("[data-confirm]");
+      if (!b || b.dataset.armed !== undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      b.dataset.label = b.textContent;
+      b.dataset.armed = "";
+      b.textContent = b.dataset.confirm;
+    },
+    true,
+  );
+  document.addEventListener("focusout", (e) => {
+    if (e.target instanceof Element && e.target.matches("[data-confirm]")) disarm(e.target);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape")
+      document.querySelectorAll("[data-confirm][data-armed]").forEach(disarm);
   });
 })();

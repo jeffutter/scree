@@ -570,3 +570,33 @@ input[type="search"] {
 .stack-form input[type="text"] {
   min-width: 0;
 }
+
+/* Decisions */
+.options {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-6);
+  overflow-wrap: anywhere;
+}
+
+.recommendation {
+  overflow-wrap: anywhere;
+}
+
+.row[aria-current="true"] {
+  background: var(--color-selected);
+  border-left-color: var(--color-accent);
+}
+
+.btn[data-armed] {
+  border-color: var(--color-accent);
+}
+
+#decision-actions {
+  margin-top: var(--space-5);
+}
+
+#decision-actions:empty,
+#err-accept:empty,
+#err-answer:empty {
+  display: none;
+}

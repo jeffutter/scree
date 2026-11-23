@@ -99,7 +99,7 @@ Every page is rendered through `view::layout::page` (`src/web/view/layout.rs`): 
 
 - **Nav**: List, Board, Decisions, Ledger, Graph. A screen that is not built renders a disabled `<span aria-disabled="true">`, not a link; the ticket that builds a screen flips its arm in `Route::built`. The current screen has `aria-current="page"`.
 - **Theme**: follows the system setting through `tokens.css` (`prefers-color-scheme`); there is no toggle.
-- **Banner**: "N open Decisions block M Tickets", a link to `/decisions` (that route 404s until the Decisions screen exists). Shown on every page except the Decisions route (`show_banner`), and hidden when no Decision is open. M counts distinct Tickets, so a Ticket behind two Decisions counts once. It shows counts only, never Decision text.
+- **Banner**: "N open Decisions block M Tickets", a link to `/decisions`. Shown on every page except the Decisions route (`show_banner`), and hidden when no Decision is open. M counts distinct Tickets, so a Ticket behind two Decisions counts once. It shows counts only, never Decision text.
 - **Help overlay**: `?` opens it, `Esc` closes it; keys are ignored while typing and with Ctrl, Alt or Meta held. It lists exactly the rows of `components::KEYS`. Each screen ticket that defines a key adds its row there with a test.
 - A database error renders the shared error component with status 500.
 
@@ -159,7 +159,7 @@ One line per request on stderr: `scree web: METHOD ROUTE STATUS`, plus the error
 
 ## Ticket detail
 
-`GET /ticket/ID` (`src/web/pages/ticket.rs`) is the read-only detail of one ticket: header (id, title, status, `for`, Project, Worktree or root checkout, claimer, times), description, plan and handoff (rendered by `view::markdown`), criteria with evidence and who checked them, blocked by (tickets and open Decisions), blocks (`ticket::blocks`; an edge that no longer holds is marked), subtasks, linked Decisions (plain text until the Decisions screen exists), commits and every comment with its `edited_at`. It reads through `ticket::show` and `ticket::blocks`; there is no SQL in the handler. List rows link to it. The detail has no nav entry, so List stays highlighted. It defines no keys, so the help overlay is unchanged.
+`GET /ticket/ID` (`src/web/pages/ticket.rs`) is the read-only detail of one ticket: header (id, title, status, `for`, Project, Worktree or root checkout, claimer, times), description, plan and handoff (rendered by `view::markdown`), criteria with evidence and who checked them, blocked by (tickets and open Decisions), blocks (`ticket::blocks`; an edge that no longer holds is marked), subtasks, linked Decisions (plain text; the Decisions screen is a separate queue), commits and every comment with its `edited_at`. It reads through `ticket::show` and `ticket::blocks`; there is no SQL in the handler. List rows link to it. The detail has no nav entry, so List stays highlighted. It defines no keys, so the help overlay is unchanged.
 
 The page and the live view `/ticket/ID` (an arm of `sse::render_view`) share `ticket::region`. A ticket that does not exist, or was removed by another process while the page was open, renders an inline "This ticket was removed or never existed" state with a link back to the List: the page answers 404, the stream sends it as a normal patch so an open page shows it in place. Every comment is rendered (no cap); long titles and ids wrap.
 
@@ -219,6 +219,22 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - Role: the web is always the human Role, so `for human` can be created. The rule that an agent cannot take a `for human` ticket is on `start` (GLOSSARY "for"), not on create.
 - States: empty n/a; loading n/a (one round trip); error `err-create`; stale/permission-like: the gone directory 422 and the all-Projects state; long content: wrapping textareas and long titles wrap; scale n/a.
 - Never sweeps.
+
+## Decisions
+
+`GET /decisions` (`src/web/pages/decisions.rs`) is the queue of open Decisions of the scope, the selected one in full, and the two ways to answer it. The Decisions nav entry is a link.
+
+- URL: `?p=&w=` scope plus `d=KEY-D-n` (the selection) and `limit`. The selection is in the URL so a reload shows the same view. Ids are always qualified: a bare `D-3` means the caller's Project and the web has no caller directory, so a bare or malformed `d` is 400. A Worktree scope reads its whole Project (Decisions belong to a Project).
+- Queue: `decision::open_queue_in`, ordered by unfinished tickets it unblocks (N, descending), then oldest, then Project key and number. Each row shows the qualified id (a link that selects it), the question, "unblocks N" and the opened date. Capped at 200 rows with "showing 200 of N" and a "show more" link (`limit`).
+- Selected, open: the question, numbered options, the recommendation, and the linked unfinished tickets (one ticket is a direct "Open ticket" link, several are a list of links).
+- Selected, not open: never a blank. "This Decision changed: ID was answered by WHO: ANSWER" (also for your own answer), "was superseded by D-n", or "changed or was removed" for an unknown id. It reads through `decision::get`, which locates a Decision in any state.
+- Forms: "Accept recommendation" (only when a recommendation exists) and an answer form (text and optional rationale). They sit outside the live region (`#decisions`), like the ticket write forms, so a patch never wipes typed text. They post to `POST /decisions/ID/accept` and `POST /decisions/ID/answer` as the web's human Identity. The library's own rules decide the status: empty answer 400 ("answer must not be empty"), accept with no recommendation 400, an unknown Decision 404, already decided 409, superseded 422. Messages appear inline in `err-answer` or `err-accept`. Success replaces `#decision-actions` with "Answered ID." and a link to the next open Decision of the scope.
+- Qualified id, cwd: `decision::Ctx` needs a directory only for a bare id, so the web passes a fixed neutral path (`/`), never the process cwd. `tests/web.rs` and `tests/decisions.rs` prove a qualified answer works from an unrelated cwd.
+- Second click accepts: `shell.js` arms a `[data-confirm]` button on the first click (its label becomes "Click again to accept") and lets the second click post; blur or `Esc` disarms. There is no dialog. Without script the first click posts.
+- Keys: `j`/`k` select the next or previous queue row, `Enter` follows its link, `Esc` clears the selection (the same code as the List; the help rows say "row").
+- No banner on this screen (`show_banner`); the live view is `/stream?view=/decisions?...`; never sweeps.
+- States: empty "No open Decisions"; error `err-accept`, `err-answer` and the 400/404 page fragment `err-decision`; stale the "This Decision changed" notice; long content wraps (questions, options, answers); scale 200 rows plus "show more".
+- Browser check: not done by hand in this change; the server side is covered by `tests/web.rs`, the two-step button by reading `shell.js` only.
 
 ## Sweep
 

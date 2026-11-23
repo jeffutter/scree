@@ -832,3 +832,37 @@ fn qualified_ids_work_from_an_unrelated_cwd() {
         0
     );
 }
+
+#[test]
+fn get_reads_any_state_by_qualified_id_from_an_unrelated_cwd() {
+    let e = Env::new();
+    let repo = e.repo("scree");
+    let t = e.ticket(&repo, "a");
+    let key = t.rsplit_once('-').unwrap().0.to_string();
+    e.ok_at(&repo, &["decision", "add", &t, "open one?"]);
+    e.ok_at(&repo, &["decision", "add", &t, "decided one?"]);
+    assert_eq!(
+        e.human(&repo, &["decision", "answer", &format!("{key}-D-2"), "yes"]),
+        0
+    );
+
+    let conn = scree::db::open(&e.db()).unwrap();
+    // The cwd is outside any repo; a qualified id must never read it.
+    let ctx = scree::decision::Ctx {
+        cwd: Path::new("/"),
+        project: None,
+    };
+    let open = scree::decision::get(&conn, &ctx, &format!("{key}-D-1")).unwrap();
+    assert_eq!(
+        (open.status.as_str(), open.question.as_str()),
+        ("open", "open one?")
+    );
+    let decided =
+        scree::decision::get(&conn, &ctx, &format!("{}-d-2", key.to_lowercase())).unwrap();
+    assert_eq!(decided.status, "decided");
+    assert_eq!(decided.answer.as_deref(), Some("yes"));
+    assert!(matches!(
+        scree::decision::get(&conn, &ctx, &format!("{key}-D-9")),
+        Err(scree::error::Error::NotFound(_))
+    ));
+}
