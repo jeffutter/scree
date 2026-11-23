@@ -37,6 +37,34 @@ pub fn error(title: &str, detail: &str) -> Markup {
     }
 }
 
+/// The message for one control, as a response body for a failed request. The
+/// `err-<control>` id is the contract: the page has an element with that id
+/// next to the control, and `errors.js` replaces it with this fragment.
+pub fn field_error(control: &str, message: &str) -> Markup {
+    html! {
+        div id=(format!("err-{control}")) class="notice notice-error" role="alert" {
+            p class="notice-hint" { (message) }
+        }
+    }
+}
+
+/// Rows a list renders before it offers "show more".
+pub const FIRST_RENDER_ROWS: usize = 200;
+
+/// The footer of a capped list: "showing N of M" and a link to the longer
+/// list. Empty when everything is shown. `more_href` is the list's own URL
+/// with a larger limit, chosen by the caller.
+pub fn show_more(shown: usize, total: usize, more_href: &str) -> Markup {
+    html! {
+        @if shown < total {
+            p class="more" {
+                "showing " (shown) " of " (total) " "
+                a href=(more_href) { "show more" }
+            }
+        }
+    }
+}
+
 /// The data changed underneath the reader.
 pub fn stale(message: &str) -> Markup {
     html! {
@@ -104,6 +132,23 @@ mod tests {
             assert!(!html.contains("<script>"), "{html}");
             assert!(html.contains("&lt;script&gt;"), "{html}");
         }
+    }
+
+    #[test]
+    fn field_error_carries_the_control_id_and_escapes() {
+        let html = field_error("save", "<i>x</i>").into_string();
+        assert!(html.starts_with("<div id=\"err-save\""), "{html}");
+        assert!(html.contains("role=\"alert\""));
+        assert!(html.contains("&lt;i&gt;"));
+    }
+
+    #[test]
+    fn show_more_only_when_capped() {
+        assert_eq!(FIRST_RENDER_ROWS, 200);
+        assert_eq!(show_more(5, 5, "/?limit=10").into_string(), "");
+        let html = show_more(200, 450, "/?limit=400").into_string();
+        assert!(html.contains("showing 200 of 450"), "{html}");
+        assert!(html.contains("href=\"/?limit=400\""));
     }
 
     #[test]

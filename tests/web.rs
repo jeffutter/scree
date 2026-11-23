@@ -242,11 +242,12 @@ fn sigint_exits_promptly() {
     assert!(w.interrupt(Duration::from_secs(1)));
 }
 
-const ASSET_PATHS: [(&str, &str); 4] = [
+const ASSET_PATHS: [(&str, &str); 5] = [
     ("/assets/tokens.css", "text/css; charset=utf-8"),
     ("/assets/app.css", "text/css; charset=utf-8"),
     ("/assets/datastar.js", "text/javascript; charset=utf-8"),
     ("/assets/shell.js", "text/javascript; charset=utf-8"),
+    ("/assets/errors.js", "text/javascript; charset=utf-8"),
 ];
 
 #[test]

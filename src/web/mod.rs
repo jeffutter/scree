@@ -5,11 +5,17 @@
 mod assets;
 pub mod config;
 pub mod create;
+mod error;
 mod guard;
+mod sse;
+mod state;
+#[cfg(feature = "test-routes")]
+mod test_routes;
 pub mod view;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -23,6 +29,7 @@ use tokio::sync::watch;
 
 use crate::error::{Error, Result};
 use crate::identity::Identity;
+use state::{Live, blocking};
 use view::components;
 use view::layout::{self, PageCtx, Route};
 
@@ -36,15 +43,18 @@ pub fn run(db: std::path::PathBuf, identity: &Identity, cfg: config::Config) -> 
         .enable_all()
         .build()?;
     let role = identity.role.as_str();
-    runtime.block_on(serve(AppState { db, role }, cfg))
+    let live = Live::new();
+    runtime.block_on(serve(AppState { db, role, live }, cfg))
 }
 
-/// What every handler needs: where the database is and the resolved Role.
-/// Handlers open a connection per request (local, single user).
+/// What every handler needs: where the database is, the resolved Role and the
+/// live-update state. Handlers open a connection per request (local, single
+/// user).
 #[derive(Clone)]
 struct AppState {
     db: PathBuf,
     role: &'static str,
+    live: Arc<Live>,
 }
 
 async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
@@ -54,9 +64,22 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
         .map_err(|e| Error::Other(format!("cannot listen on {addr}: {e}")))?;
     let local = listener.local_addr()?;
     let hosts = Arc::new(config::allowed_hosts(local.port()));
+    // The watcher thread publishes "the database changed" to every stream. It
+    // is not joined at exit: it only polls, and the process ending stops it.
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let publisher = state.live.clone();
+    crate::watch::spawn_with(state.db.clone(), watcher_stop.clone(), move || {
+        publisher.bump();
+        true
+    })?;
+    let live = state.live.clone();
     let router = Router::new()
         .route("/", get(index))
-        .merge(assets::router())
+        .route("/stream", get(sse::stream))
+        .merge(assets::router());
+    #[cfg(feature = "test-routes")]
+    let router = router.merge(test_routes::router());
+    let router = router
         .layer(middleware::from_fn_with_state(hosts, guard::guard))
         .with_state(state);
 
@@ -67,13 +90,18 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
     });
     let signalled = async {
         wait_for_signal().await;
+        // Open streams never end on their own; end them so the graceful
+        // shutdown is quick. DRAIN is only the backstop for slow requests.
+        live.stop_streams();
         let _ = stop_tx.send(true);
         tokio::time::sleep(DRAIN).await;
     };
-    tokio::select! {
+    let result = tokio::select! {
         r = serving => r.map_err(Error::from),
         () = signalled => Ok(()),
-    }
+    };
+    watcher_stop.store(true, Ordering::Relaxed);
+    result
 }
 
 async fn wait_for_signal() {
@@ -96,10 +124,7 @@ async fn wait_for_signal() {
 
 async fn index(State(state): State<AppState>) -> Response {
     let db = state.db.clone();
-    let counts = tokio::task::spawn_blocking(move || view::banner_counts(&crate::db::open(&db)?))
-        .await
-        .map_err(|e| Error::Other(e.to_string()))
-        .and_then(|r| r);
+    let counts = blocking(move || view::banner_counts(&crate::db::open(&db)?)).await;
     let (status, ctx, body) = match counts {
         Ok(banner) => (
             StatusCode::OK,

@@ -9,6 +9,8 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use super::error::Logged;
+
 /// Datastar compiles `data-*` expressions with `new Function`, so `script-src`
 /// needs `'unsafe-eval'` (ADR 0003). Nothing is inline.
 pub const CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; \
@@ -75,7 +77,22 @@ pub async fn guard(State(hosts): State<Arc<Vec<String>>>, req: Request, next: Ne
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP),
     );
-    eprintln!("scree web: {method} {route} {}", resp.status().as_u16());
+    // One line per request. A failed handler adds its kind, and for a 500 the
+    // detail the client was not shown.
+    let status = resp.status().as_u16();
+    match resp.extensions().get::<Logged>() {
+        Some(Logged {
+            kind,
+            detail: Some(d),
+        }) => eprintln!(
+            "scree web: {method} {route} {status} {kind}: {}",
+            d.replace('\n', " ")
+        ),
+        Some(Logged { kind, detail: None }) => {
+            eprintln!("scree web: {method} {route} {status} {kind}")
+        }
+        None => eprintln!("scree web: {method} {route} {status}"),
+    }
     resp
 }
 

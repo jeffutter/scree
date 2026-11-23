@@ -81,6 +81,7 @@ pub fn page(ctx: &PageCtx, title: &str, body: Markup) -> Markup {
                 link rel="stylesheet" href=(assets::APP_HREF);
                 script type="module" src=(assets::DATASTAR_HREF) {}
                 script defer src=(assets::SHELL_HREF) {}
+                script defer src=(assets::ERRORS_HREF) {}
             }
             body {
                 a class="skip" href="#main" { "Skip to content" }

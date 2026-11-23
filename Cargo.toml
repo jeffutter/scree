@@ -18,9 +18,17 @@ sha2 = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 # scree web (ADR 0003): axum serves, maud renders HTML, tokio is axum's runtime.
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
 maud = "0.27.0"
+# Body::from_stream and stream::unfold for the live-update stream (SSE is
+# framed by hand in src/web/sse.rs; the datastar crate adds only that framing).
+futures-util = { version = "0.3.34", default-features = false }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "signal", "sync", "time", "macros"] }
+
+[features]
+# Routes that exist only so tests can drive the error contract and the live
+# stream (`/test/*`). Never enabled in a release build.
+test-routes = []
 
 [dev-dependencies]
 insta = "1.49.0"

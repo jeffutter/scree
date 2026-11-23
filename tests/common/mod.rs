@@ -375,6 +375,67 @@ pub fn assert_spawn_is_scrubbed() {
 pub struct Web {
     child: Child,
     pub addr: String,
+    log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// An open `text/event-stream` response, read event by event.
+pub struct EventStream {
+    sock: std::net::TcpStream,
+    pub status: u16,
+    buf: String,
+}
+
+impl EventStream {
+    /// The next event (text up to a blank line) within `within`, or `None` on
+    /// timeout or when the server closed the stream.
+    pub fn next_event(&mut self, within: std::time::Duration) -> Option<String> {
+        use std::io::Read;
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            if let Some(i) = self.buf.find("\n\n") {
+                let ev = self.buf[..i].to_string();
+                self.buf.drain(..i + 2);
+                return Some(ev);
+            }
+            let left = deadline.checked_duration_since(std::time::Instant::now())?;
+            self.sock
+                .set_read_timeout(Some(left.max(std::time::Duration::from_millis(1))))
+                .unwrap();
+            let mut chunk = [0u8; 4096];
+            match self.sock.read(&mut chunk) {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => self.buf.push_str(&String::from_utf8_lossy(&chunk[..n])),
+            }
+        }
+    }
+
+    /// True when the server closed the stream within `within`.
+    pub fn closed_within(&mut self, within: std::time::Duration) -> bool {
+        use std::io::Read;
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            self.sock
+                .set_read_timeout(Some(left.max(std::time::Duration::from_millis(1))))
+                .unwrap();
+            let mut chunk = [0u8; 4096];
+            match self.sock.read(&mut chunk) {
+                Ok(0) => return true,
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return false;
+                }
+                Err(_) => return true,
+            }
+        }
+    }
 }
 
 /// A parsed HTTP response.
@@ -411,12 +472,15 @@ impl Env {
             .unwrap();
         let stderr = child.stderr.take().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = log.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
             for line in std::io::BufReader::new(stderr)
                 .lines()
                 .map_while(|l| l.ok())
             {
+                sink.lock().unwrap().push(line.clone());
                 if let Some(i) = line.find("listening on http://") {
                     let _ = tx.send(line[i + "listening on http://".len()..].trim().to_string());
                     // Keep draining so the child never blocks on a full pipe.
@@ -426,7 +490,7 @@ impl Env {
         let addr = rx
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("no 'listening on' line from scree web");
-        Web { child, addr }
+        Web { child, addr, log }
     }
 }
 
@@ -471,6 +535,43 @@ impl Web {
             status,
             headers,
             body: body.to_string(),
+        }
+    }
+
+    /// Every stderr line the server has printed so far.
+    pub fn log(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+
+    /// The `Origin` header value a same-origin write needs.
+    pub fn origin(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// POST with a valid `Origin`.
+    pub fn post(&self, path: &str) -> Reply {
+        self.request("POST", path, &[("Origin", &self.origin())])
+    }
+
+    /// Open `path` as an event stream. HTTP/1.0 so the body is not chunked.
+    pub fn stream(&self, path: &str) -> EventStream {
+        use std::io::{Read, Write};
+        let mut sock = std::net::TcpStream::connect(&self.addr).unwrap();
+        write!(sock, "GET {path} HTTP/1.0\r\nHost: {}\r\n\r\n", self.addr).unwrap();
+        sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            assert_eq!(sock.read(&mut byte).unwrap(), 1, "stream closed in headers");
+            head.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&head).into_owned();
+        let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+        EventStream {
+            sock,
+            status,
+            buf: String::new(),
         }
     }
 

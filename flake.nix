@@ -80,12 +80,14 @@
           inherit herdr-mod;
           clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- -D warnings";
+            cargoClippyExtraArgs = "--all-targets --features test-routes -- -D warnings";
           });
           fmt = craneLib.cargoFmt { inherit src; };
           nextest = craneLib.cargoNextest (commonArgs // {
             inherit cargoArtifacts;
             nativeCheckInputs = [ pkgs.git ];
+            # tests/web_live.rs drives the /test/* routes of this feature.
+            cargoNextestExtraArgs = "--features test-routes";
           });
         };
 
