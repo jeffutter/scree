@@ -643,6 +643,78 @@ fn tickets_carry_project_key_and_root() {
     assert_eq!(shown["project"]["root"], repo_root);
 }
 
+/// `project::list_with_counts` over three Projects, several Worktrees, an
+/// unscoped ticket, a done ticket and a swept Worktree, read from the test's
+/// own cwd with no git call.
+#[test]
+fn list_with_counts_fixture() {
+    let e = Env::new();
+    let alpha = e.repo("a", "alpha");
+    let beta = e.repo("a", "beta");
+    let gamma = e.repo("a", "gamma");
+    let wt1 = e.worktree(&alpha, "one");
+    let wt2 = e.worktree(&alpha, "two");
+    let gone = e.worktree(&alpha, "gone");
+    let wtb = e.worktree(&beta, "bone");
+    let add = |cwd: &Path, title: &str| {
+        e.ok_at(cwd, &["add", title, "--status", "ready"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    add(&alpha, "alpha root 1");
+    add(&alpha, "alpha root 2");
+    add(&wt1, "wt1 a");
+    add(&wt1, "wt1 b");
+    add(&wt2, "wt2 a");
+    let done = add(&wt2, "wt2 done");
+    e.ok_at(&wt2, &["start", &done]);
+    e.ok_at(&wt2, &["done", &done]);
+    add(&beta, "beta root");
+    add(&wtb, "bone a");
+    add(&gone, "gone a");
+    e.ok(&["add", "local ticket", "--status", "ready"]);
+    e.ok_at(&gamma, &["add", "gamma draft"]);
+
+    // A removed Worktree is still listed until a sweep archives its tickets.
+    git(
+        &alpha,
+        &["worktree", "remove", "--force", gone.to_str().unwrap()],
+    );
+    let conn = scree::db::open(&e.db()).unwrap();
+    let before = scree::project::list_with_counts(&conn).unwrap();
+    let alpha_before = before.projects.iter().find(|p| p.key == "ALP").unwrap();
+    assert!(
+        alpha_before
+            .worktrees
+            .iter()
+            .any(|w| w.path == gone.to_str().unwrap())
+    );
+
+    // Any command touching the project sweeps the removed Worktree.
+    e.ok_at(&alpha, &["list"]);
+    let o = scree::project::list_with_counts(&conn).unwrap();
+
+    let keys: Vec<_> = o.projects.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(keys, ["ALP", "BET", "GAM"]);
+    let wt = |path: &Path, open| scree::model::WorktreeCount {
+        open,
+        path: path.to_str().unwrap().to_string(),
+    };
+    let a = &o.projects[0];
+    assert_eq!(a.root, alpha.to_str().unwrap());
+    assert_eq!((a.open, a.root_open), (5, 2));
+    let mut expect = vec![wt(&wt1, 2), wt(&wt2, 1)];
+    expect.sort_by(|x, y| x.path.cmp(&y.path));
+    assert_eq!(a.worktrees, expect);
+    let b = &o.projects[1];
+    assert_eq!((b.open, b.root_open), (2, 1));
+    assert_eq!(b.worktrees, vec![wt(&wtb, 1)]);
+    let g = &o.projects[2];
+    assert_eq!((g.open, g.root_open, g.worktrees.len()), (1, 1, 0));
+    assert_eq!(o.unscoped_open, 1);
+}
+
 /// A configured `git` run in `dir`, through the shared scrub.
 fn git(dir: &Path, args: &[&str]) {
     let out = git_cmd(dir).args(args).output().unwrap();

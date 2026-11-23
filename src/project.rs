@@ -5,7 +5,9 @@ use std::path::{Component, Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use crate::cli::Status;
 use crate::error::{Error, Result};
+use crate::model::{ProjectOverview, ScopeOverview, WorktreeCount};
 use crate::scope::{self, Scope, path_str};
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,66 @@ pub fn find_by_root(conn: &Connection, root: &str) -> Result<Option<Project>> {
             },
         )
         .optional()?)
+}
+
+/// Every Project with its Worktrees and open-ticket counts, read straight from
+/// the database: no git call, no cwd, no sweep, no write.
+///
+/// - "Open" is [`Status::OPEN`] on an unarchived ticket, the same definition
+///   `scree list` uses. Done, abandoned and archived tickets never count.
+/// - Projects are those with a root path, ordered by key. The unscoped LOCAL
+///   Project has no root, so it is not listed; its open count is
+///   `unscoped_open`.
+/// - A Worktree is listed while any unarchived ticket of any status carries
+///   its path, so one with only done tickets shows `open: 0`, and one whose
+///   tickets a sweep archived disappears. A Worktree removed on disk stays
+///   listed until a command that sweeps has archived its tickets.
+/// - Worktree identity is the exact stored path string, not normalized.
+pub fn list_with_counts(conn: &Connection) -> Result<ScopeOverview> {
+    let open = Status::sql_list(&Status::OPEN);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT p.key, p.root_path, t.worktree_path,
+                COALESCE(SUM(t.status IN ({open})), 0)
+         FROM projects p
+         LEFT JOIN tickets t ON t.project_id = p.id AND t.archived_at IS NULL
+         GROUP BY p.id, t.worktree_path
+         ORDER BY p.key, t.worktree_path"
+    ))?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, u32>(3)?,
+        ))
+    })?;
+    let mut overview = ScopeOverview {
+        projects: Vec::new(),
+        unscoped_open: 0,
+    };
+    for row in rows {
+        let (key, root, worktree, n) = row?;
+        let Some(root) = root else {
+            overview.unscoped_open += n;
+            continue;
+        };
+        if overview.projects.last().is_none_or(|p| p.key != key) {
+            overview.projects.push(ProjectOverview {
+                key,
+                open: 0,
+                root,
+                root_open: 0,
+                worktrees: Vec::new(),
+            });
+        }
+        let project = overview.projects.last_mut().expect("just pushed");
+        project.open += n;
+        match worktree {
+            Some(path) => project.worktrees.push(WorktreeCount { open: n, path }),
+            None => project.root_open += n,
+        }
+    }
+    Ok(overview)
 }
 
 /// Resolve `.` and `..` textually, without touching the filesystem, so a
@@ -222,6 +284,14 @@ pub fn relink(conn: &Connection, old: &Path, new: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_with_counts_on_empty_database() {
+        let conn = crate::db::open(std::path::Path::new(":memory:")).unwrap();
+        let o = list_with_counts(&conn).unwrap();
+        assert!(o.projects.is_empty());
+        assert_eq!(o.unscoped_open, 0);
+    }
 
     #[test]
     fn normalize_keeps_unresolvable_parents() {

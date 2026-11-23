@@ -72,6 +72,35 @@ pub struct ProjectRef {
     pub root: Option<String>,
 }
 
+/// Open tickets of one Worktree of a Project. `path` is the stored canonical
+/// path string, compared exactly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorktreeCount {
+    pub open: u32,
+    pub path: String,
+}
+
+/// One Project with its open-ticket counts. `open` is the total, `root_open`
+/// the part in the root checkout (no Worktree), and `worktrees` the distinct
+/// Worktrees ordered by path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectOverview {
+    pub key: String,
+    pub open: u32,
+    pub root: String,
+    pub root_open: u32,
+    pub worktrees: Vec<WorktreeCount>,
+}
+
+/// Every Project and Worktree with open counts, from
+/// `project::list_with_counts`. `unscoped_open` counts the unscoped (LOCAL)
+/// tickets, which have no root and so are not in `projects`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeOverview {
+    pub projects: Vec<ProjectOverview>,
+    pub unscoped_open: u32,
+}
+
 /// An open Decision that blocks a ticket. `id` is `D-<n>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlockingDecision {
