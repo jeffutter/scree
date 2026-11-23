@@ -488,3 +488,59 @@ a.nav-item[aria-current="page"] {
   font-weight: var(--weight-semibold);
   color: var(--color-text);
 }
+
+/* Ticket detail writes */
+.inline-form,
+.stack-form {
+  display: flex;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+
+.inline-form {
+  flex-wrap: wrap;
+  align-items: end;
+}
+
+.stack-form {
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: var(--size-content-max);
+}
+
+.stack-form .field {
+  width: 100%;
+}
+
+.inline-form input[type="text"],
+.stack-form input[type="text"],
+textarea {
+  font: inherit;
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.inline-form input[type="text"] {
+  min-width: var(--size-search);
+}
+
+.btn:disabled {
+  color: var(--color-text-muted);
+  background: var(--color-sunken);
+  cursor: not-allowed;
+}
+
+.comment-edit {
+  margin-top: var(--space-2);
+}
+
+.comment-edit summary {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}

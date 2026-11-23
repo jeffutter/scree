@@ -43,7 +43,7 @@ async fn page(State(state): State<AppState>) -> Response {
     };
     let ctx = PageCtx {
         route: Route::List,
-        role: state.role,
+        role: state.identity.role.as_str(),
         banner: None,
     };
     let body = html! {

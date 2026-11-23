@@ -1147,3 +1147,433 @@ fn web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep() {
     assert_eq!(state(&closed), ("done".to_string(), true));
     assert_eq!(state(&open), ("abandoned".to_string(), true));
 }
+
+// ---- Ticket detail writes (POST /ticket/ID/...) ----
+
+fn new_ticket(e: &Env, status: &str, criteria: &[&str]) -> String {
+    let mut args = vec!["add", "Writes", "--status", status];
+    for c in criteria {
+        args.push("--criterion");
+        args.push(c);
+    }
+    e.ok(&args)["id"].as_str().unwrap().to_string()
+}
+
+fn detail(e: &Env, id: &str) -> scree::model::TicketDetail {
+    scree::ticket::show(&conn(e), id).unwrap()
+}
+
+fn db_status(e: &Env, id: &str) -> String {
+    detail(e, id).ticket.status
+}
+
+fn archived(e: &Env, id: &str) -> bool {
+    detail(e, id).ticket.archived_at.is_some()
+}
+
+/// (checked, total) criteria.
+fn criteria_counts(e: &Env, id: &str) -> (usize, usize) {
+    let d = detail(e, id);
+    (
+        d.criteria.iter().filter(|c| c.checked).count(),
+        d.criteria.len(),
+    )
+}
+
+/// A successful write answers 200 with the refreshed `ticket` region.
+fn assert_region(r: &common::Reply, shows: &str) {
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.starts_with("<div id=\"ticket\""), "{}", r.body);
+    assert!(r.body.contains(shows), "{shows}: {}", r.body);
+}
+
+/// A refusal answers `status` with only the `err-CONTROL` fragment.
+fn assert_err(r: &common::Reply, status: u16, control: &str) {
+    assert_eq!(r.status, status, "{}", r.body);
+    assert!(
+        r.body.starts_with(&format!("<div id=\"err-{control}\"")),
+        "{}",
+        r.body
+    );
+    assert!(!r.body.contains("id=\"ticket\""), "{}", r.body);
+}
+
+#[test]
+fn write_ready_and_draft() {
+    let e = Env::new();
+    let id = new_ticket(&e, "draft", &[]);
+    let w = e.spawn_web(&[], &[]);
+    // Refused (library Error::Refused): a draft cannot be drafted again.
+    assert_err(&w.post(&format!("/ticket/{id}/draft")), 422, "draft");
+    let r = w.post(&format!("/ticket/{id}/ready"));
+    assert_region(&r, "status-ready");
+    assert_eq!(db_status(&e, &id), "ready");
+    // Refused: already ready.
+    assert_err(&w.post(&format!("/ticket/{id}/ready")), 422, "ready");
+    assert_region(&w.post(&format!("/ticket/{id}/draft")), "status-draft");
+    assert_eq!(db_status(&e, &id), "draft");
+}
+
+#[test]
+fn write_start_succeeds_and_a_lost_claim_race_is_409() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{id}")).body;
+    assert!(page.contains("/start"), "{page}");
+    // Another caller claims between the page load and the POST: Conflict.
+    e.ok(&["start", &id]);
+    let r = w.post(&format!("/ticket/{id}/start"));
+    assert_err(&r, 409, "start");
+    assert_eq!(db_status(&e, &id), "active");
+    assert_ne!(
+        detail(&e, &id).ticket.claimed_by.unwrap().author,
+        "web",
+        "the other claim must survive"
+    );
+    let id2 = new_ticket(&e, "ready", &[]);
+    let r = w.post(&format!("/ticket/{id2}/start"));
+    assert_region(&r, "status-active");
+    assert_eq!(db_status(&e, &id2), "active");
+}
+
+#[test]
+fn write_start_of_a_missing_ticket_is_404() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    assert_err(&w.post("/ticket/LOCAL-99/start"), 404, "start");
+}
+
+#[test]
+fn write_release_stores_the_handoff_and_refuses_a_ready_ticket() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    // Refused: only an active ticket is released.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/release"), &[]),
+        422,
+        "release",
+    );
+    w.post(&format!("/ticket/{id}/start"));
+    let r = w.post_form(
+        &format!("/ticket/{id}/release"),
+        &[("handoff", "left off at step 3")],
+    );
+    assert_region(&r, "status-ready");
+    assert!(r.body.contains("left off at step 3"), "{}", r.body);
+    assert_eq!(db_status(&e, &id), "ready");
+    assert_eq!(detail(&e, &id).handoff, "left off at step 3");
+}
+
+#[test]
+fn write_done_refuses_unchecked_criteria_and_force_succeeds() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &["one"]);
+    let w = e.spawn_web(&[], &[]);
+    // Refused: an unchecked criterion.
+    let r = w.post_form(&format!("/ticket/{id}/done"), &[]);
+    assert_err(&r, 422, "done");
+    assert_eq!(db_status(&e, &id), "ready");
+    let r = w.post_form(&format!("/ticket/{id}/done"), &[("force", "1")]);
+    assert_region(&r, "status-done");
+    assert_eq!(db_status(&e, &id), "done");
+    // Refused: already closed.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/done"), &[]),
+        422,
+        "done",
+    );
+}
+
+#[test]
+fn write_done_without_criteria_needs_no_force() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    assert_region(
+        &w.post_form(&format!("/ticket/{id}/done"), &[]),
+        "status-done",
+    );
+}
+
+#[test]
+fn write_abandon_needs_a_reason() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    // Usage: a blank reason reaches the library.
+    for body in [&[][..], &[("reason", "   ")][..]] {
+        let r = w.post_form(&format!("/ticket/{id}/abandon"), body);
+        assert_err(&r, 400, "abandon");
+        assert_eq!(db_status(&e, &id), "ready");
+    }
+    let r = w.post_form(
+        &format!("/ticket/{id}/abandon"),
+        &[("reason", "not needed")],
+    );
+    assert_region(&r, "status-abandoned");
+    assert_eq!(db_status(&e, &id), "abandoned");
+}
+
+#[test]
+fn write_reopen_and_its_refusal() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    // Refused: an open ticket cannot be reopened.
+    assert_err(&w.post(&format!("/ticket/{id}/reopen")), 422, "reopen");
+    w.post_form(&format!("/ticket/{id}/done"), &[]);
+    assert_eq!(db_status(&e, &id), "done");
+    let r = w.post(&format!("/ticket/{id}/reopen"));
+    assert_region(&r, "status-ready");
+    assert_eq!(db_status(&e, &id), "ready");
+}
+
+#[test]
+fn write_archive_and_unarchive() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    w.post_form(&format!("/ticket/{id}/done"), &[]);
+    assert_region(&w.post(&format!("/ticket/{id}/archive")), "archived");
+    assert!(archived(&e, &id));
+    assert_region(&w.post(&format!("/ticket/{id}/unarchive")), "status-done");
+    assert!(!archived(&e, &id));
+    assert_err(&w.post("/ticket/LOCAL-99/archive"), 404, "archive");
+}
+
+#[test]
+fn write_link_commits_resolves_in_the_projects_checkout() {
+    let e = Env::new();
+    let r = repo(&e, "my-app");
+    let id = e.ok_at(&r, &["add", "Linked", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sha = String::from_utf8(
+        git_cmd(&r)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let w = e.spawn_web(&[], &[]);
+    // Usage: not a commit.
+    let bad = w.post_form(
+        &format!("/ticket/{id}/commits"),
+        &[("commits", "no-such-rev")],
+    );
+    assert_err(&bad, 400, "commits");
+    // Usage: nothing given.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/commits"), &[]),
+        400,
+        "commits",
+    );
+    let ok = w.post_form(&format!("/ticket/{id}/commits"), &[("commits", "HEAD\n\n")]);
+    assert_region(&ok, &sha[..10]);
+    let linked: String = conn(&e)
+        .query_row("SELECT sha FROM ticket_commits LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(linked, sha);
+    // Done links its commits too.
+    let id2 = e.ok_at(&r, &["add", "Done linked", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let done = w.post_form(&format!("/ticket/{id2}/done"), &[("commits", "HEAD")]);
+    assert_region(&done, &sha[..10]);
+}
+
+#[test]
+fn write_link_commits_refuses_an_unscoped_ticket() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form(&format!("/ticket/{id}/commits"), &[("commits", "HEAD")]);
+    assert_err(&r, 422, "commits");
+}
+
+#[test]
+fn write_criteria_check_uncheck_add_remove() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &["first"]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form(
+        &format!("/ticket/{id}/criteria/1/check"),
+        &[("evidence", "ran the tests")],
+    );
+    assert_region(&r, "1 of 1 checked");
+    assert!(r.body.contains("ran the tests"), "{}", r.body);
+    assert_eq!(criteria_counts(&e, &id), (1, 1));
+    let r = w.post(&format!("/ticket/{id}/criteria/1/uncheck"));
+    assert_region(&r, "0 of 1 checked");
+    assert_eq!(criteria_counts(&e, &id), (0, 1));
+    // Usage: not a number; NotFound: no such criterion.
+    assert_err(
+        &w.post(&format!("/ticket/{id}/criteria/x/check")),
+        400,
+        "criterion-x",
+    );
+    assert_err(
+        &w.post(&format!("/ticket/{id}/criteria/9/check")),
+        404,
+        "criterion-9",
+    );
+    // Usage: blank text.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/criteria"), &[("text", " ")]),
+        400,
+        "criterion-add",
+    );
+    let r = w.post_form(&format!("/ticket/{id}/criteria"), &[("text", "second")]);
+    assert_region(&r, "second");
+    assert_eq!(criteria_counts(&e, &id), (0, 2));
+    let r = w.post(&format!("/ticket/{id}/criteria/2/remove"));
+    assert_region(&r, "0 of 1 checked");
+    assert_eq!(criteria_counts(&e, &id), (0, 1));
+    assert_err(
+        &w.post(&format!("/ticket/{id}/criteria/2/remove")),
+        404,
+        "criterion-2",
+    );
+}
+
+#[test]
+fn write_comments_add_edit_delete() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    // Usage: blank body.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/comments"), &[("body", "")]),
+        400,
+        "comment-add",
+    );
+    let r = w.post_form(
+        &format!("/ticket/{id}/comments"),
+        &[("body", "first words")],
+    );
+    assert_region(&r, "first words");
+    assert_eq!(detail(&e, &id).comments.len(), 1);
+    let cid: i64 = conn(&e)
+        .query_row("SELECT id FROM comments", [], |r| r.get(0))
+        .unwrap();
+    let updated: String = conn(&e)
+        .query_row("SELECT updated_at FROM tickets", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        r.body.contains(&format!("value=\"{updated}\"")),
+        "{}",
+        r.body
+    );
+    let edit = format!("/ticket/{id}/comments/{cid}/edit");
+    let r = w.post_form(
+        &edit,
+        &[("body", "second words"), ("expected_updated_at", &updated)],
+    );
+    assert_region(&r, "second words");
+    // Conflict: the ticket changed since the page the edit came from.
+    let stale = w.post_form(
+        &edit,
+        &[
+            ("body", "late words"),
+            ("expected_updated_at", "2000-01-01T00:00:00Z"),
+        ],
+    );
+    assert_err(&stale, 409, &format!("comment-{cid}"));
+    let body: String = conn(&e)
+        .query_row("SELECT body FROM comments WHERE id = ?1", [cid], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(body, "second words");
+    // NotFound: no such comment.
+    assert_err(
+        &w.post_form(&format!("/ticket/{id}/comments/999/edit"), &[("body", "x")]),
+        404,
+        "comment-999",
+    );
+    assert_region(
+        &w.post(&format!("/ticket/{id}/comments/{cid}/delete")),
+        "Comments (0)",
+    );
+    assert_eq!(detail(&e, &id).comments.len(), 0);
+    assert_err(
+        &w.post(&format!("/ticket/{id}/comments/{cid}/delete")),
+        404,
+        &format!("comment-{cid}"),
+    );
+}
+
+#[test]
+fn write_hostile_comment_renders_inert() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    let evil = "<script>alert(1)</script> <img src=x onerror=alert(1)> [x](javascript:alert(1))";
+    let r = w.post_form(&format!("/ticket/{id}/comments"), &[("body", evil)]);
+    assert_eq!(r.status, 200);
+    assert!(!r.body.contains("<script"), "{}", r.body);
+    assert!(!r.body.contains("<img"), "{}", r.body);
+    assert!(!r.body.contains("href=\"javascript"), "{}", r.body);
+    assert!(r.body.contains("&lt;script&gt;"), "{}", r.body);
+}
+
+#[test]
+fn moves_that_are_not_offered_are_disabled_with_a_reason() {
+    let e = Env::new();
+    let draft = new_ticket(&e, "draft", &[]);
+    let active = new_ticket(&e, "ready", &[]);
+    e.ok(&["start", &active]);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{draft}")).body;
+    assert!(page.contains("a draft; make it ready first"), "{page}");
+    assert!(
+        page.contains("only an active ticket can be released"),
+        "{page}"
+    );
+    assert!(page.contains("ticket is open"), "{page}");
+    assert!(page.contains("disabled"), "{page}");
+    assert!(!page.contains("/start'"), "{page}");
+    let page = w.get(&format!("/ticket/{active}")).body;
+    assert!(page.contains("claimed by"), "{page}");
+    assert!(
+        page.contains(&format!("/ticket/{active}/release")),
+        "{page}"
+    );
+    for control in [
+        "ready",
+        "start",
+        "release",
+        "done",
+        "abandon",
+        "reopen",
+        "archive",
+        "commits",
+        "criterion-add",
+        "comment-add",
+    ] {
+        assert!(
+            page.contains(&format!("id=\"err-{control}\""))
+                || control == "ready"
+                || control == "start"
+                || control == "reopen",
+            "{control}: {page}"
+        );
+    }
+}
+
+#[test]
+fn writes_still_need_a_same_origin_post() {
+    let e = Env::new();
+    let id = new_ticket(&e, "ready", &[]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.request("POST", &format!("/ticket/{id}/start"), &[]);
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(db_status(&e, &id), "ready");
+}

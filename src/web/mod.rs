@@ -7,6 +7,7 @@ pub mod config;
 pub mod create;
 mod error;
 mod guard;
+mod handlers;
 mod pages;
 pub mod scope;
 mod sse;
@@ -38,18 +39,18 @@ pub fn run(db: std::path::PathBuf, identity: &Identity, cfg: config::Config) -> 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let role = identity.role.as_str();
     let live = Live::new();
-    runtime.block_on(serve(AppState { db, role, live }, cfg))
+    let identity = identity.clone();
+    runtime.block_on(serve(AppState { db, identity, live }, cfg))
 }
 
-/// What every handler needs: where the database is, the resolved Role and the
-/// live-update state. Handlers open a connection per request (local, single
+/// What every handler needs: where the database is, the Identity writes run
+/// as (always the human Role) and the live-update state. Handlers open a connection per request (local, single
 /// user).
 #[derive(Clone)]
 struct AppState {
     db: PathBuf,
-    role: &'static str,
+    identity: Identity,
     live: Arc<Live>,
 }
 
@@ -73,6 +74,7 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
         .route("/", get(pages::list::index))
         .route("/ticket/{id}", get(pages::ticket::show))
         .route("/stream", get(sse::stream))
+        .merge(handlers::router())
         .merge(assets::router());
     #[cfg(feature = "test-routes")]
     let router = router.merge(test_routes::router());

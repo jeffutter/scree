@@ -508,6 +508,17 @@ impl Web {
     /// close`) plus `extra`. A header in `extra` named `Host` replaces the
     /// default one.
     pub fn request(&self, method: &str, path: &str, extra: &[(&str, &str)]) -> Reply {
+        self.request_body(method, path, extra, "")
+    }
+
+    /// Like [`Web::request`] with a request body (`Content-Length` set).
+    pub fn request_body(
+        &self,
+        method: &str,
+        path: &str,
+        extra: &[(&str, &str)],
+        body: &str,
+    ) -> Reply {
         use std::io::{Read, Write};
         let mut head = format!("{method} {path} HTTP/1.1\r\n");
         if !extra.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
@@ -516,7 +527,11 @@ impl Web {
         for (k, v) in extra {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
-        head.push_str("Content-Length: 0\r\nConnection: close\r\n\r\n");
+        head.push_str(&format!(
+            "Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        ));
+        head.push_str(body);
         let mut s = std::net::TcpStream::connect(&self.addr).unwrap();
         let t = Some(std::time::Duration::from_secs(5));
         s.set_read_timeout(t).unwrap();
@@ -556,6 +571,22 @@ impl Web {
     /// POST with a valid `Origin`.
     pub fn post(&self, path: &str) -> Reply {
         self.request("POST", path, &[("Origin", &self.origin())])
+    }
+
+    /// POST an urlencoded form with a valid `Origin`.
+    pub fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> Reply {
+        let body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields)
+            .finish();
+        self.request_body(
+            "POST",
+            path,
+            &[
+                ("Origin", &self.origin()),
+                ("Content-Type", "application/x-www-form-urlencoded"),
+            ],
+            &body,
+        )
     }
 
     /// Open `path` as an event stream. HTTP/1.0 so the body is not chunked.

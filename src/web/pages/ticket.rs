@@ -1,8 +1,10 @@
 //! The ticket detail screen (`/ticket/ID`), read-only: every section of
 //! `scree show` plus what the ticket blocks. The page and the live stream
-//! share [`region`], so they cannot disagree. A ticket that is gone (removed
+//! share [`region`], so they cannot disagree. The writes live in
+//! `web/handlers.rs`; this file renders their buttons and forms. A ticket that is gone (removed
 //! by another process, or never existed) renders an inline "gone" state
-//! instead of a blank. Reads only: no sweep, no git (docs/web-ui.md, Sweep).
+//! instead of a blank. Rendering reads only: no sweep, no git (docs/web-ui.md,
+//! Sweep).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -11,8 +13,9 @@ use maud::{Markup, html};
 use rusqlite::Connection;
 
 use crate::error::{Error, Result};
+use crate::identity::Role;
 use crate::model::{Blocked, Comment, Criterion, TicketDetail};
-use crate::ticket;
+use crate::ticket::{self, Move};
 use crate::web::AppState;
 use crate::web::state::blocking;
 use crate::web::view::components;
@@ -74,7 +77,131 @@ fn prose(title: &str, src: &str) -> Markup {
     }
 }
 
-fn criterion(c: &Criterion) -> Markup {
+/// A form that posts to `/ticket/ID/ACTION` through Datastar. Each form has an
+/// empty `err-CONTROL` slot beside it for the failure fragment.
+fn post_form(id: &str, action: &str, control: &str, class: &str, inner: Markup) -> Markup {
+    html! {
+        form class=(class)
+            data-on:submit=(format!("@post('{}/{}', {{contentType: 'form'}})", ticket_link(id), action)) {
+            (inner)
+        }
+        div id=(format!("err-{control}")) {}
+    }
+}
+
+fn button(label: &str) -> Markup {
+    html! { button type="submit" class="btn" { (label) } }
+}
+
+/// A move that is not offered: the button stays visible but disabled, with
+/// the reason as text so it is never a mystery.
+fn disabled(label: &str, reason: &str) -> Markup {
+    html! {
+        div class="inline-form" {
+            button type="button" class="btn" disabled { (label) }
+            span class="meta" { (reason) }
+        }
+    }
+}
+
+fn why_not_start(d: &TicketDetail) -> String {
+    let t = &d.ticket;
+    match t.status.as_str() {
+        "active" => match &t.claimed_by {
+            Some(c) => format!("claimed by {}", c.author),
+            None => "already claimed".into(),
+        },
+        "draft" => "a draft; make it ready first".into(),
+        "done" | "abandoned" => "ticket is closed".into(),
+        _ if t.blocked => "blocked".into(),
+        _ => "not available to you".into(),
+    }
+}
+
+/// The lifecycle moves, from [`ticket::available_actions`]. A move that is not
+/// offered is shown disabled with its reason.
+fn actions(d: &TicketDetail, role: Role) -> Markup {
+    let t = &d.ticket;
+    let id = t.id.as_str();
+    let offered = ticket::available_actions(d, role);
+    let has = |m: Move| offered.contains(&m);
+    let closed = !has(Move::Done);
+    let archive = if has(Move::Unarchive) {
+        ("unarchive", "Unarchive")
+    } else {
+        ("archive", "Archive")
+    };
+    html! {
+        section class="detail-section" id="actions" {
+            h2 { "Actions" }
+            @if has(Move::Ready) {
+                (post_form(id, "ready", "ready", "inline-form", button("Make ready")))
+            } @else {
+                (disabled("Make ready", if t.status == "draft" { "not available" } else { "only a draft can be made ready" }))
+            }
+            @if has(Move::Start) {
+                (post_form(id, "start", "start", "inline-form", button("Start")))
+            } @else {
+                (disabled("Start", &why_not_start(d)))
+            }
+            @if has(Move::Release) {
+                (post_form(id, "release", "release", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Handoff note (optional; blank keeps the current one)" }
+                        textarea name="handoff" rows="3" {}
+                    }
+                    (button("Release"))
+                }))
+            } @else {
+                (disabled("Release", "only an active ticket can be released"))
+            }
+            @if has(Move::Done) {
+                (post_form(id, "done", "done", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Commits to link (one revision per line, optional)" }
+                        textarea name="commits" rows="2" {}
+                    }
+                    @if has(Move::ForceDone) {
+                        label class="check" {
+                            input type="checkbox" name="force" value="1";
+                            "Force: finish even with unchecked criteria"
+                        }
+                    }
+                    (button("Done"))
+                }))
+            } @else {
+                (disabled("Done", "ticket is closed"))
+            }
+            @if has(Move::Abandon) {
+                (post_form(id, "abandon", "abandon", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Reason (required)" }
+                        input type="text" name="reason";
+                    }
+                    (button("Abandon"))
+                }))
+            } @else {
+                (disabled("Abandon", "ticket is closed"))
+            }
+            @if has(Move::Reopen) {
+                (post_form(id, "reopen", "reopen", "inline-form", button("Reopen")))
+            } @else {
+                (disabled("Reopen", "ticket is open"))
+            }
+            (post_form(id, archive.0, "archive", "inline-form", button(archive.1)))
+            @if closed { p class="meta" { "This ticket is closed." } }
+            (post_form(id, "commits", "commits", "stack-form", html! {
+                label class="field" {
+                    span class="meta" { "Link commits (one revision per line)" }
+                    textarea name="commits" rows="2" {}
+                }
+                (button("Link commits"))
+            }))
+        }
+    }
+}
+
+fn criterion(id: &str, c: &Criterion) -> Markup {
     html! {
         li class="criterion" {
             span class=(if c.checked { "check-mark check-done" } else { "check-mark" }) {
@@ -95,11 +222,25 @@ fn criterion(c: &Criterion) -> Markup {
                     @if let Some(at) = &c.checked_at { " at " (at) }
                 }
             }
+            @let n = c.number.to_string();
+            @let control = format!("criterion-{n}");
+            @if c.checked {
+                (post_form(id, &format!("criteria/{n}/uncheck"), &control, "inline-form", button("Uncheck")))
+            } @else {
+                (post_form(id, &format!("criteria/{n}/check"), &control, "inline-form", html! {
+                    label class="field" {
+                        span class="meta" { "Evidence (optional)" }
+                        input type="text" name="evidence";
+                    }
+                    (button("Check"))
+                }))
+            }
+            (post_form(id, &format!("criteria/{n}/remove"), &format!("criterion-rm-{n}"), "inline-form", button("Remove")))
         }
     }
 }
 
-fn comment(c: &Comment) -> Markup {
+fn comment(id: &str, expected: &str, c: &Comment) -> Markup {
     html! {
         li class="comment" id=(format!("comment-{}", c.id)) {
             div class="meta" {
@@ -110,6 +251,17 @@ fn comment(c: &Comment) -> Markup {
                 @if let Some(e) = &c.edited_at { " - edited " (e) }
             }
             div class="prose" { (markdown::render(&c.body)) }
+            details class="comment-edit" {
+                summary { "Edit or delete" }
+                // The ticket's updated_at as rendered here: the edit is
+                // refused (409) when the ticket changed since.
+                (post_form(id, &format!("comments/{}/edit", c.id), &format!("comment-{}", c.id), "stack-form", html! {
+                    input type="hidden" name="expected_updated_at" value=(expected);
+                    textarea name="body" rows="4" { (c.body) }
+                    (button("Save"))
+                }))
+                (post_form(id, &format!("comments/{}/delete", c.id), &format!("comment-del-{}", c.id), "inline-form", button("Delete")))
+            }
         }
     }
 }
@@ -127,7 +279,7 @@ fn related(id: &str, status: &str, title: &str, worktree: Option<&str>, note: &s
 }
 
 /// Every section of the detail, as the live region.
-pub fn region(conn: &Connection, id: &str) -> Result<Markup> {
+pub fn region(conn: &Connection, id: &str, role: Role) -> Result<Markup> {
     let Some((d, blocks)) = read(conn, id)? else {
         return Ok(gone());
     };
@@ -165,6 +317,7 @@ pub fn region(conn: &Connection, id: &str) -> Result<Markup> {
                     p class="meta" { "Subtask of " a href=(ticket_link(p)) { (p) } }
                 }
             }
+            (actions(&d, role))
             (prose("Description", &d.description))
             (prose("Plan", &d.plan))
             (prose("Handoff", &d.handoff))
@@ -174,8 +327,15 @@ pub fn region(conn: &Connection, id: &str) -> Result<Markup> {
                     p class="meta" { "No criteria." }
                 } @else {
                     p class="meta" { (checked) " of " (d.criteria.len()) " checked" }
-                    ul class="plain" { @for c in &d.criteria { (criterion(c)) } }
+                    ul class="plain" { @for c in &d.criteria { (criterion(&t.id, c)) } }
                 }
+                (post_form(&t.id, "criteria", "criterion-add", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Add a criterion" }
+                        input type="text" name="text";
+                    }
+                    (button("Add criterion"))
+                }))
             }
             @if !t.blocked_by.is_empty() || !t.blocking_decisions.is_empty() {
                 section class="detail-section" {
@@ -251,8 +411,15 @@ pub fn region(conn: &Connection, id: &str) -> Result<Markup> {
                 @if d.comments.is_empty() {
                     p class="meta" { "No comments." }
                 } @else {
-                    ul class="plain" { @for c in &d.comments { (comment(c)) } }
+                    ul class="plain" { @for c in &d.comments { (comment(&t.id, &t.updated_at, c)) } }
                 }
+                (post_form(&t.id, "comments", "comment-add", "stack-form", html! {
+                    label class="field" {
+                        span class="meta" { "Add a comment" }
+                        textarea name="body" rows="3" {}
+                    }
+                    (button("Add comment"))
+                }))
             }
         }
     })
@@ -262,18 +429,19 @@ pub fn region(conn: &Connection, id: &str) -> Result<Markup> {
 /// an open page shows it in place.
 pub fn live(db: &std::path::Path, id: &str) -> Result<String> {
     let conn = crate::db::open(db)?;
-    Ok(region(&conn, id)?.into_string())
+    Ok(region(&conn, id, Role::Human)?.into_string())
 }
 
 pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let db = state.db.clone();
-    let role = state.role;
+    let role_kind = state.identity.role;
+    let role = role_kind.as_str();
     let want = id.clone();
     let result = blocking(move || {
         let conn = crate::db::open(&db)?;
         let banner = view::banner_counts(&conn)?;
         let found = read(&conn, &want)?.is_some();
-        let region = region(&conn, &want)?;
+        let region = region(&conn, &want, role_kind)?;
         Ok((banner, found, region))
     })
     .await;

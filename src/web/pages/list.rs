@@ -380,7 +380,7 @@ pub async fn index(
         Err(e) => return WebError::new(e, "filter").into_response(),
     };
     let db = state.db.clone();
-    let role = state.role;
+    let role = state.identity.role.as_str();
     let result = blocking(move || {
         let conn = crate::db::open(&db)?;
         let banner = view::banner_counts(&conn)?;

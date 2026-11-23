@@ -163,6 +163,31 @@ One line per request on stderr: `scree web: METHOD ROUTE STATUS`, plus the error
 
 The page and the live view `/ticket/ID` (an arm of `sse::render_view`) share `ticket::region`. A ticket that does not exist, or was removed by another process while the page was open, renders an inline "This ticket was removed or never existed" state with a link back to the List: the page answers 404, the stream sends it as a normal patch so an open page shows it in place. Every comment is rendered (no cap); long titles and ids wrap.
 
+## Ticket detail writes
+
+`src/web/handlers.rs` holds the POST routes under `/ticket/ID/...`. Each parses a urlencoded form (`form_urlencoded`; an absent field and a blank one read the same, so an unchecked box means false), calls one `actions::*` function inside `blocking` as the web's Identity (always the human Role, `AppState::identity`), and answers 200 with the refreshed `id="ticket"` region (the same `ticket::region` as the page and the live view). A failure is a `WebError` naming the control: the status follows the Errors table (Usage 400, NotFound 404, Conflict 409, Refused 422). A ticket removed after the write renders the gone state. The Origin guard applies to all of them.
+
+| Route | Form fields | Control (`err-...`) |
+|---|---|---|
+| `ready`, `draft`, `start`, `reopen`, `archive`, `unarchive` | none | `ready`, `draft`, `start`, `reopen`, `archive` |
+| `release` | `handoff` (blank keeps the stored note) | `release` |
+| `done` | `force` (checkbox), `commits` (one revision per line) | `done` |
+| `abandon` | `reason` (a blank one is Usage from the library, not pre-checked) | `abandon` |
+| `commits` | `commits` | `commits` |
+| `criteria` (add) | `text` | `criterion-add` |
+| `criteria/N/check`, `uncheck`, `remove` | `evidence` (check, optional) | `criterion-N` |
+| `comments` (add) | `body` | `comment-add` |
+| `comments/ID/edit` | `body`, hidden `expected_updated_at` | `comment-ID` |
+| `comments/ID/delete` | none | `comment-ID` |
+
+- **Offered moves**: the Actions section renders one form per move in `ticket::available_actions`; a move that is not offered is a disabled button with its reason beside it. `draft` has a route but no button (it is not an offered move). Advisory only: `ticket::transition` decides, so a stale page still gets the library's 409 or 422.
+- **Claim race**: a Start after another caller claimed is Conflict (409) and the other claim stays.
+- **Comment edit**: `expected_updated_at` is the ticket's `updated_at` as rendered with the comment, never re-read at POST time; a mismatch is Conflict (409) and changes nothing.
+- **Commits**: `done` and `commits` resolve each revision to a full sha with `scope::resolve_commit` in the ticket's Worktree when it is set and exists, else the Project root, never the server's cwd. A revision git does not know is Usage (400); a missing directory, or an unscoped ticket, is Refused (422). Branch is not recorded. This is the one git call; it is not a sweep.
+- **No sweep**: writes run as plain actions and never sweep.
+- **State checklist** (web-ui-design): default, hover, focus-visible (global ring) and active are the shared `.btn` and field styles. Disabled: reason text beside the button. Error: the `err-CONTROL` slot. Stale: the 409 fragment, and the live view re-renders the region; the user's typed text in a form is kept by Datastar's morph while the ticket is unchanged. Long content: text and evidence wrap (`overflow-wrap: anywhere`); inputs are full width. Closed and archived tickets: shown, with Reopen and Unarchive offered. Many criteria or 100+ comments: every item has the same small forms, no cap, as the read-only page. Loading: n/a (a write answers in one round trip, the button is not replaced until the response). Empty: n/a for forms. No keys are defined.
+- **Browser check**: see the commit message.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.
