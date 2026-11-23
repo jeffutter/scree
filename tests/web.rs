@@ -241,3 +241,98 @@ fn sigint_exits_promptly() {
     let mut w = e.spawn_web(&[], &[]);
     assert!(w.interrupt(Duration::from_secs(1)));
 }
+
+const ASSET_PATHS: [(&str, &str); 3] = [
+    ("/assets/tokens.css", "text/css; charset=utf-8"),
+    ("/assets/app.css", "text/css; charset=utf-8"),
+    ("/assets/datastar.js", "text/javascript; charset=utf-8"),
+];
+
+#[test]
+fn assets_serve_with_etag_and_304() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    for (path, content_type) in ASSET_PATHS {
+        let r = w.get(path);
+        assert_eq!(r.status, 200, "{path}");
+        assert_eq!(r.header("content-type"), Some(content_type), "{path}");
+        assert_eq!(r.header("cache-control"), Some("no-cache"));
+        assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+        assert!(!r.body.is_empty());
+        let tag = r.header("etag").expect("etag").to_string();
+
+        let same = w.request("GET", path, &[("If-None-Match", &tag)]);
+        assert_eq!(same.status, 304, "{path}");
+        assert_eq!(same.header("etag"), Some(tag.as_str()));
+        assert!(same.body.is_empty());
+
+        let weak = w.request("GET", path, &[("If-None-Match", &format!("W/{tag}"))]);
+        assert_eq!(weak.status, 304, "{path} weak");
+        let list = w.request("GET", path, &[("If-None-Match", &format!("\"x\", {tag}"))]);
+        assert_eq!(list.status, 304, "{path} list");
+        let star = w.request("GET", path, &[("If-None-Match", "*")]);
+        assert_eq!(star.status, 304, "{path} star");
+
+        let stale = w.request("GET", path, &[("If-None-Match", "\"stale\"")]);
+        assert_eq!(stale.status, 200, "{path} stale");
+        assert_eq!(stale.body, r.body);
+    }
+    assert_eq!(w.get("/assets/nope.css").status, 404);
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[test]
+fn datastar_bundle_matches_licence_hash() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/web/assets");
+    let notice = std::fs::read_to_string(dir.join("DATASTAR-LICENSE.md")).unwrap();
+    let expected = notice
+        .lines()
+        .find_map(|l| l.strip_prefix("sha256:"))
+        .expect("a sha256: line in DATASTAR-LICENSE.md")
+        .trim();
+    let bundle = std::fs::read(dir.join("datastar.js")).unwrap();
+    assert_eq!(sha256_hex(&bundle), expected);
+
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    assert_eq!(w.get("/assets/datastar.js").body.as_bytes(), bundle);
+}
+
+/// Asserts a rendered page has no inline style or script (the CSP forbids both).
+fn assert_no_inline(page: &str, body: &str) {
+    assert!(!body.contains("<style"), "{page}: <style> element");
+    assert!(!body.contains("style="), "{page}: style attribute");
+    for (i, _) in body.match_indices("<script") {
+        let tag = &body[i..i + body[i..].find('>').unwrap()];
+        assert!(tag.contains("src="), "{page}: inline <script>");
+    }
+}
+
+#[test]
+fn no_inline_style_or_script_in_pages() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    // Add each new rendered page here.
+    let pages = ["/"];
+    for page in pages {
+        let r = w.get(page);
+        assert_eq!(r.status, 200, "{page}");
+        assert_no_inline(page, &r.body);
+    }
+    assert!(w.get("/").body.contains("/assets/app.css"));
+    // The lint itself rejects what it should.
+    for bad in [
+        "<style>a{}</style>",
+        "<p style=\"x\">",
+        "<script>1</script>",
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_no_inline("bad", bad)).is_err());
+    }
+}

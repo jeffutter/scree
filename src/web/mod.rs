@@ -2,6 +2,7 @@
 //! the server skeleton: one guarded router and a placeholder page. Handlers
 //! hold no SQL; they will call the library like the CLI does.
 
+mod assets;
 pub mod config;
 pub mod create;
 mod guard;
@@ -42,6 +43,7 @@ async fn serve(role: &'static str, cfg: config::Config) -> Result<()> {
     let hosts = Arc::new(config::allowed_hosts(local.port()));
     let router = Router::new()
         .route("/", get(index))
+        .merge(assets::router())
         .layer(middleware::from_fn_with_state(hosts, guard::guard))
         .with_state(role);
 
@@ -84,7 +86,13 @@ async fn index(State(role): State<&'static str>) -> Html<String> {
         html! {
             (DOCTYPE)
             html lang="en" {
-                head { meta charset="utf-8"; title { "Scree" } }
+                head {
+                    meta charset="utf-8";
+                    title { "Scree" }
+                    link rel="stylesheet" href=(assets::TOKENS_HREF);
+                    link rel="stylesheet" href=(assets::APP_HREF);
+                    script type="module" src=(assets::DATASTAR_HREF) {}
+                }
                 body {
                     h1 { "Scree" }
                     p { "The web UI is not built yet." }

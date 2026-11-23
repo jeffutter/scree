@@ -34,3 +34,17 @@ Every response, refusals included, carries the policy from ADR 0003:
 ```
 default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 ```
+
+## Assets
+
+`src/web/assets.rs` embeds every static file with `include_str!` and serves it at a fixed route:
+
+| Route | Source |
+|---|---|
+| `/assets/tokens.css` | `docs/design-system/tokens.css` (one copy, embedded from the design system) |
+| `/assets/app.css` | `src/web/assets/app.css` (semantic tokens only) |
+| `/assets/datastar.js` | `src/web/assets/datastar.js` (hash pinned in `DATASTAR-LICENSE.md`, checked by `tests/web.rs`) |
+
+Each response has a strong `ETag` (quoted SHA-256 of the body), `Cache-Control: no-cache` and `X-Content-Type-Options: nosniff`. `If-None-Match` (a tag, a `W/` tag, a comma list or `*`) gets 304 with no body. Assets pass through the same guard and CSP as pages. Pages must not use inline style or script; `tests/web.rs` lints every rendered page. A new asset is one row in the `ASSETS` table.
+
+Datastar evaluates `data-*` expressions with `new Function`, which the CSP allows through `'unsafe-eval'` (ADR 0003).
