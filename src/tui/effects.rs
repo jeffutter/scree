@@ -185,6 +185,7 @@ fn edit_title(
         append: false,
         for_who: None,
         parent: None,
+        expected_updated_at: None,
     };
     ticket::edit(conn, id, &f, identity)
         .map(|_| format!("{id} title updated"))
@@ -255,6 +256,7 @@ pub fn apply_external(
         append: false,
         for_who: None,
         parent: None,
+        expected_updated_at: None,
     };
     ticket::edit(conn, id, &f, identity)
         .map(|_| format!("{id} {name} updated"))

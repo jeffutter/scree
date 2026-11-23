@@ -503,3 +503,110 @@ fn unreadable_stdin_is_a_usage_error_not_a_database_error() {
     assert_eq!(after["description"], before["description"]);
     assert_eq!(after["updated_at"], before["updated_at"]);
 }
+
+fn lib_who() -> scree::identity::Identity {
+    scree::identity::Identity {
+        role: scree::identity::Role::Agent,
+        author: "agent".into(),
+        session: None,
+    }
+}
+
+fn edit_title<'a>(
+    title: &'a str,
+    parent: Option<scree::ticket::ParentChange<'a>>,
+    expected: Option<&'a str>,
+) -> scree::ticket::EditFields<'a> {
+    scree::ticket::EditFields {
+        title: Some(title),
+        description: None,
+        plan: Some("new plan"),
+        append: false,
+        for_who: None,
+        parent,
+        expected_updated_at: expected,
+    }
+}
+
+const STALE: &str = "2000-01-01T00:00:00Z";
+
+#[test]
+fn stale_edit_conflicts_and_changes_nothing() {
+    let e = Env::new();
+    let id = e.ready(&[]);
+    let sub = e.ok(&["--role", "human", "add", "s", "--parent", &id])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other = e.ready(&[]);
+    let mut conn = scree::db::open(&e.db()).unwrap();
+    let before = scree::ticket::show(&conn, &sub).unwrap();
+    let cur = before.ticket.updated_at.clone();
+    e.exec_batch(&format!("UPDATE tickets SET updated_at = '{STALE}'"));
+    // Title and plan.
+    let f = edit_title("changed", None, Some(&cur));
+    let err = scree::ticket::edit(&mut conn, &sub, &f, &lib_who()).unwrap_err();
+    assert_eq!(err.exit_code(), 5);
+    // Re-parent: the check precedes it.
+    let f = edit_title(
+        "changed",
+        Some(scree::ticket::ParentChange::Under(&other)),
+        Some(&cur),
+    );
+    assert_eq!(
+        scree::ticket::edit(&mut conn, &sub, &f, &lib_who())
+            .unwrap_err()
+            .exit_code(),
+        5
+    );
+    let after = scree::ticket::show(&conn, &sub).unwrap();
+    assert_eq!(after.ticket.title, before.ticket.title);
+    assert_eq!(after.plan, before.plan);
+    assert_eq!(after.ticket.updated_at, STALE);
+    assert_eq!(after.ticket.parent, before.ticket.parent);
+}
+
+#[test]
+fn edit_with_current_value_or_none_succeeds() {
+    let e = Env::new();
+    let id = e.ready(&[]);
+    let mut conn = scree::db::open(&e.db()).unwrap();
+    e.exec_batch(&format!("UPDATE tickets SET updated_at = '{STALE}'"));
+    let f = edit_title("one", None, Some(STALE));
+    let t = scree::ticket::edit(&mut conn, &id, &f, &lib_who()).unwrap();
+    assert_eq!(t.ticket.title, "one");
+    assert_ne!(t.ticket.updated_at, STALE, "a successful edit bumps it");
+    let f = edit_title("two", None, None);
+    let t = scree::ticket::edit(&mut conn, &id, &f, &lib_who()).unwrap();
+    assert_eq!(t.ticket.title, "two");
+}
+
+#[test]
+fn comment_edit_stale_conflicts_current_and_none_succeed() {
+    let e = Env::new();
+    let id = e.ready(&[]);
+    let t = e.ok(&["comment", "add", &id, "orig"]);
+    let cid = t["comments"][0]["id"].as_i64().unwrap();
+    let mut conn = scree::db::open(&e.db()).unwrap();
+    e.exec_batch(&format!("UPDATE tickets SET updated_at = '{STALE}'"));
+    let err = scree::ticket::comment_edit(
+        &mut conn,
+        &id,
+        cid,
+        "new",
+        &lib_who(),
+        Some("1999-01-01T00:00:00Z"),
+    )
+    .unwrap_err();
+    assert_eq!(err.exit_code(), 5);
+    let d = scree::ticket::show(&conn, &id).unwrap();
+    assert_eq!(d.comments[0].body, "orig");
+    assert_eq!(d.comments[0].edited_at, None);
+    assert_eq!(d.ticket.updated_at, STALE);
+    let d =
+        scree::ticket::comment_edit(&mut conn, &id, cid, "new", &lib_who(), Some(STALE)).unwrap();
+    assert_eq!(d.comments[0].body, "new");
+    assert_ne!(d.ticket.updated_at, STALE);
+    let d = scree::ticket::comment_edit(&mut conn, &id, cid, "newer", &lib_who(), None).unwrap();
+    assert_eq!(d.comments[0].body, "newer");
+}

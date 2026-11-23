@@ -322,6 +322,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
                         (None, true) => Some(ticket::ParentChange::Detach),
                         (None, false) => None,
                     },
+                    expected_updated_at: None,
                 },
                 &identity,
             )?;
@@ -497,7 +498,7 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             body,
         }) => {
             let body = text_arg("comment body", Some(&body))?;
-            let t = ticket::comment_edit(&mut conn, &id, comment_id, &body, &identity)?;
+            let t = ticket::comment_edit(&mut conn, &id, comment_id, &body, &identity, None)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
         Command::Decisions(mut a) => {

@@ -1032,21 +1032,44 @@ pub fn comment_rm(
     })
 }
 
+/// Refuse (Conflict, exit 5) when the caller passed the `updated_at` it
+/// loaded and the ticket row has moved since. `None` skips the check. Call it
+/// inside the write transaction before any change. `updated_at` has one-second
+/// resolution, so a change within the same second as the load goes unseen.
+fn check_fresh(tx: &Connection, row: i64, id: &str, expected: Option<&str>) -> Result<()> {
+    let Some(exp) = expected else { return Ok(()) };
+    let cur: String = tx.query_row("SELECT updated_at FROM tickets WHERE id = ?1", [row], |r| {
+        r.get(0)
+    })?;
+    if cur != exp {
+        return Err(Error::Conflict(format!(
+            "{id} changed since you loaded it (updated_at is now {cur}, expected {exp}); reload and retry"
+        )));
+    }
+    Ok(())
+}
+
 /// Replace a comment's body in place. Id, author, session, role and
 /// created_at are kept; `edited_at` records the edit. Any caller may edit any
 /// comment, as with `comment_rm`.
+///
+/// `expected_updated_at` is the ticket's `updated_at` from a prior
+/// `TicketDetail`: when it no longer matches, nothing changes and the result
+/// is `Error::Conflict`. `None` skips the check.
 pub fn comment_edit(
     conn: &mut Connection,
     id: &str,
     comment_id: i64,
     body: &str,
     who: &Identity,
+    expected_updated_at: Option<&str>,
 ) -> Result<TicketDetail> {
     if body.trim().is_empty() {
         return Err(Error::Usage("comment body must not be empty".into()));
     }
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
+        check_fresh(tx, row, id, expected_updated_at)?;
         let n = tx.execute(
             &format!(
                 "UPDATE comments SET body = ?1, edited_at = {NOW}
@@ -1071,6 +1094,10 @@ pub struct EditFields<'a> {
     pub append: bool,
     pub for_who: Option<ForWho>,
     pub parent: Option<ParentChange<'a>>,
+    /// The ticket's `updated_at` from a prior `TicketDetail`. When it no
+    /// longer matches, `edit` changes nothing and returns `Error::Conflict`.
+    /// `None` skips the check.
+    pub expected_updated_at: Option<&'a str>,
 }
 
 /// A re-parent requested through `edit`.
@@ -1290,6 +1317,7 @@ pub fn edit(
     }
     db::write(conn, |tx| {
         let row = resolve(tx, id)?;
+        check_fresh(tx, row, id, f.expected_updated_at)?;
         if let Some(change) = f.parent {
             reparent(tx, row, change, who)?;
         }
