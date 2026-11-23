@@ -7,6 +7,7 @@ use std::process::Command;
 use rusqlite::Connection;
 
 use super::state::{Effect, Event, Lifecycle, LoadSpec, ScopeMode, TextField};
+use crate::actions;
 use crate::cli::{ListArgs, ScopeArgs, Status};
 use crate::decision;
 use crate::identity::Identity;
@@ -93,74 +94,60 @@ pub fn run_effect(
         Effect::Transition { id, action } => {
             Event::ActionDone(transition(conn, &id, action, identity))
         }
-        Effect::EditTitle { id, title } => {
-            Event::ActionDone(edit_title(conn, &id, &title, identity))
-        }
+        Effect::EditTitle { id, title } => Event::ActionDone(
+            actions::edit_title(conn, &id, &title, identity)
+                .map(|_| format!("{id} title updated"))
+                .map_err(|e| e.to_string()),
+        ),
         Effect::CheckCriterion {
             id,
             number,
             evidence,
-        } => {
-            let r = format!("{id}#{number}");
-            Event::ActionDone(
-                ticket::check(conn, &r, evidence.as_deref(), identity)
-                    .map(|_| format!("{r} checked"))
-                    .map_err(|e| e.to_string()),
-            )
-        }
-        Effect::UncheckCriterion { id, number } => {
-            let r = format!("{id}#{number}");
-            Event::ActionDone(
-                ticket::uncheck(conn, &r, identity)
-                    .map(|_| format!("{r} unchecked"))
-                    .map_err(|e| e.to_string()),
-            )
-        }
+        } => Event::ActionDone(
+            actions::criterion_check(conn, &id, number, evidence.as_deref(), identity)
+                .map(|_| format!("{id}#{number} checked"))
+                .map_err(|e| e.to_string()),
+        ),
+        Effect::UncheckCriterion { id, number } => Event::ActionDone(
+            actions::criterion_uncheck(conn, &id, number, identity)
+                .map(|_| format!("{id}#{number} unchecked"))
+                .map_err(|e| e.to_string()),
+        ),
         Effect::AddCriterion { id, text } => Event::ActionDone(
-            ticket::criteria_add(conn, &id, &text, identity)
+            actions::criterion_add(conn, &id, &text, identity)
                 .map(|d| {
                     let n = d.criteria.iter().map(|c| c.number).max().unwrap_or(0);
                     format!("{id}#{n} added")
                 })
                 .map_err(|e| e.to_string()),
         ),
-        Effect::RemoveCriterion { id, number } => {
-            let r = format!("{id}#{number}");
-            Event::ActionDone(
-                ticket::criteria_rm(conn, &r, identity)
-                    .map(|_| format!("{r} removed"))
-                    .map_err(|e| e.to_string()),
-            )
-        }
+        Effect::RemoveCriterion { id, number } => Event::ActionDone(
+            actions::criterion_remove(conn, &id, number, identity)
+                .map(|_| format!("{id}#{number} removed"))
+                .map_err(|e| e.to_string()),
+        ),
         Effect::AddComment { id, body } => Event::ActionDone(
-            ticket::comment_add(conn, &id, &body, identity)
+            actions::comment_add(conn, &id, &body, identity)
                 .map(|_| format!("comment added to {id}"))
                 .map_err(|e| e.to_string()),
         ),
         Effect::RemoveComment { id, comment_id } => Event::ActionDone(
-            ticket::comment_rm(conn, &id, comment_id, identity)
+            actions::comment_remove(conn, &id, comment_id, identity)
                 .map(|_| format!("comment {comment_id} deleted"))
                 .map_err(|e| e.to_string()),
         ),
-        Effect::Reorder { id, anchor, before } => {
-            let place = if before {
-                ticket::Place::Before(&anchor)
-            } else {
-                ticket::Place::After(&anchor)
-            };
-            Event::ActionDone(
-                ticket::reorder(conn, &id, place)
-                    .map(|_| format!("{id} moved"))
-                    .map_err(|e| e.to_string()),
-            )
-        }
+        Effect::Reorder { id, anchor, before } => Event::ActionDone(
+            actions::reorder(conn, &id, &anchor, before)
+                .map(|_| format!("{id} moved"))
+                .map_err(|e| e.to_string()),
+        ),
         Effect::AddDep { id, blocker } => Event::ActionDone(
-            ticket::dep_add(conn, &id, &blocker, identity)
+            actions::dep_add(conn, &id, &blocker, identity)
                 .map(|_| format!("{id} blocked by {blocker}"))
                 .map_err(|e| e.to_string()),
         ),
         Effect::RemoveDep { id, blocker } => Event::ActionDone(
-            ticket::dep_rm(conn, &id, &blocker, identity)
+            actions::dep_remove(conn, &id, &blocker, identity)
                 .map(|_| format!("{id} no longer blocked by {blocker}"))
                 .map_err(|e| e.to_string()),
         ),
@@ -169,27 +156,6 @@ pub fn run_effect(
             Event::ActionDone(Err("external edit needs the terminal".into()))
         }
     }
-}
-
-/// Set a ticket's title through ticket::edit (empty titles are refused there).
-fn edit_title(
-    conn: &mut Connection,
-    id: &str,
-    title: &str,
-    identity: &Identity,
-) -> Result<String, String> {
-    let f = ticket::EditFields {
-        title: Some(title),
-        description: None,
-        plan: None,
-        append: false,
-        for_who: None,
-        parent: None,
-        expected_updated_at: None,
-    };
-    ticket::edit(conn, id, &f, identity)
-        .map(|_| format!("{id} title updated"))
-        .map_err(|e| e.to_string())
 }
 
 /// The editor command: $VISUAL, else $EDITOR, else vi.
@@ -237,7 +203,7 @@ pub fn apply_external(
         if edited.trim().is_empty() {
             return Ok("no comment added".into());
         }
-        return ticket::comment_add(conn, id, edited, identity)
+        return actions::comment_add(conn, id, edited, identity)
             .map(|_| format!("comment added to {id}"))
             .map_err(|e| e.to_string());
     }
@@ -258,7 +224,7 @@ pub fn apply_external(
         parent: None,
         expected_updated_at: None,
     };
-    ticket::edit(conn, id, &f, identity)
+    actions::edit(conn, id, &f, identity)
         .map(|_| format!("{id} {name} updated"))
         .map_err(|e| e.to_string())
 }
@@ -304,25 +270,14 @@ fn transition(
     // The CLI sweeps closed Worktrees before `start`; the TUI sweeps once at
     // launch (src/lib.rs) and skips it per action.
     let r = match action {
-        Lifecycle::Archive { archived } => ticket::archive(conn, id, archived),
-        other => {
-            let a = match other {
-                Lifecycle::Ready => ticket::Action::Ready,
-                Lifecycle::Start => ticket::Action::Start,
-                Lifecycle::Release => ticket::Action::Release { handoff: None },
-                Lifecycle::Done { force } => ticket::Action::Done {
-                    force,
-                    commits: Vec::new(),
-                },
-                // A general text prompt is a later ticket; use a fixed reason.
-                Lifecycle::Abandon => ticket::Action::Abandon {
-                    reason: "abandoned from tui".into(),
-                },
-                Lifecycle::Reopen => ticket::Action::Reopen,
-                Lifecycle::Archive { .. } => unreachable!(),
-            };
-            ticket::transition(conn, id, a, identity)
-        }
+        Lifecycle::Archive { archived } => actions::archive(conn, id, archived),
+        Lifecycle::Ready => actions::ready(conn, id, identity),
+        Lifecycle::Start => actions::start(conn, id, identity),
+        Lifecycle::Release => actions::release(conn, id, None, identity),
+        Lifecycle::Done { force } => actions::done(conn, id, force, Vec::new(), identity),
+        // A general text prompt is a later ticket; the TUI supplies its own reason.
+        Lifecycle::Abandon => actions::abandon(conn, id, "abandoned from tui".into(), identity),
+        Lifecycle::Reopen => actions::reopen(conn, id, identity),
     };
     r.map(|t| match action {
         Lifecycle::Archive { archived: true } => format!("{id} archived"),
