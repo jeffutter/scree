@@ -41,7 +41,7 @@ The git repository a ticket was created in, identified by the path of its root c
 A linked checkout of a Project, other than its root checkout. A ticket made in one records it; a ticket made in the root checkout has none.
 
 **Scope**
-The Project and Worktree a ticket belongs to, detected from the directory a command runs in. Reads show the current Worktree's tickets unless widened. A ticket may have no Scope at all (an unscoped ticket), for one-off work outside any Project.
+The Project and Worktree a ticket belongs to, detected from the directory a command runs in. Reads show the current Worktree's tickets unless widened. A ticket may have no Scope at all (an unscoped ticket), for one-off work outside any Project. In `scree web` the Scope comes from the URL query, not the working directory, and no query means all Projects and Worktrees.
 
 **Comment**
 A note on a ticket, added by a person or an agent as work proceeds: findings, a change of direction, a replan. Appended by default and never edited. It can be deleted.
@@ -64,6 +64,15 @@ An optional label for one run of an agent, recorded with the author so claims an
 **Claimer**
 The Caller (author and session) who started an active ticket.
 
+**Reclaim**
+Taking over an active ticket whose claim is stale, with `start --reclaim`. Only one Caller gets it.
+
+**Stale threshold**
+How long a claim must go untouched before it counts as stale. The default is 4 hours, and `--older-than` changes it.
+
+**for**
+Who a ticket is meant for, `agent` or `human`. Distinct from Role, which is who the Caller is: a Caller with Role human may start a `for human` ticket, an agent may not.
+
 **Decision**
 A question a human must answer, scoped to the Project and linked to one or more tickets, so one answer can settle many tickets. Shown as `D-<n>` per Project. Open until decided; never deleted, only superseded by a later Decision.
 
@@ -75,3 +84,6 @@ A decided Decision replaced by another through `decision supersede`. It stays in
 
 **Blocking Decision**
 An open Decision linked to a ticket. It makes that ticket Blocked until the Decision is decided.
+
+**Unblocks N**
+The count of tickets linked to an open Decision that answering it would unblock. It orders the Decisions queue (see `unblocks` in `model.rs`).
