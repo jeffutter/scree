@@ -544,3 +544,29 @@ textarea {
   font-size: var(--text-sm);
   cursor: pointer;
 }
+
+/* Ticket detail writes B: edit form, blocker picker, subtask form */
+select,
+input[type="search"] {
+  font: inherit;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+input[type="search"] {
+  min-width: var(--size-search);
+  max-width: 100%;
+}
+
+.preview {
+  max-width: var(--size-content-max);
+  margin: 0 0 var(--space-3);
+}
+
+.stack-form input[type="text"] {
+  min-width: 0;
+}

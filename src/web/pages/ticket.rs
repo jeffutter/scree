@@ -14,7 +14,7 @@ use rusqlite::Connection;
 
 use crate::error::{Error, Result};
 use crate::identity::Role;
-use crate::model::{Blocked, Comment, Criterion, TicketDetail};
+use crate::model::{Blocked, Blocker, Comment, Criterion, TicketDetail};
 use crate::ticket::{self, Move};
 use crate::web::AppState;
 use crate::web::state::blocking;
@@ -80,8 +80,20 @@ fn prose(title: &str, src: &str) -> Markup {
 /// A form that posts to `/ticket/ID/ACTION` through Datastar. Each form has an
 /// empty `err-CONTROL` slot beside it for the failure fragment.
 fn post_form(id: &str, action: &str, control: &str, class: &str, inner: Markup) -> Markup {
+    post_form_id("", id, action, control, class, inner)
+}
+
+/// [`post_form`] with an element id on the form (none when `form_id` is empty).
+fn post_form_id(
+    form_id: &str,
+    id: &str,
+    action: &str,
+    control: &str,
+    class: &str,
+    inner: Markup,
+) -> Markup {
     html! {
-        form class=(class)
+        form class=(class) id=[(!form_id.is_empty()).then_some(form_id)]
             data-on:submit=(format!("@post('{}/{}', {{contentType: 'form'}})", ticket_link(id), action)) {
             (inner)
         }
@@ -266,6 +278,19 @@ fn comment(id: &str, expected: &str, c: &Comment) -> Markup {
     }
 }
 
+fn blocker_row(id: &str, b: &Blocker) -> Markup {
+    let blocker = form_urlencoded::byte_serialize(b.id.as_bytes()).collect::<String>();
+    html! {
+        li class="related" {
+            a class="row-id" href=(ticket_link(&b.id)) { (b.id) }
+            " " span class="meta" { (b.status) }
+            " " span { (b.title) }
+            @if let Some(w) = b.worktree.as_deref() { " " span class="meta" { "in " (dir_name(w)) } }
+            (post_form(id, &format!("blockers/{blocker}/remove"), &format!("blocker-rm-{}", b.id), "inline-form", button("Remove blocker")))
+        }
+    }
+}
+
 fn related(id: &str, status: &str, title: &str, worktree: Option<&str>, note: &str) -> Markup {
     html! {
         li class="related" {
@@ -342,7 +367,7 @@ pub fn region(conn: &Connection, id: &str, role: Role) -> Result<Markup> {
                     h2 { "Blocked by" }
                     ul class="plain" {
                         @for b in &t.blocked_by {
-                            (related(&b.id, &b.status, &b.title, b.worktree.as_deref(), ""))
+                            (blocker_row(&t.id, b))
                         }
                         @for dec in &t.blocking_decisions {
                             li class="related" {
@@ -425,6 +450,186 @@ pub fn region(conn: &Connection, id: &str, role: Role) -> Result<Markup> {
     })
 }
 
+/// The edit form. It is not part of [`region`]: the live stream re-patches
+/// the region on every database change, and a form inside it would lose the
+/// text being typed. `expected_updated_at` is the `updated_at` the form was
+/// rendered with; the form is only re-rendered by the page and by a
+/// successful edit, so a change made by anyone else in between makes the save
+/// a 409 and the typed text stays in place.
+pub fn edit_form(d: &TicketDetail) -> Markup {
+    let t = &d.ticket;
+    let who_option = |v: &str| {
+        html! { option value=(v) selected[t.for_who == v] { (v) } }
+    };
+    html! {
+        div id="ticket-edit" {
+            h2 { "Edit" }
+            (post_form(&t.id, "edit", "edit", "stack-form", html! {
+                input type="hidden" name="expected_updated_at" value=(t.updated_at);
+                label class="field" {
+                    span class="meta" { "Title" }
+                    input type="text" name="title" value=(t.title);
+                }
+                label class="field" {
+                    span class="meta" { "Description (Markdown)" }
+                    textarea name="description" rows="6" { (d.description) }
+                }
+                (preview_button(&t.id, "description"))
+                div id="preview-description" {}
+                label class="field" {
+                    span class="meta" { "Plan (Markdown)" }
+                    textarea name="plan" rows="8" { (d.plan) }
+                }
+                (preview_button(&t.id, "plan"))
+                div id="preview-plan" {}
+                label class="field" {
+                    span class="meta" { "For" }
+                    select name="for" { (who_option("agent")) (who_option("human")) }
+                }
+                label class="field" {
+                    span class="meta" { "Parent (ticket id; blank keeps the current one)" }
+                    input type="text" name="parent" value=(t.parent.as_deref().unwrap_or(""));
+                }
+                label class="check" {
+                    input type="checkbox" name="detach" value="1";
+                    "Make top-level (no parent)"
+                }
+                p class="meta" {
+                    "Saved only if the ticket has not changed since this form was loaded. "
+                    "If it has, your text stays here; copy it, then reload the page."
+                }
+                (button("Save"))
+            }))
+        }
+    }
+}
+
+/// Renders the text of one field as Markdown beside the editor. Writes nothing.
+fn preview_button(id: &str, field: &str) -> Markup {
+    html! {
+        button type="button" class="btn"
+            data-on:click=(format!("@post('{}/preview?field={}', {{contentType: 'form'}})", ticket_link(id), field)) {
+            "Preview " (field)
+        }
+    }
+}
+
+/// The preview fragment for one field.
+pub fn preview(field: &str, src: &str) -> Markup {
+    html! {
+        div id=(format!("preview-{field}")) class="preview" {
+            @if src.trim().is_empty() {
+                p class="meta" { "Nothing to preview." }
+            } @else {
+                div class="prose" { (markdown::render(src)) }
+            }
+        }
+    }
+}
+
+/// The add-subtask form; a fresh copy replaces it after a success so the
+/// typed text is cleared. The form's id carries the number of subtasks: the
+/// morph keeps what was typed into an element it matches by id, so a new id is
+/// what makes it replace the old form instead of reusing it.
+pub fn subtask_form(id: &str, existing: usize) -> Markup {
+    html! {
+        div id="ticket-subtask" {
+            h2 { "Add a subtask" }
+            (post_form_id(&format!("subtask-form-{existing}"), id, "subtasks", "subtask-add", "stack-form", html! {
+                label class="field" {
+                    span class="meta" { "Title" }
+                    input type="text" name="title";
+                }
+                label class="field" {
+                    span class="meta" { "Description (optional)" }
+                    textarea name="description" rows="3" {}
+                }
+                label class="field" {
+                    span class="meta" { "For" }
+                    select name="for" { option value="agent" { "agent" } option value="human" { "human" } }
+                }
+                label class="field" {
+                    span class="meta" { "Status" }
+                    select name="status" { option value="draft" { "draft" } option value="ready" { "ready" } }
+                }
+                (button("Add subtask"))
+            }))
+        }
+    }
+}
+
+/// Most candidates the blocker picker lists.
+pub const PICKER_ROWS: usize = 20;
+
+fn blocker_picker(id: &str) -> Markup {
+    html! {
+        div id="ticket-blockers" {
+            h2 { "Add a blocker" }
+            form class="inline-form"
+                "data-on:input__debounce.250ms"=(format!("@get('{}/blocker-search', {{contentType: 'form'}})", ticket_link(id)))
+                data-on:submit=(format!("@get('{}/blocker-search', {{contentType: 'form'}})", ticket_link(id))) {
+                label class="field" {
+                    span class="meta" { "Search open tickets in this Project" }
+                    input type="search" name="q" autocomplete="off";
+                }
+            }
+            div id="blocker-results" {}
+            div id="err-blocker-add" {}
+        }
+    }
+}
+
+/// The candidate list for the blocker picker: the Project's open tickets that
+/// match `candidates` (already filtered and capped by the caller), each with
+/// an Add button. `total` counts every match, so "showing N of M" is honest.
+pub fn blocker_results(id: &str, candidates: &[(String, String, String)], total: usize) -> Markup {
+    html! {
+        div id="blocker-results" {
+            @if candidates.is_empty() {
+                (components::empty("No matching tickets", "Only open tickets in this Project can block this one."))
+            } @else {
+                ul class="plain" {
+                    @for (cid, status, title) in candidates {
+                        li class="related" {
+                            span class="row-id" { (cid) }
+                            " " span class="meta" { (status) }
+                            " " span { (title) }
+                            form class="inline-form"
+                                data-on:submit=(format!("@post('{}/blockers', {{contentType: 'form'}})", ticket_link(id))) {
+                                input type="hidden" name="blocker" value=(cid);
+                                (button("Add"))
+                            }
+                        }
+                    }
+                }
+                @if total > candidates.len() {
+                    p class="meta" { "showing " (candidates.len()) " of " (total) " matches; type more to narrow" }
+                }
+            }
+        }
+    }
+}
+
+/// The write forms that must survive a live update: edit, blocker picker and
+/// add-subtask. Rendered once by the page, outside the patched region.
+pub fn tools(d: &TicketDetail) -> Markup {
+    let t = &d.ticket;
+    html! {
+        div id="ticket-tools" {
+            section class="detail-section" { (edit_form(d)) }
+            section class="detail-section" { (blocker_picker(&t.id)) }
+            section class="detail-section" {
+                @if t.parent.is_some() {
+                    h2 { "Subtasks" }
+                    p class="meta" { "This ticket is a subtask; tickets nest two levels deep." }
+                } @else {
+                    (subtask_form(&t.id, t.subtasks.len()))
+                }
+            }
+        }
+    }
+}
+
 /// The live-view arm for `/ticket/ID`: a gone ticket is a normal fragment so
 /// an open page shows it in place.
 pub fn live(db: &std::path::Path, id: &str) -> Result<String> {
@@ -440,13 +645,14 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     let result = blocking(move || {
         let conn = crate::db::open(&db)?;
         let banner = view::banner_counts(&conn)?;
-        let found = read(&conn, &want)?.is_some();
+        let found = read(&conn, &want)?;
         let region = region(&conn, &want, role_kind)?;
-        Ok((banner, found, region))
+        let tools = found.as_ref().map(|(d, _)| tools(d));
+        Ok((banner, found.is_some(), region, tools))
     })
     .await;
     let (status, banner, title, body) = match result {
-        Ok((banner, found, region)) => {
+        Ok((banner, found, region, tools)) => {
             let status = if found {
                 StatusCode::OK
             } else {
@@ -463,6 +669,7 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
                 div id="ticket-live" data-init=(format!("@get('/stream?view={view}')")) {
                     (region)
                 }
+                @if let Some(t) = tools { (t) }
             };
             (status, banner, title, body)
         }
@@ -521,6 +728,24 @@ mod tests {
             let html = live(&p, id).unwrap();
             assert!(html.contains(GONE), "{id}: {html}");
         }
+    }
+
+    #[test]
+    fn the_live_region_never_carries_the_write_forms() {
+        let (_d, p) = db();
+        let mut c = crate::db::open(&p).unwrap();
+        let id = add(&mut c, "T", "d", "p", &[]);
+        let html = live(&p, &id).unwrap();
+        for form in [
+            "ticket-edit",
+            "ticket-blockers",
+            "ticket-subtask",
+            "ticket-tools",
+        ] {
+            assert!(!html.contains(form), "{form}: {html}");
+        }
+        let d = ticket::show(&c, &id).unwrap();
+        assert!(tools(&d).into_string().contains("ticket-edit"));
     }
 
     #[test]

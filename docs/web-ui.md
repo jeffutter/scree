@@ -188,6 +188,27 @@ The page and the live view `/ticket/ID` (an arm of `sse::render_view`) share `ti
 - **State checklist** (web-ui-design): default, hover, focus-visible (global ring) and active are the shared `.btn` and field styles. Disabled: reason text beside the button. Error: the `err-CONTROL` slot. Stale: the 409 fragment, and the live view re-renders the region; the user's typed text in a form is kept by Datastar's morph while the ticket is unchanged. Long content: text and evidence wrap (`overflow-wrap: anywhere`); inputs are full width. Closed and archived tickets: shown, with Reopen and Unarchive offered. Many criteria or 100+ comments: every item has the same small forms, no cap, as the read-only page. Loading: n/a (a write answers in one round trip, the button is not replaced until the response). Empty: n/a for forms. No keys are defined.
 - **Browser check**: see the commit message.
 
+## Ticket detail writes B
+
+The same handlers file also holds the blocker, edit, preview and subtask routes. Errors, the Origin guard, the human Identity and "no sweep" are as in "Ticket detail writes".
+
+| Route | Form fields | Control (`err-...`) |
+|---|---|---|
+| `POST blockers` | `blocker` (display id) | `blocker-add` |
+| `POST blockers/ID/remove` | none | `blocker-rm-ID` |
+| `GET blocker-search?q=` | `q` | `blocker-add` |
+| `POST edit` | `expected_updated_at` (required), `title`, `description`, `plan`, `for`, `parent`, `detach` | `edit` |
+| `POST preview?field=description\|plan` | the field's own value, or `field` + `body` | `preview` |
+| `POST subtasks` | `title`, `description`, `for` (agent or human), `status` (draft or ready) | `subtask-add` |
+
+- **Blocker picker**: a search box asks `GET blocker-search`, which lists open tickets of the ticket's Project from `ticket::list_in` with the library `search` (no SQL here), minus the ticket and its current blockers, at most 20 rows, with "showing N of M matches" when capped. Each row has an Add button. A self edge, a cycle and a cross-Project edge are `Refused` (422) by `actions::dep_add` and show next to the picker; an unknown id is 404. Removing an edge that is not there is a no-op.
+- **Edit**: only fields that differ from the stored ticket go to `actions::edit`; a blank title is the library's Usage (400); nothing changed is Usage too. Textarea CRLF is stored as LF. a blank parent keeps the parent, `detach` promotes a subtask. The hidden `expected_updated_at` is the ticket's `updated_at` as the form was rendered; a mismatch is Conflict (409) and changes nothing.
+- **Preview**: renders with the escaping Markdown renderer (`view::markdown`), reads no ticket and writes nothing.
+- **Subtasks**: `ticket::add` with `parent`; the subtask takes the parent's Project and Worktree and the server never reads its cwd. A subtask of a subtask is Refused (422). The new subtask shows in the region in running order.
+- **Draft survival (acceptance 2)**: the edit form, the picker and the subtask form are rendered once by the page, in `id="ticket-tools"`, outside the `id="ticket"` region that `/stream` re-patches. A live update therefore never touches text being typed, and the form keeps the `updated_at` it was loaded with, so a change by someone else makes the save a 409 with the typed text still in place (the message says to copy it and reload). Only a form's own success sends that form again (`exec_with`): the edit form is re-based on the new `updated_at`, the subtask form is cleared (its element id carries the subtask count so the morph replaces it). Another write on the page, such as Start, changes `updated_at` and leaves the edit form alone, so a later save of an older form is also a 409.
+- **State walk**: empty (no blockers, "No matching tickets"), loading n/a, error (inline `err-...`), stale (409 above), long content (inputs and textareas are full width, rows wrap), scale (the picker caps at 20).
+- **Browser check** (by hand against Datastar 1.0.5, `scree web` on a temporary `SCREE_DB`): typed text in the plan textarea and the subtask title, focus in the textarea, then `scree comment add` and `scree criterion add` from a terminal. The region showed the new comment, and the typed text and focus stayed. Save then showed the 409 text next to the form with the text kept. After a reload, a save worked, a second save right after it did not 409, Preview showed the rendered text, the picker found and added a ticket and the Blocked by list showed a Remove blocker button, and Add subtask listed the child and emptied the title field.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.

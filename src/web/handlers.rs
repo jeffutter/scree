@@ -9,20 +9,22 @@ use std::path::PathBuf;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
+use maud::{Markup, html};
 use rusqlite::Connection;
 
 use super::AppState;
 use super::error::WebError;
-use super::pages::ticket::region;
+use super::pages::ticket::{self as page, region};
 use super::state::blocking;
 use crate::actions;
+use crate::cli::{ForWho, ListArgs, NewStatus};
 use crate::error::{Error, Result};
 use crate::identity::Identity;
 use crate::scope;
-use crate::ticket::{self, CommitLink};
+use crate::ticket::{self, CommitLink, EditFields, NewTicket, ParentChange, ScopeFilter};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -43,6 +45,15 @@ pub fn router() -> Router<AppState> {
         .route("/ticket/{id}/comments", post(comment_add))
         .route("/ticket/{id}/comments/{cid}/edit", post(comment_edit))
         .route("/ticket/{id}/comments/{cid}/delete", post(comment_delete))
+        .route("/ticket/{id}/blockers", post(blocker_add))
+        .route(
+            "/ticket/{id}/blockers/{blocker}/remove",
+            post(blocker_remove),
+        )
+        .route("/ticket/{id}/blocker-search", get(blocker_search))
+        .route("/ticket/{id}/edit", post(edit))
+        .route("/ticket/{id}/preview", post(preview))
+        .route("/ticket/{id}/subtasks", post(subtask_add))
 }
 
 /// A parsed urlencoded body. An absent field and an empty one read the same
@@ -71,6 +82,10 @@ impl Form {
         (!v.trim().is_empty()).then(|| v.to_string())
     }
 
+    fn has(&self, name: &str) -> bool {
+        self.0.iter().any(|(k, _)| k == name)
+    }
+
     fn flag(&self, name: &str) -> bool {
         !self.get(name).is_empty()
     }
@@ -90,13 +105,32 @@ async fn exec(
     control: String,
     f: impl FnOnce(&mut Connection, &str, &Identity) -> Result<()> + Send + 'static,
 ) -> Response {
+    exec_with(state, id, control, no_extra, f).await
+}
+
+fn no_extra(_: &Connection, _: &str) -> Result<Markup> {
+    Ok(html! {})
+}
+
+/// [`exec`] that also answers with a form freshly rendered by `extra`, for a
+/// form that must be reset or re-based after its own success (the edit form
+/// carries the `updated_at` it was loaded with; the subtask form is cleared).
+/// Other forms stay out of the answer, so text typed in them is kept.
+async fn exec_with(
+    state: AppState,
+    id: String,
+    control: String,
+    extra: fn(&Connection, &str) -> Result<Markup>,
+    f: impl FnOnce(&mut Connection, &str, &Identity) -> Result<()> + Send + 'static,
+) -> Response {
     let db = state.db.clone();
     let who = state.identity.clone();
     let role = who.role;
     let result = blocking(move || {
         let mut conn = crate::db::open(&db)?;
         f(&mut conn, &id, &who)?;
-        region(&conn, &id, role)
+        let region = region(&conn, &id, role)?;
+        Ok(html! { (region) (extra(&conn, &id)?) })
     })
     .await;
     match result {
@@ -299,5 +333,258 @@ async fn comment_delete(
     exec(state, id, format!("comment-{cid}"), move |c, id, who| {
         actions::comment_remove(c, id, number(&cid, "comment")?, who).map(drop)
     })
+    .await
+}
+
+async fn blocker_add(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let blocker = Form::parse(&body).get("blocker").trim().to_string();
+    exec(state, id, "blocker-add".into(), move |c, id, who| {
+        if blocker.is_empty() {
+            return Err(Error::Usage("pick a ticket to add as a blocker".into()));
+        }
+        // Self, cycle and cross-Project edges are Refused by the library.
+        actions::dep_add(c, id, &blocker, who).map(drop)
+    })
+    .await
+}
+
+async fn blocker_remove(
+    State(state): State<AppState>,
+    Path((id, blocker)): Path<(String, String)>,
+) -> Response {
+    exec(
+        state,
+        id,
+        format!("blocker-rm-{blocker}"),
+        move |c, id, who| actions::dep_remove(c, id, &blocker, who).map(drop),
+    )
+    .await
+}
+
+/// Candidates for the blocker picker: open tickets of the ticket's Project
+/// that match the library's search, minus the ticket itself and its current
+/// blockers, at most [`page::PICKER_ROWS`].
+async fn blocker_search(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let q = form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .find(|(k, _)| k == "q")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default();
+    let db = state.db.clone();
+    let who = state.identity.clone();
+    let want = id.clone();
+    let result = blocking(move || {
+        let conn = crate::db::open(&db)?;
+        let d = ticket::show(&conn, &want)?;
+        let t = &d.ticket;
+        let excluded: Vec<&str> = std::iter::once(t.id.as_str())
+            .chain(t.blocked_by.iter().map(|b| b.id.as_str()))
+            .collect();
+        let filter = ScopeFilter::Project {
+            key: t.project.key.clone(),
+        };
+        // No status filter: the library's default is the open states.
+        let args = ListArgs {
+            limit: Some(u32::try_from(page::PICKER_ROWS + excluded.len()).unwrap_or(u32::MAX)),
+            search: (!q.is_empty()).then(|| q.clone()),
+            ..ListArgs::default()
+        };
+        let found = ticket::list_in(&conn, &filter, &args, &who)?;
+        let window = page::PICKER_ROWS + excluded.len();
+        let fetched = found.tickets.len();
+        let mut rows: Vec<(String, String, String)> = found
+            .tickets
+            .into_iter()
+            .filter(|c| !excluded.contains(&c.id.as_str()))
+            .map(|c| (c.id, c.status, c.title))
+            .collect();
+        // `count_in` counts this ticket and its blockers when they match.
+        // When every match was fetched the exact number is the filtered
+        // length; otherwise the excluded tickets inside the fetched window are
+        // subtracted (one beyond the window is not, an overcount of at most
+        // the number of current blockers).
+        let total = if fetched < window {
+            rows.len()
+        } else {
+            let all = ticket::count_in(
+                &conn,
+                &filter,
+                &ListArgs {
+                    limit: None,
+                    ..args
+                },
+                &who,
+            )?;
+            usize::try_from(all)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(fetched - rows.len())
+        };
+        rows.truncate(page::PICKER_ROWS);
+        Ok(page::blocker_results(&want, &rows, total))
+    })
+    .await;
+    match result {
+        Ok(m) => Html(m.into_string()).into_response(),
+        Err(e) => WebError::new(e, "blocker-add").into_response(),
+    }
+}
+
+fn for_who(raw: &str) -> Result<ForWho> {
+    match raw {
+        "agent" => Ok(ForWho::Agent),
+        "human" => Ok(ForWho::Human),
+        other => Err(Error::Usage(format!(
+            "for must be agent or human, not {other:?}"
+        ))),
+    }
+}
+
+/// Browsers send a newline in a textarea as CRLF in some encodings; the
+/// database keeps LF.
+fn lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
+/// Save the edit form. `expected_updated_at` is the hidden field the form was
+/// rendered with and is required: it is what turns a concurrent change into a
+/// 409 instead of a silent overwrite. Only fields that differ from the stored
+/// ticket are sent to the library.
+async fn edit(State(state): State<AppState>, Path(id): Path<String>, body: Bytes) -> Response {
+    let f = Form::parse(&body);
+    exec_with(
+        state,
+        id,
+        "edit".into(),
+        |c, id| Ok(page::edit_form(&ticket::show(c, id)?)),
+        move |c, id, who| {
+            let Some(expected) = f.opt("expected_updated_at") else {
+                return Err(Error::Usage(
+                    "the form is missing the version it was loaded with; reload the page".into(),
+                ));
+            };
+            let cur = ticket::show(c, id)?;
+            let t = &cur.ticket;
+            let changed = |name: &str, old: &str| -> Option<String> {
+                f.has(name).then(|| lf(f.get(name))).filter(|v| v != old)
+            };
+            let title = changed("title", &t.title);
+            let description = changed("description", &cur.description);
+            let plan = changed("plan", &cur.plan);
+            let for_new = if f.has("for") {
+                Some(for_who(f.get("for"))?).filter(|w| w.as_str() != t.for_who)
+            } else {
+                None
+            };
+            let parent_raw = f.get("parent").trim().to_string();
+            let parent = if f.flag("detach") {
+                t.parent.is_some().then_some(ParentChange::Detach)
+            } else if !parent_raw.is_empty() && t.parent.as_deref() != Some(parent_raw.as_str()) {
+                Some(ParentChange::Under(parent_raw.as_str()))
+            } else {
+                None
+            };
+            let fields = EditFields {
+                title: title.as_deref(),
+                description: description.as_deref(),
+                plan: plan.as_deref(),
+                append: false,
+                for_who: for_new,
+                parent,
+                expected_updated_at: Some(expected.as_str()),
+            };
+            if fields.title.is_none()
+                && fields.description.is_none()
+                && fields.plan.is_none()
+                && fields.for_who.is_none()
+                && fields.parent.is_none()
+            {
+                return Err(Error::Usage("nothing was changed".into()));
+            }
+            actions::edit(c, id, &fields, who).map(drop)
+        },
+    )
+    .await
+}
+
+/// Render one field's text as escaped Markdown. Writes nothing and reads no
+/// ticket. The field comes from the query (`?field=plan`) or the form; its
+/// text is the form value `body`, or the one named like the field.
+async fn preview(Path(_id): Path<String>, RawQuery(query): RawQuery, body: Bytes) -> Response {
+    let f = Form::parse(&body);
+    let from_query = form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .find(|(k, _)| k == "field")
+        .map(|(_, v)| v.into_owned());
+    let field = from_query.unwrap_or_else(|| f.get("field").to_string());
+    if field != "description" && field != "plan" {
+        return WebError::new(
+            Error::Usage("preview field must be description or plan".into()),
+            "preview",
+        )
+        .into_response();
+    }
+    let text = if f.has("body") {
+        f.get("body")
+    } else {
+        f.get(&field)
+    };
+    Html(page::preview(&field, &lf(text)).into_string()).into_response()
+}
+
+async fn subtask_add(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let f = Form::parse(&body);
+    exec_with(
+        state,
+        id,
+        "subtask-add".into(),
+        |c, id| {
+            Ok(page::subtask_form(
+                id,
+                ticket::show(c, id)?.ticket.subtasks.len(),
+            ))
+        },
+        move |c, id, _| {
+            let who = for_who(if f.has("for") { f.get("for") } else { "agent" })?;
+            let status = match f.get("status") {
+                "" | "draft" => NewStatus::Draft,
+                "ready" => NewStatus::Ready,
+                other => {
+                    return Err(Error::Usage(format!(
+                        "status must be draft or ready, not {other:?}"
+                    )));
+                }
+            };
+            let title = f.get("title").to_string();
+            let description = lf(f.get("description"));
+            // A subtask takes its parent's Project and Worktree, so no scope is
+            // named and the server's cwd is never read.
+            ticket::add(
+                c,
+                &scope::Scope::Unscoped,
+                &NewTicket {
+                    title: &title,
+                    description: &description,
+                    plan: "",
+                    criteria: &[],
+                    for_who: who,
+                    status,
+                    key: None,
+                    parent: Some(id),
+                    blocked_by: &[],
+                },
+            )
+            .map(drop)
+        },
+    )
     .await
 }

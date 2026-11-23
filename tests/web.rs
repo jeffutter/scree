@@ -1577,3 +1577,390 @@ fn writes_still_need_a_same_origin_post() {
     assert_eq!(r.status, 403, "{}", r.body);
     assert_eq!(db_status(&e, &id), "ready");
 }
+
+// ---- Ticket detail writes B: blockers, edits, previews, subtasks ----
+
+fn add_titled(e: &Env, title: &str, status: &str) -> String {
+    e.ok(&["add", title, "--status", status])["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn blocked_by(e: &Env, id: &str) -> Vec<String> {
+    detail(e, id)
+        .ticket
+        .blocked_by
+        .iter()
+        .map(|b| b.id.clone())
+        .collect()
+}
+
+#[test]
+fn blockers_add_and_remove() {
+    let e = Env::new();
+    let a = add_titled(&e, "A", "ready");
+    let b = add_titled(&e, "B", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form(&format!("/ticket/{a}/blockers"), &[("blocker", &b)]);
+    assert_region(&r, "Blocked by");
+    assert_eq!(blocked_by(&e, &a), vec![b.clone()]);
+    assert!(r.body.contains(&format!("/ticket/{a}/blockers/{b}/remove")));
+    // Adding the same edge again changes nothing.
+    assert_region(
+        &w.post_form(&format!("/ticket/{a}/blockers"), &[("blocker", &b)]),
+        "Blocked by",
+    );
+    assert_eq!(blocked_by(&e, &a), vec![b.clone()]);
+    // Usage: nothing picked.
+    assert_err(
+        &w.post_form(&format!("/ticket/{a}/blockers"), &[("blocker", "")]),
+        400,
+        "blocker-add",
+    );
+    let r = w.post(&format!("/ticket/{a}/blockers/{b}/remove"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(blocked_by(&e, &a).is_empty());
+    // Removing an edge that is not there is a no-op.
+    assert_eq!(
+        w.post(&format!("/ticket/{a}/blockers/{b}/remove")).status,
+        200
+    );
+}
+
+#[test]
+fn blockers_refuse_self_cycle_cross_project_and_unknown() {
+    let e = Env::new();
+    let a = add_titled(&e, "A", "ready");
+    let b = add_titled(&e, "B", "ready");
+    let other = repo(&e, "other");
+    let foreign = e.ok_at(&other, &["add", "Foreign", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w = e.spawn_web(&[], &[]);
+    let add = |id: &str, blocker: &str| {
+        w.post_form(&format!("/ticket/{id}/blockers"), &[("blocker", blocker)])
+    };
+    // Refused (library): a ticket cannot block itself.
+    assert_err(&add(&a, &a), 422, "blocker-add");
+    assert_region(&add(&a, &b), "Blocked by");
+    // Refused (library): B blocked by A closes a cycle.
+    let r = add(&b, &a);
+    assert_err(&r, 422, "blocker-add");
+    assert!(blocked_by(&e, &b).is_empty());
+    // Refused (library): dependencies stay within one Project.
+    assert_err(&add(&a, &foreign), 422, "blocker-add");
+    assert_eq!(blocked_by(&e, &a), vec![b.clone()]);
+    // NotFound (library): no such blocker.
+    assert_err(&add(&a, "LOCAL-99"), 404, "blocker-add");
+}
+
+#[test]
+fn blocker_search_uses_library_search_and_excludes_self_and_blockers() {
+    let e = Env::new();
+    let a = add_titled(&e, "Needle host", "ready");
+    let hit = add_titled(&e, "Needle other", "ready");
+    let _miss = add_titled(&e, "Haystack", "ready");
+    let done = add_titled(&e, "Needle done", "ready");
+    e.ok(&["start", &done]);
+    e.ok(&["done", &done]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get(&format!("/ticket/{a}/blocker-search?q=needle"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.body.starts_with("<div id=\"blocker-results\""),
+        "{}",
+        r.body
+    );
+    assert!(r.body.contains("Needle other"), "{}", r.body);
+    assert!(!r.body.contains("Needle host"), "self: {}", r.body);
+    assert!(!r.body.contains("Needle done"), "closed: {}", r.body);
+    assert!(!r.body.contains("Haystack"), "{}", r.body);
+    assert!(r.body.contains(&format!("value=\"{hit}\"")), "{}", r.body);
+    // Empty state.
+    let r = w.get(&format!("/ticket/{a}/blocker-search?q=zzzz"));
+    assert!(r.body.contains("No matching tickets"), "{}", r.body);
+    // Already a blocker: no longer offered.
+    w.post_form(&format!("/ticket/{a}/blockers"), &[("blocker", &hit)]);
+    let r = w.get(&format!("/ticket/{a}/blocker-search?q=needle"));
+    assert!(r.body.contains("No matching tickets"), "{}", r.body);
+    // Unknown ticket.
+    assert_err(
+        &w.get("/ticket/LOCAL-99/blocker-search"),
+        404,
+        "blocker-add",
+    );
+}
+
+#[test]
+fn blocker_search_caps_at_twenty_rows_and_says_so() {
+    let e = Env::new();
+    let a = add_titled(&e, "Host", "ready");
+    {
+        let mut c = conn(&e);
+        for i in 0..30 {
+            scree::ticket::add(
+                &mut c,
+                &scree::scope::Scope::Unscoped,
+                &new(&format!("Candidate {i}")),
+            )
+            .unwrap();
+        }
+    }
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get(&format!("/ticket/{a}/blocker-search"));
+    assert_eq!(
+        r.body.matches("class=\"related\"").count(),
+        20,
+        "{}",
+        r.body
+    );
+    assert!(r.body.contains("showing 20 of 30 matches"), "{}", r.body);
+}
+
+#[test]
+fn edit_each_field() {
+    let e = Env::new();
+    let a = add_titled(&e, "Old title", "ready");
+    let parent = add_titled(&e, "Parent", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let path = format!("/ticket/{a}/edit");
+    let edit = |fields: &[(&str, &str)]| {
+        let v = detail(&e, &a).ticket.updated_at;
+        let mut all = vec![("expected_updated_at", v.as_str())];
+        all.extend_from_slice(fields);
+        w.post_form(&path, &all)
+    };
+    let r = edit(&[("title", "New title")]);
+    assert_region(&r, "New title");
+    // The answer carries the form re-based on the new version.
+    let v = detail(&e, &a).ticket.updated_at;
+    assert!(r.body.contains("id=\"ticket-edit\""), "{}", r.body);
+    assert!(r.body.contains(&format!("value=\"{v}\"")), "{}", r.body);
+    assert_eq!(detail(&e, &a).ticket.title, "New title");
+    assert_region(
+        &edit(&[("description", "line one\r\nline two")]),
+        "line two",
+    );
+    assert_eq!(detail(&e, &a).description, "line one\nline two");
+    assert_region(&edit(&[("plan", "the **plan**")]), "<strong>plan</strong>");
+    assert_eq!(detail(&e, &a).plan, "the **plan**");
+    assert_region(&edit(&[("for", "human")]), "for human");
+    assert_eq!(detail(&e, &a).ticket.for_who, "human");
+    assert_region(&edit(&[("parent", &parent)]), "Subtask of");
+    assert_eq!(
+        detail(&e, &a).ticket.parent.as_deref(),
+        Some(parent.as_str())
+    );
+    // A subtask has its own display id under the parent; look it up.
+    let a = detail(&e, &parent).ticket.subtasks[0].id.clone();
+    let v = detail(&e, &a).ticket.updated_at;
+    let r = w.post_form(
+        &format!("/ticket/{a}/edit"),
+        &[("expected_updated_at", &v), ("detach", "1")],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(detail(&e, &parent).ticket.subtasks.is_empty());
+}
+
+#[test]
+fn edit_with_a_stale_version_is_409_and_changes_nothing() {
+    let e = Env::new();
+    let a = add_titled(&e, "Original", "ready");
+    let w = e.spawn_web(&[], &[]);
+    // The page the form came from.
+    let loaded = detail(&e, &a).ticket.updated_at;
+    // Another process edits the ticket after the page loaded.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    e.ok(&["edit", &a, "--description", "someone else was here"]);
+    let before = detail(&e, &a);
+    let r = w.post_form(
+        &format!("/ticket/{a}/edit"),
+        &[
+            ("expected_updated_at", &loaded),
+            ("title", "My late title"),
+            ("description", ""),
+        ],
+    );
+    assert_err(&r, 409, "edit");
+    let after = detail(&e, &a);
+    assert_eq!(after.ticket.title, "Original");
+    assert_eq!(after.description, "someone else was here");
+    assert_eq!(after.ticket.updated_at, before.ticket.updated_at);
+}
+
+#[test]
+fn edit_refuses_blank_title_missing_version_and_no_change() {
+    let e = Env::new();
+    let a = add_titled(&e, "Keep", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let v = detail(&e, &a).ticket.updated_at;
+    let path = format!("/ticket/{a}/edit");
+    // Usage (library): a blank title.
+    assert_err(
+        &w.post_form(&path, &[("expected_updated_at", &v), ("title", "  ")]),
+        400,
+        "edit",
+    );
+    assert_err(&w.post_form(&path, &[("title", "X")]), 400, "edit");
+    assert_err(
+        &w.post_form(&path, &[("expected_updated_at", &v), ("title", "Keep")]),
+        400,
+        "edit",
+    );
+    assert_eq!(detail(&e, &a).ticket.title, "Keep");
+    assert_err(
+        &w.post_form(
+            "/ticket/LOCAL-99/edit",
+            &[("expected_updated_at", &v), ("title", "X")],
+        ),
+        404,
+        "edit",
+    );
+}
+
+#[test]
+fn edit_reparent_refusal_names_the_library_rule() {
+    let e = Env::new();
+    let top = add_titled(&e, "Top", "ready");
+    let sub = e.ok(&["add", "Sub", "--parent", &top, "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let loose = add_titled(&e, "Loose", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let v = detail(&e, &loose).ticket.updated_at;
+    // Refused (library): tickets nest two levels deep.
+    let r = w.post_form(
+        &format!("/ticket/{loose}/edit"),
+        &[("expected_updated_at", &v), ("parent", &sub)],
+    );
+    assert_err(&r, 422, "edit");
+    assert!(detail(&e, &loose).ticket.parent.is_none());
+}
+
+#[test]
+fn preview_renders_inert_markdown_and_writes_nothing() {
+    let e = Env::new();
+    let a = add_titled(&e, "P", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let before = detail(&e, &a).ticket.updated_at;
+    let evil = "# Head\n<script>alert(1)</script> [x](javascript:alert(1))";
+    let r = w.post_form(
+        &format!("/ticket/{a}/preview?field=plan"),
+        &[("plan", evil)],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.starts_with("<div id=\"preview-plan\""), "{}", r.body);
+    assert!(r.body.contains("<h1>"), "{}", r.body);
+    assert!(!r.body.contains("<script"), "{}", r.body);
+    assert!(!r.body.contains("href=\"javascript"), "{}", r.body);
+    let r = w.post_form(
+        &format!("/ticket/{a}/preview"),
+        &[("field", "description"), ("body", "plain words")],
+    );
+    assert!(r.body.contains("plain words"), "{}", r.body);
+    assert_err(
+        &w.post_form(&format!("/ticket/{a}/preview?field=title"), &[]),
+        400,
+        "preview",
+    );
+    assert_eq!(detail(&e, &a).ticket.updated_at, before);
+    assert!(detail(&e, &a).plan.is_empty());
+}
+
+#[test]
+fn subtasks_add_in_running_order_and_refuse_nesting() {
+    let e = Env::new();
+    let top = add_titled(&e, "Top", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let path = format!("/ticket/{top}/subtasks");
+    let r = w.post_form(&path, &[("title", "First sub"), ("description", "why")]);
+    assert_region(&r, "First sub");
+    assert!(r.body.contains("id=\"ticket-subtask\""), "{}", r.body);
+    let r = w.post_form(
+        &path,
+        &[
+            ("title", "Second sub"),
+            ("status", "ready"),
+            ("for", "human"),
+        ],
+    );
+    assert_region(&r, "Second sub");
+    assert!(r.body.find("First sub").unwrap() < r.body.find("Second sub").unwrap());
+    let d = detail(&e, &top);
+    assert_eq!(d.ticket.subtasks.len(), 2);
+    let first = detail(&e, &d.ticket.subtasks[0].id);
+    assert_eq!(first.ticket.parent.as_deref(), Some(top.as_str()));
+    assert_eq!(first.ticket.project, d.ticket.project);
+    assert_eq!(first.ticket.worktree, d.ticket.worktree);
+    assert_eq!(first.ticket.status, "draft");
+    assert_eq!(first.description, "why");
+    let second = detail(&e, &d.ticket.subtasks[1].id);
+    assert_eq!(
+        (
+            second.ticket.status.as_str(),
+            second.ticket.for_who.as_str()
+        ),
+        ("ready", "human")
+    );
+    // Usage (library): blank title.
+    assert_err(&w.post_form(&path, &[("title", " ")]), 400, "subtask-add");
+    // Refused (library): a subtask cannot have subtasks.
+    let sub = d.ticket.subtasks[0].id.clone();
+    assert_err(
+        &w.post_form(&format!("/ticket/{sub}/subtasks"), &[("title", "Deep")]),
+        422,
+        "subtask-add",
+    );
+    assert_err(
+        &w.post_form("/ticket/LOCAL-99/subtasks", &[("title", "X")]),
+        404,
+        "subtask-add",
+    );
+}
+
+#[test]
+fn a_subtask_in_a_worktree_stays_in_it_without_reading_the_cwd() {
+    let e = Env::new();
+    let r = repo(&e, "proj");
+    let wt = worktree(&e, &r, "feat");
+    let top = e.ok_at(&wt, &["add", "Top", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The server runs outside any repo.
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post_form(&format!("/ticket/{top}/subtasks"), &[("title", "Child")]);
+    assert_region(&r, "Child");
+    let d = detail(&e, &top);
+    let child = detail(&e, &d.ticket.subtasks[0].id);
+    assert_eq!(child.ticket.worktree, d.ticket.worktree);
+    assert!(child.ticket.worktree.is_some());
+    assert_eq!(child.ticket.project.key, d.ticket.project.key);
+}
+
+#[test]
+fn the_page_keeps_write_forms_outside_the_live_region() {
+    let e = Env::new();
+    let a = add_titled(&e, "Page", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get(&format!("/ticket/{a}")).body;
+    let region_end = page.find("id=\"ticket-tools\"").expect("tools");
+    let region_start = page.find("id=\"ticket\"").unwrap();
+    // The edit form, picker and subtask form come after the region ends.
+    for want in [
+        "id=\"ticket-edit\"",
+        "id=\"ticket-blockers\"",
+        "id=\"ticket-subtask\"",
+    ] {
+        assert!(page.find(want).unwrap() > region_end, "{want}");
+    }
+    let region = &page[region_start..region_end];
+    assert!(!region.contains("name=\"expected_updated_at\"") || region.contains("comment-"));
+    assert!(!region.contains("id=\"ticket-edit\""));
+    for control in ["edit", "blocker-add", "subtask-add"] {
+        assert!(page.contains(&format!("id=\"err-{control}\"")), "{control}");
+    }
+}
