@@ -279,3 +279,49 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.
+
+## Verification
+
+Manual pass for W26 (SCR-92) against commit 866b8cf, on a temp database (`SCREE_DB` under `/private/tmp`) seeded with a ticket carrying 32 criteria and 110 comments, a 480-character title, a dependency, an open Decision, and a done ticket; a second database held 2,000 ready tickets for the scale check. Driven with `agent-browser` (Chromium) at 1440x900 and 390x844, light and dark through `set media`. Reorder (W28) is out of scope.
+
+Result key: pass, fail with ticket, deferred with reason, n/a with reason.
+
+| Item | Screen | Result |
+| --- | --- | --- |
+| Every control reachable by Tab and named | List, Decisions, Board, Ledger, Create | pass: DOM scan of focusable controls found none without an accessible name |
+| Every control reachable by Tab and named | Ticket detail | fail, SCR-99: each comment's edit textarea has no label and the per-comment Save and Delete buttons do not name the comment |
+| Every control reachable by Tab and named | Graph | pass: node links are named by their SVG `<title>` (the DOM scan cannot read it; the accessibility snapshot lists them) |
+| `j` / `k` / `Enter` / `/` / `Esc` / `?` | List | pass: `j j k` selected DEM-3 then DEM-1, `Enter` opened `/ticket/DEM-1`, `/` focused `#q`, `Esc` left the field, `?` opened the overlay with focus on its panel, `Esc` closed it |
+| Help overlay lists the real keys | All | pass: it renders the `KEYS` table in `src/web/view/components.rs`, the same table the handlers in `shell.js` implement |
+| Focus ring visible | All | pass: focused link has a solid 2px accent outline ([screenshot](web-ui-assets/verify-focus-1440-light.png)) |
+| Focus order matches visual order, no positive `tabindex` | All | pass: no element has `tabindex` above 0; skip link comes first, then nav, banner, content |
+| Landmarks and headings | All | pass: one `main`, one `h1`, `lang="en"` per page |
+| No horizontal scroll at 390 px | All 7 screens, light and dark | pass: `scrollWidth == innerWidth` (390) on every screen |
+| Phone layout | Board | pass by the stated rule: the columns scroll inside their own box; the page does not. Not designed for phones |
+| Two-tab write conflict | Ticket detail | pass: a stale `expected_updated_at` on `POST /ticket/DEM-4/edit` after another writer changed the ticket gave 409 with the `err-edit` fragment and the title was unchanged. Adding a comment is not conflict-checked by design (it appends) |
+| State: empty | List, Board, Decisions, Ledger, Graph | pass: covered by `tests/web.rs`; seen in the sections above |
+| State: loading | All | n/a: server rendered, no client fetch |
+| State: error | All | pass: unknown ticket and unknown path return 404 pages; the 409 and 422 fragments are in [error-409](web-ui-assets/error-409.png) and [error-422](web-ui-assets/error-422.png) |
+| State: stale | Ticket detail, Board | pass: 409 as above; "stale claim" tag on Board and List |
+| State: permission-like | Ticket detail, Board | pass: Start is disabled with a reason on a draft |
+| State: long content | List, Ticket detail | pass: a 480-character title and a 60-word criterion wrap with no page overflow at 390 px |
+| State: scale | List, Board | pass: 2,000 tickets, List 0.13 s and 49 KB, Board 0.14 s and 111 KB (per-column cap of 200) |
+| State: scale | Graph | pass: 2,000 tickets is over the 150 node cap, so the page answers in 1.3 s with the "Too large" message |
+| State: scale | Ticket detail | pass: 110 comments and 32 criteria render with no overflow; unnamed controls are SCR-99 |
+| Removed-Worktree ticket in the web | All | deferred: needs a real removed git worktree; `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` covers it in CI |
+| Real screen reader (VoiceOver) | All | deferred: not available to an automated session; names were checked through the accessibility tree and DOM instead |
+| `python3 docs/design-system/check_contrast.py` | n/a | pass: exit 0, "all required pairs pass" |
+| `cargo audit` (`nix run nixpkgs#cargo-audit -- audit`) | n/a | pass: exit 0 over 254 crates, 1563 advisories loaded |
+| `cargo nextest run`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | n/a | pass: 638 tests passed, clippy and fmt clean |
+
+Screenshots (1440 px wide, then 390 px wide; light, dark):
+
+| Screen | 1440 light | 1440 dark | 390 light | 390 dark |
+| --- | --- | --- | --- | --- |
+| List | [png](web-ui-assets/verify-list-1440-light.png) | [png](web-ui-assets/verify-list-1440-dark.png) | [png](web-ui-assets/verify-list-390-light.png) | [png](web-ui-assets/verify-list-390-dark.png) |
+| Ticket detail | [png](web-ui-assets/verify-ticket-1440-light.png) | [png](web-ui-assets/verify-ticket-1440-dark.png) | [png](web-ui-assets/verify-ticket-390-light.png) | [png](web-ui-assets/verify-ticket-390-dark.png) |
+| Decisions | [png](web-ui-assets/verify-decisions-1440-light.png) | [png](web-ui-assets/verify-decisions-1440-dark.png) | [png](web-ui-assets/verify-decisions-390-light.png) | [png](web-ui-assets/verify-decisions-390-dark.png) |
+| Board | [png](web-ui-assets/verify-board-1440-light.png) | [png](web-ui-assets/verify-board-1440-dark.png) | [png](web-ui-assets/verify-board-390-light.png) | [png](web-ui-assets/verify-board-390-dark.png) |
+| Graph | [png](web-ui-assets/verify-graph-1440-light.png) | [png](web-ui-assets/verify-graph-1440-dark.png) | [png](web-ui-assets/verify-graph-390-light.png) | [png](web-ui-assets/verify-graph-390-dark.png) |
+| Ledger | [png](web-ui-assets/verify-ledger-1440-light.png) | [png](web-ui-assets/verify-ledger-1440-dark.png) | [png](web-ui-assets/verify-ledger-390-light.png) | [png](web-ui-assets/verify-ledger-390-dark.png) |
+| Create | [png](web-ui-assets/verify-new-1440-light.png) | [png](web-ui-assets/verify-new-1440-dark.png) | [png](web-ui-assets/verify-new-390-light.png) | [png](web-ui-assets/verify-new-390-dark.png) |
