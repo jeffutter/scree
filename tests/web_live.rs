@@ -164,3 +164,30 @@ fn the_33rd_stream_is_refused_and_a_closed_one_frees_its_slot() {
         assert!(Instant::now() < deadline, "slot was never freed");
     }
 }
+
+#[test]
+fn unreadable_database_is_a_generic_500_and_the_detail_is_logged() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let secret = "SECRET-NOT-A-DATABASE-MARKER";
+    std::fs::write(e.db(), format!("{secret} {}", "x".repeat(200))).unwrap();
+    let r = w.get("/");
+    assert_eq!(r.status, 500, "{}", r.body);
+    assert!(r.body.contains("Something went wrong"), "{}", r.body);
+    assert!(!r.body.contains("not a database"), "{}", r.body);
+    assert!(
+        !r.body.contains(&e.db().display().to_string()),
+        "{}",
+        r.body
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let line = loop {
+        let l = w.log().into_iter().find(|l| l.contains("GET / 500"));
+        if l.is_some() || Instant::now() > deadline {
+            break l;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let line = line.expect("a 500 log line");
+    assert!(line.contains("not a database"), "{line}");
+}

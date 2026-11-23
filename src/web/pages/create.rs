@@ -15,7 +15,7 @@ use crate::scope::Scope;
 use crate::ticket::{self, NewTicket, ScopeFilter};
 use crate::web::AppState;
 use crate::web::create::create_in;
-use crate::web::error::WebError;
+use crate::web::error::{LoggedExt, WebError, unreadable};
 use crate::web::handlers::{Form, for_who, lf, new_status};
 use crate::web::scope::{self, Scoped};
 use crate::web::state::blocking;
@@ -137,6 +137,7 @@ pub async fn new_page(State(state): State<AppState>, Scoped(scope): Scoped) -> R
     let db = state.db.clone();
     let role = state.identity.role.as_str();
     let result = blocking(move || view::banner_counts(&crate::db::open(&db)?)).await;
+    let mut logged = None;
     let (status, banner, body) = match result {
         Ok(banner) => (
             StatusCode::OK,
@@ -151,7 +152,7 @@ pub async fn new_page(State(state): State<AppState>, Scoped(scope): Scoped) -> R
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             None,
-            components::error("Could not read the database", &e.to_string()),
+            components::error("Could not read the database", &unreadable(&e, &mut logged)),
         ),
     };
     let ctx = PageCtx {
@@ -164,6 +165,7 @@ pub async fn new_page(State(state): State<AppState>, Scoped(scope): Scoped) -> R
         Html(layout::page(&ctx, "New ticket", body).into_string()),
     )
         .into_response()
+        .logged(logged)
 }
 
 /// `POST /new`: create one ticket and answer with the form, emptied.

@@ -28,7 +28,7 @@ use crate::identity::{Identity, Role};
 use crate::model::Ticket;
 use crate::ticket::{self, ScopeFilter};
 use crate::web::AppState;
-use crate::web::error::WebError;
+use crate::web::error::{LoggedExt, WebError, unreadable};
 use crate::web::pages::list::MAX_LIMIT;
 use crate::web::scope::{self, Scope, Scoped};
 use crate::web::state::blocking;
@@ -394,6 +394,7 @@ pub async fn page(
         Ok((banner, body(&conn, &scope, &q)?))
     })
     .await;
+    let mut logged = None;
     let (status, ctx, markup) = match result {
         Ok((banner, body)) => (
             StatusCode::OK,
@@ -414,7 +415,7 @@ pub async fn page(
                 role,
                 banner: None,
             },
-            components::error("Could not read the database", &e.to_string()),
+            components::error("Could not read the database", &unreadable(&e, &mut logged)),
         ),
     };
     (
@@ -422,6 +423,7 @@ pub async fn page(
         Html(layout::page(&ctx, "Board", markup).into_string()),
     )
         .into_response()
+        .logged(logged)
 }
 
 /// `POST /board/{id}/{mv}`: run one move as the web's human Identity. Success

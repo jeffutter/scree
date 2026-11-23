@@ -23,7 +23,7 @@ use crate::decision;
 use crate::error::{Error, Result};
 use crate::model::DecidedDecision;
 use crate::web::AppState;
-use crate::web::error::WebError;
+use crate::web::error::{LoggedExt, WebError, unreadable};
 use crate::web::handlers::Form;
 use crate::web::pages::decisions::{ctx, qualified};
 use crate::web::pages::list::MAX_LIMIT;
@@ -319,6 +319,7 @@ pub async fn index(
         Ok((banner, body(&conn, &scope, &q)?))
     })
     .await;
+    let mut logged = None;
     let (status, ctx, markup) = match result {
         Ok((banner, body)) => (
             StatusCode::OK,
@@ -340,7 +341,7 @@ pub async fn index(
                 role,
                 banner: None,
             },
-            components::error("Could not read the database", &e.to_string()),
+            components::error("Could not read the database", &unreadable(&e, &mut logged)),
         ),
     };
     (
@@ -348,6 +349,7 @@ pub async fn index(
         Html(layout::page(&ctx, "Ledger", markup).into_string()),
     )
         .into_response()
+        .logged(logged)
 }
 
 /// `POST /ledger/{id}/supersede`: mark `id` as replaced by the Decision named

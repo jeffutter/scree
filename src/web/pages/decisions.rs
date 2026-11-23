@@ -24,7 +24,7 @@ use crate::model::OpenDecision;
 use crate::project;
 use crate::ticket::ScopeFilter;
 use crate::web::AppState;
-use crate::web::error::WebError;
+use crate::web::error::{LoggedExt, WebError, unreadable};
 use crate::web::handlers::Form;
 use crate::web::pages::list::MAX_LIMIT;
 use crate::web::scope::{self, Scope, Scoped};
@@ -361,6 +361,7 @@ pub async fn index(
         Ok((banner, body(&conn, &scope, &q)?))
     })
     .await;
+    let mut logged = None;
     let (status, ctx, markup) = match result {
         Ok((banner, body)) => (
             StatusCode::OK,
@@ -378,7 +379,7 @@ pub async fn index(
                 role,
                 banner: None,
             },
-            components::error("Could not read the database", &e.to_string()),
+            components::error("Could not read the database", &unreadable(&e, &mut logged)),
         ),
     };
     (
@@ -386,6 +387,7 @@ pub async fn index(
         Html(layout::page(&ctx, "Decisions", markup).into_string()),
     )
         .into_response()
+        .logged(logged)
 }
 
 /// The scope a write form carried, for the "next" link only. A bad one falls

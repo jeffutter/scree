@@ -17,6 +17,7 @@ use crate::identity::Role;
 use crate::model::{Blocked, Blocker, Comment, Criterion, TicketDetail};
 use crate::ticket::{self, Move};
 use crate::web::AppState;
+use crate::web::error::{LoggedExt, unreadable};
 use crate::web::state::blocking;
 use crate::web::view::components;
 use crate::web::view::layout::{self, PageCtx, Route};
@@ -651,6 +652,7 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         Ok((banner, found.is_some(), region, tools))
     })
     .await;
+    let mut logged = None;
     let (status, banner, title, body) = match result {
         Ok((banner, found, region, tools)) => {
             let status = if found {
@@ -677,7 +679,7 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
             StatusCode::INTERNAL_SERVER_ERROR,
             None,
             "Error".into(),
-            components::error("Could not read the database", &e.to_string()),
+            components::error("Could not read the database", &unreadable(&e, &mut logged)),
         ),
     };
     let ctx = PageCtx {
@@ -685,7 +687,9 @@ pub async fn show(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         role,
         banner,
     };
-    (status, Html(layout::page(&ctx, &title, body).into_string())).into_response()
+    (status, Html(layout::page(&ctx, &title, body).into_string()))
+        .into_response()
+        .logged(logged)
 }
 
 #[cfg(test)]

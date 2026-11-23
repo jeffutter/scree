@@ -33,6 +33,33 @@ pub struct Logged {
     pub detail: Option<String>,
 }
 
+const GENERIC: &str = "Something went wrong. The terminal running scree web has the details.";
+
+/// The generic hint a page shows when it cannot read the database. Records
+/// the real error in `slot` so [`LoggedExt::logged`] can put it on the request
+/// log line; the client never sees it.
+pub fn unreadable(e: &Error, slot: &mut Option<Logged>) -> String {
+    *slot = Some(Logged {
+        kind: e.code_str(),
+        detail: Some(e.to_string()),
+    });
+    GENERIC.to_string()
+}
+
+/// Attach what a page withheld from the client to its response.
+pub trait LoggedExt {
+    fn logged(self, logged: Option<Logged>) -> Response;
+}
+
+impl LoggedExt for Response {
+    fn logged(mut self, logged: Option<Logged>) -> Response {
+        if let Some(l) = logged {
+            self.extensions_mut().insert(l);
+        }
+        self
+    }
+}
+
 /// A failed handler: which control to put the message next to, and why.
 pub struct WebError {
     status: StatusCode,
@@ -51,10 +78,7 @@ impl WebError {
     pub fn new(err: Error, control: &str) -> Self {
         let status = status(&err);
         let (message, detail) = if status == StatusCode::INTERNAL_SERVER_ERROR {
-            (
-                "Something went wrong. The terminal running scree web has the details.".to_string(),
-                Some(err.to_string()),
-            )
+            (GENERIC.to_string(), Some(err.to_string()))
         } else {
             (err.to_string(), None)
         };
