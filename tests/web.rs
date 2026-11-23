@@ -326,7 +326,13 @@ fn no_inline_style_or_script_in_pages() {
     // Add each new rendered page here.
     let ids2 = e.ok(&["add", "Detail page"]);
     let detail = format!("/ticket/{}", ids2["id"].as_str().unwrap());
-    let pages = ["/", detail.as_str(), "/decisions", "/decisions?d=LOCAL-D-1"];
+    let pages = [
+        "/",
+        detail.as_str(),
+        "/decisions",
+        "/decisions?d=LOCAL-D-1",
+        "/board",
+    ];
     for page in pages {
         let r = w.get(page);
         assert_eq!(r.status, 200, "{page}");
@@ -414,13 +420,15 @@ fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
         body.contains("<a class=\"nav-item\" href=\"/decisions\""),
         "{body}"
     );
-    for path in ["/board", "/graph"] {
-        assert!(
-            !body.contains(&format!("<a class=\"nav-item\" href=\"{path}\"")),
-            "{path}"
-        );
-    }
-    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 2, "{body}");
+    assert!(
+        body.contains("<a class=\"nav-item\" href=\"/board\""),
+        "{body}"
+    );
+    assert!(
+        !body.contains("<a class=\"nav-item\" href=\"/graph\""),
+        "graph is not built"
+    );
+    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 1, "{body}");
 }
 
 #[test]
@@ -2806,4 +2814,184 @@ fn ledger_escapes_hostile_text_and_caps_rows() {
     let all = w.get("/ledger?limit=300").body;
     assert_eq!(all.matches("class=\"row\"").count(), 300);
     assert!(!all.contains("showing "));
+}
+
+/// One ticket of each status in LOCAL, plus a done one that has criteria.
+/// Returns (draft, ready, active, done, abandoned) ids.
+fn board_fixture(e: &Env) -> [String; 5] {
+    let add = |title: &str, status: &str| {
+        e.ok(&["--role", "human", "add", title, "--status", status])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let draft = add("Drafty", "draft");
+    let ready = add("Readyish", "ready");
+    let active = add("Activeish", "ready");
+    e.ok(&["--role", "human", "start", &active]);
+    let done = add("Donezo", "ready");
+    e.ok(&["--role", "human", "start", &done]);
+    e.ok(&["--role", "human", "done", &done]);
+    let abandoned = add("Gone", "draft");
+    e.ok(&["--role", "human", "abandon", &abandoned, "not needed"]);
+    [draft, ready, active, done, abandoned]
+}
+
+fn status_of(e: &Env, id: &str) -> String {
+    e.ok(&["show", id])["status"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn board_shows_columns_cards_and_collapsed_empty_columns() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    // An empty scope is one empty state, not five strips.
+    let r = w.get("/board");
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains("No tickets here"), "{}", r.body);
+    assert!(r.body.contains("href=\"/board\" aria-current=\"page\""));
+
+    e.ok(&["add", "Only ready", "--status", "ready"]);
+    let body = w.get("/board").body;
+    assert_no_inline("/board", &body);
+    for col in ["Draft", "Ready", "Active", "Done", "Abandoned"] {
+        assert!(body.contains(&format!("aria-label=\"{col}\"")), "{col}");
+    }
+    assert!(body.contains("Only ready"));
+    // Four columns are empty strips: labelled, count 0, no card list.
+    assert_eq!(body.matches("board-col-empty").count(), 4, "{body}");
+    assert_eq!(body.matches("<ul class=\"cards\"").count(), 1, "{body}");
+    assert!(body.contains("<span class=\"board-count\">0</span>"));
+
+    let ids = board_fixture(&e);
+    let body = w.get("/board").body;
+    assert_eq!(body.matches("board-col-empty").count(), 0, "{body}");
+    for id in &ids {
+        assert!(body.contains(&format!("data-id=\"{id}\"")), "{id}");
+    }
+    // A human card shows who it is for and a criteria count.
+    e.ok(&["--role", "human", "edit", &ids[0], "--for", "human"]);
+    e.ok(&["criteria", "add", &ids[0], "check it"]);
+    let body = w.get("/board").body;
+    assert!(body.contains("criteria 0/1"), "{body}");
+    assert!(body.contains("<span class=\"tag\">human</span>"), "{body}");
+    assert!(body.contains("claimed by"), "{body}");
+    // The filter narrows every column.
+    let human = w.get("/board?for=human").body;
+    assert!(
+        human.contains("Drafty") && !human.contains("Readyish"),
+        "{human}"
+    );
+    assert_eq!(w.get("/board?for=robot").status, 400);
+    assert_eq!(w.get("/board?limit_done=0").status, 400);
+    assert_eq!(w.get("/board?p=NOPE").status, 404);
+}
+
+#[test]
+fn board_scale_caps_each_column() {
+    let e = Env::new();
+    e.ok(&["add", "seed", "--status", "ready"]);
+    bulk(&e, 60);
+    let w = e.spawn_web(&[], &[]);
+    let body = w.get("/board").body;
+    // Tens of tickets in one column: all cards, the header counts them.
+    assert_eq!(body.matches("class=\"card\"").count(), 61, "{body}");
+    assert!(
+        body.contains("<span class=\"board-count\">60</span>"),
+        "{body}"
+    );
+    assert!(!body.contains("show more"));
+    // A small column limit caps that column only, says so, and the link raises it.
+    let body = w.get("/board?limit_draft=10").body;
+    assert_eq!(body.matches("class=\"card\"").count(), 11, "{body}");
+    assert!(body.contains("showing 10 of 60"), "{body}");
+    assert!(body.contains("limit_draft=20"), "{body}");
+}
+
+#[test]
+fn board_move_start_and_release_change_database_state() {
+    let e = Env::new();
+    let ids = board_fixture(&e);
+    let w = e.spawn_web(&[], &[]);
+    let [draft, ready, active, ..] = &ids;
+    let r = w.post(&format!("/board/{draft}/ready"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains(&format!("id=\"err-board-{draft}\"")));
+    assert_eq!(status_of(&e, draft), "ready");
+    assert_eq!(w.post(&format!("/board/{ready}/start")).status, 200);
+    assert_eq!(status_of(&e, ready), "active");
+    assert_eq!(w.post(&format!("/board/{active}/release")).status, 200);
+    assert_eq!(status_of(&e, active), "ready");
+    assert_eq!(w.post(&format!("/board/{ready}/release")).status, 200);
+    assert_eq!(w.post(&format!("/board/{ready}/draft")).status, 200);
+    assert_eq!(status_of(&e, ready), "draft");
+    let done = &ids[3];
+    assert_eq!(w.post(&format!("/board/{done}/reopen")).status, 200);
+    assert_eq!(status_of(&e, done), "ready");
+}
+
+#[test]
+fn board_move_refused_shows_inline_and_changes_nothing() {
+    let e = Env::new();
+    let id = e.ok(&["add", "Needs criteria", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["criteria", "add", &id, "unchecked"]);
+    e.ok(&["--role", "human", "start", &id]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post(&format!("/board/{id}/done"));
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert!(
+        r.body.contains(&format!("id=\"err-board-{id}\"")),
+        "{}",
+        r.body
+    );
+    assert_eq!(status_of(&e, &id), "active");
+    // A move the status does not allow is refused or conflicts, never applied.
+    let r = w.post(&format!("/board/{id}/ready"));
+    assert!(matches!(r.status, 409 | 422), "{} {}", r.status, r.body);
+    assert_eq!(status_of(&e, &id), "active");
+}
+
+#[test]
+fn board_unknown_move_or_ticket_is_404() {
+    let e = Env::new();
+    let id = e.ok(&["add", "t", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w = e.spawn_web(&[], &[]);
+    let r = w.post(&format!("/board/{id}/abandon"));
+    assert_eq!(r.status, 404, "{}", r.body);
+    assert!(r.body.contains(&format!("id=\"err-board-{id}\"")));
+    assert_eq!(w.post("/board/LOCAL-999/ready").status, 404);
+    assert_eq!(status_of(&e, &id), "ready");
+}
+
+#[test]
+fn board_respects_scope_marks_stale_claims_and_updates_live() {
+    let e = Env::new();
+    let id = e.ok(&["add", "Claimed", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.ok(&["--role", "human", "start", &id]);
+    let w = e.spawn_web(&[], &[]);
+    assert!(!w.get("/board?p=").body.contains("stale claim"));
+    e.exec_batch(
+        "UPDATE tickets SET claim_touched_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-9 hours') \
+         WHERE status = 'active'",
+    );
+    let body = w.get("/board?p=").body;
+    assert!(body.contains("stale claim"), "{body}");
+    assert_eq!(w.get("/board?p=NOPE").status, 404);
+
+    let mut s = w.stream(&format!("/stream?view={}", enc("/board")));
+    let first = s.next_event(Duration::from_secs(3)).expect("first frame");
+    assert!(first.contains("Claimed"), "{first}");
+    // A move through the web reaches the stream like a CLI change does.
+    assert_eq!(w.post(&format!("/board/{id}/release")).status, 200);
+    let next = s.next_event(Duration::from_secs(3)).expect("patch");
+    assert!(!next.contains("stale claim"), "{next}");
 }

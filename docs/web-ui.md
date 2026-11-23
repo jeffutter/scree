@@ -247,6 +247,20 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - States: empty "No decided Decisions" and, apart from it, "No decided Decisions match" for a filter with no hits; error page fragment `err-ledger` (400/404) and `err-supersede`; stale is the 422 for a row superseded elsewhere; long content wraps; scale 200 rows plus "show more".
 - Browser check: not done by hand in this change; the server side is covered by `tests/web.rs`.
 
+## Board
+
+`GET /board` (`src/web/pages/board.rs`) lays the tickets of the scope out as five columns in lifecycle order: draft, ready, active, done, abandoned (archived tickets are not shown). The Board nav entry is a link. Each column header shows its name and its total count.
+
+- Card: id (a link to the ticket), title (wraps), "human" when it is for a human, the `[blocked by ...]` text of a blocked ticket (the same text as the List), "n/m subtasks" (done of total), "criteria x/y", "claimed by WHO" and a "stale claim" tag. Everything is text, never colour alone. Stale means an active ticket whose claim was last touched before the library default of 4 hours (`ticket::stale_cutoff`).
+- Collapsed columns: a column with no tickets renders a narrow labelled strip (name and count 0, no card list, `data-empty`). A scope with no tickets at all shows the "No tickets here" empty state instead of five strips.
+- URL: `?p=&w=` scope, `for=agent|human` (a filter form above the board) and `limit_draft`, `limit_ready`, `limit_active`, `limit_done`, `limit_abandoned`. A repeated or bad value is 400.
+- Scale: each column renders at most 200 cards, then "showing N of M" and a "show more" link that doubles that column's limit.
+- Moves, no drag: a card carries one-click buttons chosen from its status: draft has Ready; ready has Start (only when Available) and Draft; active has Release and Done; done and abandoned have Reopen. Each posts `POST /board/ID/MOVE` (`ready`, `draft`, `start`, `release`, `done`, `reopen`) as the web's human Identity through `actions::*`. Abandon (it needs a reason) and force-done stay on the ticket detail, one click away through the id link. The buttons are advisory: the library's rules decide, and a refusal (done with an unchecked criterion, reopen under a settled parent) is 422, a stale change 409, an unknown move or ticket 404, all inline in the card's `err-board-ID` slot. Success answers with the empty slot; the live stream carries the new board.
+- Live: `/stream?view=/board?...`, so a move from the CLI, another tab or a card shows up without a reload.
+- Keys: no new keys; the help overlay is unchanged. The banner shows. Never sweeps.
+- States: empty (collapsed strips, or the whole-scope empty state); loading n/a (server rendered); error (`err-board-ID`, the 400/404 page fragment `err-board`, an error page on 500); stale (the "stale claim" tag; a patch while a move is in flight just re-renders); permission (Start only when Available); long titles wrap; scale per column as above. On a narrow screen the columns scroll sideways.
+- Browser check: the server side is covered by `tests/web.rs`; a manual `scree web` run against a temp database fetched `/board` and the pages rendered, but the layout was not judged in a browser.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.
