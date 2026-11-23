@@ -169,6 +169,33 @@ fn comments() {
 }
 
 #[test]
+fn comment_edit() {
+    let e = Env::new();
+    let id = new_ticket(&e);
+    let other = new_ticket(&e);
+    let t = e.ok(&["comment", "add", &id, "first", "--author", "bob"]);
+    let c = &t["comments"][0];
+    assert!(c["edited_at"].is_null());
+    let cid = c["id"].to_string();
+    let created = c["created_at"].clone();
+
+    let t = e.ok(&["comment", "edit", &id, &cid, "second"]);
+    let c = &t["comments"][0];
+    assert_eq!(c["body"], "second");
+    assert_eq!(c["author"], "bob");
+    assert_eq!(c["created_at"], created);
+    assert_eq!(c["id"].to_string(), cid);
+    assert!(c["edited_at"].is_string());
+
+    let t = e.stdin_ok(&["comment", "edit", &id, &cid, "-"], "piped\n");
+    assert_eq!(t["comments"][0]["body"], "piped");
+
+    assert_eq!(e.code(&["comment", "edit", &id, &cid, ""]), 2);
+    assert_eq!(e.code(&["comment", "edit", &id, "9999", "x"]), 3);
+    assert_eq!(e.code(&["comment", "edit", &other, &cid, "x"]), 3);
+}
+
+#[test]
 fn bad_refs() {
     let e = Env::new();
     let id = new_ticket(&e);

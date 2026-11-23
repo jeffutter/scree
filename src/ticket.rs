@@ -992,6 +992,36 @@ pub fn comment_rm(
     })
 }
 
+/// Replace a comment's body in place. Id, author, session, role and
+/// created_at are kept; `edited_at` records the edit. Any caller may edit any
+/// comment, as with `comment_rm`.
+pub fn comment_edit(
+    conn: &mut Connection,
+    id: &str,
+    comment_id: i64,
+    body: &str,
+    who: &Identity,
+) -> Result<TicketDetail> {
+    if body.trim().is_empty() {
+        return Err(Error::Usage("comment body must not be empty".into()));
+    }
+    db::write(conn, |tx| {
+        let row = resolve(tx, id)?;
+        let n = tx.execute(
+            &format!(
+                "UPDATE comments SET body = ?1, edited_at = {NOW}
+                 WHERE id = ?2 AND ticket_id = ?3"
+            ),
+            params![body, comment_id, row],
+        )?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("no comment {comment_id} on {id}")));
+        }
+        touch(tx, row, who)?;
+        build(tx, row)
+    })
+}
+
 /// What `edit` may change; `None` leaves a field alone.
 pub struct EditFields<'a> {
     pub title: Option<&'a str>,
@@ -1831,7 +1861,7 @@ fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
         .collect::<std::result::Result<_, _>>()?;
     let comments = conn
         .prepare(
-            "SELECT id, author, session, role, body, created_at
+            "SELECT id, author, session, role, body, created_at, edited_at
              FROM comments WHERE ticket_id = ?1 ORDER BY id",
         )?
         .query_map([id], |r| {
@@ -1842,6 +1872,7 @@ fn build(conn: &Connection, id: i64) -> Result<TicketDetail> {
                 role: r.get(3)?,
                 body: r.get(4)?,
                 created_at: r.get(5)?,
+                edited_at: r.get(6)?,
             })
         })?
         .collect::<std::result::Result<_, _>>()?;

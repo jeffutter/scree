@@ -188,7 +188,12 @@ pub fn render_text_ticket(d: &TicketDetail) -> String {
     if !d.comments.is_empty() {
         let _ = writeln!(out, "\nComments:");
         for c in &d.comments {
-            let _ = writeln!(out, "{} {}: {}", c.created_at, c.author, c.body);
+            let edited = if c.edited_at.is_some() {
+                " (edited)"
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "{} {}{edited}: {}", c.created_at, c.author, c.body);
         }
     }
     out.trim_end_matches('\n').to_string()

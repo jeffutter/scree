@@ -414,6 +414,13 @@ pub enum CommentCommand {
     },
     /// Delete any comment by its id, including ones scree wrote
     Rm { id: String, comment_id: i64 },
+    /// Replace the body of a comment, keeping its id and author (text, or `-` for stdin)
+    Edit {
+        id: String,
+        comment_id: i64,
+        #[arg(allow_hyphen_values = true)]
+        body: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

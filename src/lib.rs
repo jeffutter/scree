@@ -491,6 +491,15 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
             let t = ticket::comment_rm(&mut conn, &id, comment_id, &identity)?;
             emit(format, &t, || output::render_text_ticket(&t))
         }
+        Command::Comment(CommentCommand::Edit {
+            id,
+            comment_id,
+            body,
+        }) => {
+            let body = text_arg("comment body", Some(&body))?;
+            let t = ticket::comment_edit(&mut conn, &id, comment_id, &body, &identity)?;
+            emit(format, &t, || output::render_text_ticket(&t))
+        }
         Command::Decisions(mut a) => {
             apply_project_override(&mut a.scope, cli.project.as_deref(), cwd);
             sweep::sweep_auto(&mut conn, env, cwd, Some(&a.scope), None)?;

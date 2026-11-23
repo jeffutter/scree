@@ -51,6 +51,7 @@ pub struct Comment {
     pub author: String,
     pub body: String,
     pub created_at: String,
+    pub edited_at: Option<String>,
     pub id: i64,
     pub role: Option<String>,
     pub session: Option<String>,

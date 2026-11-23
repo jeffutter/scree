@@ -334,6 +334,14 @@ Delete any comment by its id, including ones scree wrote
 - `<ID>` (required)
 - `<COMMENT_ID>` (required)
 
+### `scree comment edit [OPTIONS] <ID> <COMMENT_ID> <BODY>`
+
+Replace the body of a comment, keeping its id and author (text, or `-` for stdin)
+
+- `<ID>` (required)
+- `<COMMENT_ID>` (required)
+- `<BODY>` (required)
+
 ### `scree decision [OPTIONS] <COMMAND>`
 
 Questions a human must answer, shared by tickets

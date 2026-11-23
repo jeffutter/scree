@@ -104,12 +104,12 @@ The display id (`SCR-12`, `SCR-12.3`) is the Key plus the ticket's `label`, whic
 
 ### comments
 
-`comments(id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id, author, session, role, body, created_at)`.
+`comments(id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id, author, session, role, body, created_at, edited_at)`. `edited_at` is nullable and set by `comment edit`.
 
 - Append-only by default, never edited.
 - Deletion is a hard delete. AUTOINCREMENT means a deleted comment's id is never issued again.
 - Abandoning a ticket requires a reason, stored as an ordinary comment, so it keeps its author and time and there is one mechanism for notes.
-- Who may delete a comment is not settled here.
+- `comment edit` replaces `body` in place and sets `edited_at`; id, author, session, role and `created_at` are kept. Any caller may edit or delete any comment.
 
 ## Where each constraint lives
 
