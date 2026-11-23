@@ -201,6 +201,17 @@ function editArgs(ticket, fields = {}) {
   return argv.length === WRITE_FLAGS.length + 2 ? null : build(argv);
 }
 
+// Replace the body of one existing comment. Null when the body is unchanged (nothing to run). A blank
+// or lone "-" body is the caller's error to show first (commentErrors): scree refuses a blank body and
+// reads "-" as stdin, which the mod never feeds.
+function commentEditArgs(ticket, comment, body) {
+  if (String(body ?? "") === String(comment?.body ?? "")) return null;
+  return build([...WRITE_FLAGS, "comment", "edit", String(ticket?.id), String(comment?.id), String(body)]);
+}
+function commentErrors(body) {
+  return ["", "-"].includes(String(body ?? "").trim()) ? [{ field: "comment", message: "comment must not be empty" }] : [];
+}
+
 // One criterion per non-empty line of the Acceptance Criteria box. A "-" line is dropped:
 // scree reads a lone "-" criterion as stdin (src/lib.rs text_arg), which the mod never feeds.
 function criteriaLines(text) {
@@ -258,7 +269,7 @@ function detailModel(show) {
     claimedBy: shortClaimer(s.claimed_by),
     description: s.description ?? "", plan: s.plan ?? "",
     criteria: arr(s.criteria).map((c) => ({ number: c.number, text: c.text ?? "", checked: Boolean(c.checked), evidence: c.evidence ?? null })),
-    comments: arr(s.comments).map((c) => ({ author: c.author ?? "", role: c.role ?? null, body: c.body ?? "", created_at: c.created_at ?? "" })),
+    comments: arr(s.comments).map((c) => ({ id: c.id ?? null, edited_at: c.edited_at ?? null, author: c.author ?? "", role: c.role ?? null, body: c.body ?? "", created_at: c.created_at ?? "" })),
     blockedBy: arr(s.blocked_by).map(ref),
     subtasks: arr(s.subtasks).map(ref),
     // Where the Ticket lives, so a write from the detail view runs in its own Project's root.
@@ -486,6 +497,16 @@ export default class Scree extends View {
     this.planState = TextareaState.new({ placeholder: "Plan" });
     this.descState.set_auto_grow(4, 12); this.planState.set_auto_grow(4, 12);
     for (const st of [this.titleState, this.descState, this.planState]) st.on("change", (_e, cx) => this.saveDraft(cx));
+    // Comment edit: one comment at a time. this.commentEdit is {ticket, comment, error, saving}; the
+    // draft is keyed by ticket and comment id so a failed save or a poll never loses the typed text.
+    this.commentEdit = null; this.commentDrafts = new Map();
+    this.commentState = TextareaState.new({ placeholder: "Comment" });
+    this.commentState.set_auto_grow(3, 10);
+    this.commentState.on("change", (_e, cx) => {
+      if (!this.commentEdit) return;
+      this.commentDrafts.set(this.commentKey(this.commentEdit), this.commentState.value());
+      cx.notify();
+    });
     // Create form: same pattern. this.create is {cwd, on, label, from, for, status, error, saving};
     // createDrafts maps draftKey(cwd) to the typed fields so Back-and-return or a failed save keeps text.
     this.createHandle = cx.focus_handle();
@@ -537,6 +558,7 @@ export default class Scree extends View {
       this.context = context; this.open = s.open; this.done = s.done; this.board = s.board; this.abandoned = s.abandoned; this.error = s.error; this.loaded = s.loaded;
       this.bin = null;
       this.leaveCreate();
+      this.leaveCommentEdit(false);
       this.detail = null;
       this.menu = null;
       this.notice = null;
@@ -583,6 +605,7 @@ export default class Scree extends View {
   // Opens the read-only detail for a ticket; the board calls this on card click too.
   openDetail(id, cx) {
     this.leaveEdit();
+    this.leaveCommentEdit(false);
     this.leaveCreate(true);
     this.selected = id;
     this.detail = { id, data: null, error: null, loading: true };
@@ -593,7 +616,7 @@ export default class Scree extends View {
     cx.spawn((cx) => this.fetchDetail(id, loc, context, cx));
   }
 
-  closeDetail(cx) { this.leaveEdit(); this.detail = null; this.menu = null; this.notice = null; cx.notify(); }
+  closeDetail(cx) { this.leaveEdit(); this.leaveCommentEdit(false); this.detail = null; this.menu = null; this.notice = null; cx.notify(); }
 
   draftKey(id) { return JSON.stringify([this.context, id]); }
   editFields() {
@@ -611,6 +634,7 @@ export default class Scree extends View {
   startEdit(cx) {
     const base = this.detail?.data;
     if (!base) return;
+    this.leaveCommentEdit(false);
     const draft = this.drafts.get(this.draftKey(base.id));
     this.edit = { base, for: draft?.for ?? base.for, error: null };
     this.menu = null; this.notice = null;
@@ -655,6 +679,48 @@ export default class Scree extends View {
     });
   }
 
+  commentKey(ce) { return JSON.stringify([this.context, ce.ticket.id, ce.comment.id]); }
+
+  startCommentEdit(comment, cx) {
+    const ticket = this.detail?.data;
+    if (!ticket || comment.id === null || this.edit || this.commentEdit) return;
+    this.commentEdit = { ticket, comment, error: null, saving: false };
+    this.menu = null; this.notice = null;
+    this.commentState.set_value(this.commentDrafts.get(this.commentKey(this.commentEdit)) ?? comment.body);
+    this.commentState.focus();
+    cx.notify();
+  }
+
+  // Leaves comment edit and empties the widget; the draft goes too when `discard` (cancel, save).
+  leaveCommentEdit(discard = true) {
+    const ce = this.commentEdit;
+    if (!ce) return;
+    this.commentEdit = null;
+    if (discard) this.commentDrafts.delete(this.commentKey(ce));
+    this.commentState.set_value("");
+  }
+  cancelCommentEdit(cx) { this.leaveCommentEdit(); cx.notify(); }
+
+  saveCommentEdit(cx) {
+    const ce = this.commentEdit;
+    if (!ce || ce.saving) return;
+    const body = this.commentState.value();
+    const errors = commentErrors(body);
+    if (errors.length) { ce.error = errors.map((x) => x.message).join("; "); cx.notify(); return; }
+    const args = commentEditArgs(ce.ticket, ce.comment, body);
+    if (!args) { this.leaveCommentEdit(); cx.notify(); return; }
+    ce.saving = true; ce.error = null; cx.notify();
+    const loc = location(), context = this.key(), id = ce.ticket.id;
+    cx.spawn(async (cx) => {
+      try { await this.scree(args, this.writeOpts(ce.ticket)); }
+      catch (err) { ce.saving = false; ce.error = String(err.message ?? err); cx.notify(); return; }
+      if (this.commentEdit === ce) this.leaveCommentEdit();
+      this.refresh(cx);
+      if (this.detail?.id === id) await this.fetchDetail(id, loc, context, cx);
+      cx.notify();
+    });
+  }
+
   createFields() {
     return {
       title: this.createTitle.value(), description: this.createDesc.value(), plan: this.createPlan.value(),
@@ -674,6 +740,7 @@ export default class Scree extends View {
   startCreate(target, from, cx) {
     if (!target?.cwd) return;
     this.leaveEdit();
+    this.leaveCommentEdit(false);
     this.detail = null; this.menu = null; this.notice = null;
     const draft = this.createDrafts.get(this.createKey(target.cwd));
     this.create = { cwd: target.cwd, on: location().on, label: target.label, from, for: draft?.for ?? "agent", status: draft?.status ?? "draft", error: null, saving: false };
@@ -1049,6 +1116,23 @@ export default class Scree extends View {
       .when(Boolean(e.error), (el) => el.child(k.error("scree-edit-error", e.error)));
   }
 
+  // One comment: its header (author, time, "(edited)", Edit), then the body, or the inline editor
+  // when this is the comment being edited.
+  commentRow(t, c) {
+    const ce = this.commentEdit, editing = ce && ce.comment.id === c.id && ce.ticket.id === this.detail?.id;
+    const canEdit = c.id !== null && !this.edit && !this.commentEdit;
+    const head = h_flex().gap(6).items_center()
+      .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).child(`${c.author}${c.role ? ` (${c.role})` : ""} ${c.created_at}${c.edited_at ? " (edited)" : ""}`))
+      .when(canEdit, (el) => el.child(div().id(`scree-comment-edit-${c.id}`).flex_none().px(6).py(1).rounded(4).text_size(11)
+        .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); this.startCommentEdit(c, cx); }).child("Edit")));
+    if (!editing) return v_flex().gap(1).py(3).child(head).child(div().text_size(12).child(c.body));
+    const k = formKit(t);
+    return v_flex().gap(6).py(3).child(head)
+      .child(k.box(Textarea.new(this.commentState)))
+      .when(Boolean(ce.error), (el) => el.child(k.error("scree-comment-error", ce.error)))
+      .child(k.footer(`scree-comment-save-${c.id}`, ce.saving ? "Saving..." : "Save", (cx) => this.saveCommentEdit(cx), `scree-comment-cancel-${c.id}`, (cx) => this.cancelCommentEdit(cx)));
+  }
+
   renderDetail(t) {
     const d = this.detail, m = d.data;
     const back = div().id("scree-back").flex_none().px(8).py(2).rounded(6).text_size(11).border_1().border_color(t.border)
@@ -1085,10 +1169,7 @@ export default class Scree extends View {
               .child(svg(`mods/scree/mark-${c.checked ? "done" : "ready"}.svg`).size(14).flex_none().text_color(c.checked ? t.done : t.idle))
               .child(div().flex_1().min_w(0).text_size(12).child(`${c.number}. ${c.text}`)))
             .when(Boolean(c.evidence), (el) => el.child(div().pl(20).text_size(11).text_color(t.dim).child(`Evidence: ${c.evidence}`))))),
-        this.detailSection(t, `Comments (${m.comments.length})`, m.comments.map((c) =>
-          v_flex().gap(1).py(3)
-            .child(div().text_size(11).text_color(t.dim).child(`${c.author}${c.role ? ` (${c.role})` : ""} ${c.created_at}`))
-            .child(div().text_size(12).child(c.body)))),
+        this.detailSection(t, `Comments (${m.comments.length})`, m.comments.map((c) => this.commentRow(t, c))),
         this.detailSection(t, "Blocked by", m.blockedBy.map((b) => this.refRow(t, b))),
         this.detailSection(t, "Subtasks", m.subtasks.map((b) => this.refRow(t, b))),
       ].filter(Boolean);
@@ -1098,7 +1179,7 @@ export default class Scree extends View {
       .on_key_down((e, cx) => {
         if (e.key !== "escape") return;
         cx.stop_propagation();
-        if (this.edit) this.cancelEdit(cx); else this.closeWindow();
+        if (this.commentEdit) this.cancelCommentEdit(cx); else if (this.edit) this.cancelEdit(cx); else this.closeWindow();
       })
       .on_click((_e, cx) => { this.editHandle.focus(); this.dismissMenu(cx); })
       .child(header)

@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 const src = readFileSync(new URL("./main.js", import.meta.url), "utf8");
 const from = src.indexOf("// --- pure begin ---"), to = src.indexOf("// --- pure end ---");
 assert(from > 0 && to > from, "markers not found in main.js");
-const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "scopeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline", "boardColumns", "OPTIONAL_COLUMNS"];
-const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, scopeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline, boardColumns, OPTIONAL_COLUMNS } = new Function(
+const PURE_NAMES = ["STATUS_ORDER", "criteriaPercent", "groupByStatus", "classifyError", "doneRecent", "chips", "countsLine", "listArgs", "shortClaimer", "applyFilters", "showArgs", "detailModel", "tuiArgv", "COLUMNS", "BOARD_COLUMNS", "OPEN_STATUSES", "LABELS", "boardListArgs", "boardModel", "boardCounts", "projectFolded", "nextBoardFold", "machineLabel", "worktreeLabel", "scopeLabel", "cellVisible", "CELL_LIMIT", "CLOSED_STATUSES", "SETTLEABLE", "COMMANDS", "TRANSITIONS", "transitionsFor", "statusLabel", "isBuilt", "WRITE_FLAGS", "ABANDON_REASON", "statusArgs", "editArgs", "editErrors", "commentEditArgs", "commentErrors", "addArgs", "criteriaLines", "CREATE_STATUSES", "textFlag", "parseScreeError", "SECTIONS", "boardHeadline", "boardColumns", "OPTIONAL_COLUMNS"];
+const { STATUS_ORDER, criteriaPercent, groupByStatus, classifyError, doneRecent, chips, countsLine, listArgs, shortClaimer, applyFilters, showArgs, detailModel, tuiArgv, COLUMNS, BOARD_COLUMNS, OPEN_STATUSES, LABELS, boardListArgs, boardModel, boardCounts, projectFolded, nextBoardFold, machineLabel, worktreeLabel, scopeLabel, cellVisible, CELL_LIMIT, CLOSED_STATUSES, SETTLEABLE, COMMANDS, TRANSITIONS, transitionsFor, statusLabel, isBuilt, WRITE_FLAGS, ABANDON_REASON, statusArgs, editArgs, editErrors, commentEditArgs, commentErrors, addArgs, criteriaLines, CREATE_STATUSES, textFlag, parseScreeError, SECTIONS, boardHeadline, boardColumns, OPTIONAL_COLUMNS } = new Function(
   `${src.slice(from, to)}; return { ${PURE_NAMES.join(", ")} };`)();
 
 // Compile the pure region again with these edits applied, for the mutant runs below. Throws if an
@@ -607,3 +607,25 @@ if (process.env.SCREE_MUTANT) {
   }
   if (failures) { console.log(`${failures} mutant(s) misbehaved`); process.exit(1); }
 }
+
+// Comment edit: gated argv with exact flags; unchanged body runs nothing; blank and "-" are errors.
+const CT = { id: "SCR-1" }, CC = { id: 7, body: "old text" };
+assert.deepEqual(commentEditArgs(CT, CC, "new text"), ["--json", "--role", "human", "comment", "edit", "SCR-1", "7", "new text"]);
+assert(isBuilt(commentEditArgs(CT, CC, "new text")), "commentEditArgs output passes the gate");
+assert.equal(commentEditArgs(CT, CC, "old text"), null, "an unchanged body runs nothing");
+assert.deepEqual(commentErrors("  "), [{ field: "comment", message: "comment must not be empty" }]);
+assert.deepEqual(commentErrors("-"), [{ field: "comment", message: "comment must not be empty" }]);
+assert.deepEqual(commentErrors(""), [{ field: "comment", message: "comment must not be empty" }]);
+assert.deepEqual(commentErrors("ok"), []);
+assert(!isBuilt(["--json", "--role", "human", "comment", "edit", "SCR-1", "7", "x"]), "a hand-written comment edit is refused");
+{
+  const m = detailModel({ comments: [{ id: 3, author: "a", body: "b", edited_at: "2026-01-01T00:00:00Z" }, { author: "c", body: "d" }] });
+  assert.equal(m.comments[0].id, 3); assert.equal(m.comments[0].edited_at, "2026-01-01T00:00:00Z");
+  assert.equal(m.comments[1].id, null); assert.equal(m.comments[1].edited_at, null);
+}
+// Mutant: an argv that skips the gate must be caught.
+{
+  const mut = pureWith(["return build([...WRITE_FLAGS, \"comment\", \"edit\"", "return ([...WRITE_FLAGS, \"comment\", \"edit\""]);
+  assert(!mut.isBuilt(mut.commentEditArgs(CT, CC, "new")), "mutant: ungated comment edit is detected");
+}
+console.log("comment edit tests ok");
