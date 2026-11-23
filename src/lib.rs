@@ -13,6 +13,7 @@ pub mod skill;
 pub mod sweep;
 pub mod ticket;
 pub mod tui;
+pub mod watch;
 
 use clap::CommandFactory;
 

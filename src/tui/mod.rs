@@ -11,7 +11,6 @@ mod terminal;
 mod text;
 mod theme;
 mod view;
-mod watch;
 mod widgets;
 
 use std::path::Path;
@@ -52,7 +51,7 @@ pub fn run(
     identity: &Identity,
     env: &Env,
 ) -> Result<()> {
-    let changes = watch::spawn(db_path)?;
+    let changes = spawn_watcher(db_path)?;
     let mut state = State::starting_in(
         scope,
         format!("{}/{}", identity.role.as_str(), identity.author),
@@ -107,4 +106,16 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// Signal the event loop once per database change; the watcher thread ends
+/// when the receiver is dropped.
+fn spawn_watcher(path: &Path) -> Result<std::sync::mpsc::Receiver<()>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    crate::watch::spawn_with(
+        path.to_path_buf(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        move || tx.send(()).is_ok(),
+    )?;
+    Ok(rx)
 }

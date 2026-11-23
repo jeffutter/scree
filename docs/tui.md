@@ -117,7 +117,7 @@ The TUI polls `PRAGMA data_version` and reloads within about a second when anoth
 
 ## Structure
 
-The code in `src/tui/` follows model-view-update. `state` holds `State` and a pure `update` from events to new state plus `Effect` values; `effects` runs them against the ticket library; `view` draws a frame from `State`; `terminal` owns the alternate screen; `watch` detects database changes; `widgets` and `theme` hold shared drawing parts. Tests drive `update` with scripted events and snapshot `view` output, so no terminal is needed.
+The code in `src/tui/` follows model-view-update. `state` holds `State` and a pure `update` from events to new state plus `Effect` values; `effects` runs them against the ticket library; `view` draws a frame from `State`; `terminal` owns the alternate screen; `widgets` and `theme` hold shared drawing parts. Tests drive `update` with scripted events and snapshot `view` output, so no terminal is needed.
 
 ## Herdr
 
