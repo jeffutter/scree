@@ -52,7 +52,7 @@ The spike proved the stack works (live push in about 0.5 s, clean shutdown, no `
 
 ## Open Questions
 
-*   **Datastar licence**: ADR 0003 records that the licence was not read. Ticket W1 settles this before the bundle is embedded. If the terms do not allow embedding, the stack decision returns to ADR 0003 for revision before any further web ticket.
+*   **Datastar licence**: The licence (MIT) was read in W1 and allows embedding; terms and bundle sha256 are in `src/web/assets/DATASTAR-LICENSE.md`.
 *   **Inline error mechanism**: Datastar does not patch the body of a non-2xx response by default (a reviewer's claim in ADR 0003 review, not yet tried). W13 tries Datastar's own handling first, in a real browser. If it does not place a 422 or 409 body next to the control, the fallback is decided now: a small pinned first-party script served from `'self'` (no CSP change) that listens for Datastar's fetch-error event and patches the response body. Pushing the fragment over the page's SSE stream is rejected (Alternative J). W13 records the result in `docs/web-ui.md`.
 *   **Reverse dependencies**: the shape of the new library query for "what this ticket blocks" is open (check first whether `graph::build` already gives it); decided in W7.
 *   **Prototype route**: this plan assumes the prototype's default route is the list (Alternative H); confirm against the prototype in `docs/designs/`.
@@ -186,7 +186,7 @@ A sweep closes out the tickets of Worktrees that no longer exist (see `docs/data
 | --- | --- | --- | --- |
 | Any local process, including an agent, can POST as Role human | Bypasses the rule that stops agents answering Decisions | Host, Origin and Sec-Fetch-Site checks; a POST with no `Origin` is rejected | A deliberate agent can forge `Origin`. Accepted: Role is a guardrail against accidents |
 | Agent-written text is shown in a human-role browser under a CSP with `'unsafe-eval'` | Injected markup or Datastar attributes could act as the person | Escape all output, no raw HTML, escaping Markdown renderer, link scheme limits; a hostile-content rendering test (title, plan and comment holding markup and `data-*` text) | The CSP cannot be tightened |
-| Datastar licence not read | Cannot embed the bundle | W1 gate; the stack decision returns to ADR 0003 if embedding is not allowed | A gate, not a residual risk: W1 passes or the stack returns to ADR 0003 |
+| Datastar licence not read (settled in W1: MIT, embedding allowed) | Cannot embed the bundle | W1 gate; the stack decision returns to ADR 0003 if embedding is not allowed | A gate, not a residual risk: W1 passes or the stack returns to ADR 0003 |
 | Datastar does not patch non-2xx bodies | Refusals would not show inline | W13 proves it in a real browser; fallback is a small pinned client script | One small hand-written script to maintain |
 | Network bind sends content and writes in clear text, and a Host allowlist cannot work on `0.0.0.0` | Anyone on the network can read and change tickets | Explicit option, stderr warning, in-page banner | Accepted (CUJ 5, Alternative D) |
 | Database contention between the web and several CLI agents | A web write waits up to 5 s, then fails | WAL and a 5000 ms busy timeout; the failure shows as an inline conflict | A human action can wait 5 s |
