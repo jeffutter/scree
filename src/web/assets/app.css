@@ -127,6 +127,17 @@ a.nav-item[aria-current="page"] {
   cursor: not-allowed;
 }
 
+/* Open-to-the-network banner: danger, not amber, so it never reads as the
+   Decisions banner. Wraps on narrow widths. */
+.net-banner {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-danger-soft);
+  border-bottom: var(--border-width-accent) solid var(--color-danger);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
 /* Open-Decisions banner: the only amber in the UI. */
 .banner {
   display: block;

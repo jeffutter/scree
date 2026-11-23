@@ -3,6 +3,15 @@
 
 use maud::{Markup, html};
 
+/// Shown on every page of a server bound to a network address. Not dismissible.
+pub fn network_banner() -> Markup {
+    html! {
+        div class="net-banner" role="note" {
+            "Open to the network: anyone who can reach this address can read and change tickets. There is no login."
+        }
+    }
+}
+
 /// The open-Decisions banner: counts only, never Decision text. The one place
 /// amber is used. A static link, not a live region.
 pub fn banner(open: usize, blocked: usize) -> Markup {

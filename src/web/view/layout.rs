@@ -2,6 +2,8 @@
 //! overlay, footer. The theme follows the system setting through
 //! `tokens.css`; there is no toggle.
 
+use std::sync::OnceLock;
+
 use maud::{DOCTYPE, Markup, html};
 
 use super::components;
@@ -60,6 +62,15 @@ pub fn show_banner(route: Route) -> bool {
     route != Route::Decisions
 }
 
+static NETWORK_OPEN: OnceLock<bool> = OnceLock::new();
+
+/// Called once at startup when the server is bound to a non-loopback address;
+/// every page then carries the open-to-the-network banner. Process-wide
+/// because there is one server per process.
+pub fn set_network_open() {
+    let _ = NETWORK_OPEN.set(true);
+}
+
 pub struct PageCtx<'a> {
     pub route: Route,
     pub role: &'a str,
@@ -83,6 +94,9 @@ pub fn page(ctx: &PageCtx, title: &str, body: Markup) -> Markup {
                 script defer src=(assets::ERRORS_HREF) {}
             }
             body {
+                @if NETWORK_OPEN.get().copied().unwrap_or(false) {
+                    (components::network_banner())
+                }
                 a class="skip" href="#main" { "Skip to content" }
                 header class="bar" {
                     span class="brand" { "Scree" }

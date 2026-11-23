@@ -60,7 +60,7 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
         .await
         .map_err(|e| Error::Other(format!("cannot listen on {addr}: {e}")))?;
     let local = listener.local_addr()?;
-    let hosts = Arc::new(config::allowed_hosts(local.port()));
+    let rule = Arc::new(config::host_rule(local.ip(), local.port()));
     // The watcher thread publishes "the database changed" to every stream. It
     // is not joined at exit: it only polls, and the process ending stops it.
     let watcher_stop = Arc::new(AtomicBool::new(false));
@@ -91,9 +91,16 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
     #[cfg(feature = "test-routes")]
     let router = router.merge(test_routes::router());
     let router = router
-        .layer(middleware::from_fn_with_state(hosts, guard::guard))
+        .layer(middleware::from_fn_with_state(rule, guard::guard))
         .with_state(state);
 
+    if cfg.open {
+        view::layout::set_network_open();
+        eprintln!(
+            "scree web: WARNING: listening on a network address; anyone on the network can \
+             read and change tickets, there is no login. Use only on a network you trust."
+        );
+    }
     eprintln!("scree web: listening on http://{local}");
     let (stop_tx, mut stop) = watch::channel(false);
     let serving = axum::serve(listener, router).with_graceful_shutdown(async move {

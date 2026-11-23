@@ -165,12 +165,17 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         )?;
         return Ok(Outcome::Quiet);
     }
-    if let Some(Command::Web { port, bind }) = &cli.command {
+    if let Some(Command::Web {
+        port,
+        bind,
+        i_know_this_is_open,
+    }) = &cli.command
+    {
         // The web UI is a human surface and never sweeps. Role is forced to
         // human: --role and SCREE_ROLE (which clap folds into cli.role) are
         // ignored, so a browser page can never act as an agent.
         let identity = identity::resolve(Some(Role::Human), cli.author, cli.session, env);
-        let config = web::config::Config::parse(bind, *port)?;
+        let config = web::config::Config::parse(bind, *port, *i_know_this_is_open)?;
         let path = db::resolve_path_from_env(cli.db)?;
         drop(db::open(&path)?);
         web::run(path, &identity, config)?;

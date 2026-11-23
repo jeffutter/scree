@@ -569,6 +569,10 @@ pub enum Command {
         port: u16,
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
+        /// Required to bind a non-loopback address: no login, anyone who can
+        /// reach it can read and change tickets
+        #[arg(long = "i-know-this-is-open")]
+        i_know_this_is_open: bool,
     },
     /// Hide a ticket (and its subtasks) from list without --archived
     Archive { id: String },

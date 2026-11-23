@@ -16,14 +16,16 @@ Role is always human. `--role` and `SCREE_ROLE` are ignored. The placeholder pag
 
 ## Network
 
-Loopback only: `--bind` accepts 127.0.0.1, `::1` or `localhost`. Any other address is refused at startup with exit 2.
+Loopback by default: `--bind` accepts 127.0.0.1, `::1` or `localhost`. Any other address is refused at startup (exit 2, the message names the option) unless `--i-know-this-is-open` is also given; the flag is ignored for a loopback bind.
+
+An open server prints `scree web: WARNING: listening on a network address; anyone on the network can read and change tickets, there is no login` to stderr before the listening line, and every page, error pages included, starts with a persistent banner saying the same. The banner cannot be dismissed. The connection is plain HTTP and there is no login. A wildcard bind (`0.0.0.0` or `::`) accepts any `Host`, so DNS rebinding protection does not apply there; the `Origin` check still requires a write's `Origin` to match its `Host`.
 
 ## Guard
 
 One middleware checks every request and answers 403 when:
 
-- `Host` is not `127.0.0.1:PORT`, `[::1]:PORT` or `localhost:PORT`;
-- `Origin` is present and is not `http://` plus one of those hosts, or is `null`;
+- `Host` is not `127.0.0.1:PORT`, `[::1]:PORT` or `localhost:PORT` (for a specific non-loopback bind, the bound `ADDR:PORT` instead; a wildcard bind accepts any `Host`);
+- `Origin` is present and is not `http://` plus one of those hosts (with a wildcard bind, plus the request's own `Host`), or is `null`;
 - `Sec-Fetch-Site` is `same-site` or `cross-site`;
 - the method is not GET or HEAD and there is no `Origin`.
 

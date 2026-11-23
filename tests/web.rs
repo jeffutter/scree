@@ -203,15 +203,117 @@ fn guard_rejects_hostile_requests() {
 }
 
 #[test]
-fn non_loopback_bind_is_refused() {
+fn non_loopback_bind_is_refused_without_the_option() {
     let e = Env::new();
-    for bind in ["0.0.0.0", "192.0.2.1"] {
+    for bind in ["0.0.0.0", "192.0.2.1", "::"] {
         let out = e.run(&["web", "--port", "0", "--bind", bind]);
         assert_eq!(out.status.code(), Some(2), "{bind}: {out:?}");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!err.contains("listening on"), "{err}");
-        assert!(err.contains("loopback"), "{err}");
+        assert!(err.contains("--i-know-this-is-open"), "{err}");
     }
+}
+
+const NET_BANNER: &str = "Open to the network: anyone who can reach this address can read and change tickets. There is no login.";
+
+#[test]
+fn open_bind_warns_and_every_page_carries_the_banner() {
+    let e = Env::new();
+    let id = add_titled(&e, "Open one", "ready");
+    let w = e.spawn_web(&[], &["--bind", "0.0.0.0", "--i-know-this-is-open"]);
+    assert!(
+        w.log().iter().any(
+            |l| l.contains("WARNING: listening on a network address") && l.contains("no login")
+        ),
+        "{:?}",
+        w.log()
+    );
+    for (path, status) in [
+        ("/", 200),
+        ("/board", 200),
+        ("/decisions", 200),
+        ("/ledger", 200),
+        ("/graph", 200),
+        ("/new", 200),
+        (&format!("/ticket/{id}"), 200),
+        ("/ticket/LOCAL-999", 404),
+    ] {
+        let r = w.get(path);
+        assert_eq!(r.status, status, "{path}");
+        assert!(r.body.contains(NET_BANNER), "{path}");
+        assert!(r.body.contains("class=\"net-banner\""), "{path}");
+    }
+}
+
+#[test]
+fn loopback_run_has_no_banner_or_warning_and_ignores_the_option() {
+    let e = Env::new();
+    for args in [&[][..], &["--i-know-this-is-open"][..]] {
+        let w = e.spawn_web(&[], args);
+        assert!(!w.get("/").body.contains("net-banner"));
+        assert!(!w.get("/ticket/LOCAL-999").body.contains("net-banner"));
+        assert!(!w.log().iter().any(|l| l.contains("WARNING")));
+    }
+}
+
+#[test]
+fn host_check_follows_the_bound_address() {
+    let e = Env::new();
+    // A wildcard bind answers any Host; a write still needs a matching Origin.
+    let open = e.spawn_web(&[], &["--bind", "0.0.0.0", "--i-know-this-is-open"]);
+    assert_eq!(
+        open.request("GET", "/", &[("Host", "anything.test")])
+            .status,
+        200
+    );
+    let hostile = open.request(
+        "POST",
+        "/new",
+        &[("Host", "anything.test"), ("Origin", "http://evil.test")],
+    );
+    assert_eq!(hostile.status, 403);
+    assert!(hostile.body.contains("Origin"));
+    let same = open.request(
+        "POST",
+        "/new",
+        &[
+            ("Host", "anything.test"),
+            ("Origin", "http://anything.test"),
+        ],
+    );
+    assert_ne!(same.status, 403);
+    // Loopback still refuses an unknown Host.
+    let local = e.spawn_web(&[], &[]);
+    assert_eq!(
+        local
+            .request("GET", "/", &[("Host", "anything.test")])
+            .status,
+        403
+    );
+}
+
+#[test]
+fn specific_network_address_accepts_only_itself() {
+    // 127.0.0.2 is loopback; use the machine's own non-loopback address, found
+    // by connecting a UDP socket (no packet is sent). Skip without a network.
+    let Some(ip) = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect("192.0.2.1:9").map(|()| s))
+        .and_then(|s| s.local_addr())
+        .ok()
+        .map(|a| a.ip())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+    else {
+        eprintln!("skipped: no non-loopback address");
+        return;
+    };
+    let e = Env::new();
+    let w = e.spawn_web(&[], &["--bind", &ip.to_string(), "--i-know-this-is-open"]);
+    assert_eq!(w.get("/").status, 200);
+    assert_eq!(w.request("GET", "/", &[("Host", "127.0.0.1")]).status, 403);
+    assert_eq!(
+        w.request("GET", "/", &[("Host", "anything.test")]).status,
+        403
+    );
 }
 
 #[test]

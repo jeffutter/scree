@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use super::config::HostRule;
 use super::error::Logged;
 
 /// Datastar compiles `data-*` expressions with `new Function`, so `script-src`
@@ -39,17 +40,26 @@ fn header(h: &HeaderMap, name: header::HeaderName) -> Option<&str> {
     h.get(name).and_then(|v| v.to_str().ok())
 }
 
-/// Decide whether a request may proceed. `hosts` is the allowlist of `Host`
-/// values (`host:port`).
-pub fn check(headers: &HeaderMap, method: &Method, hosts: &[String]) -> Result<(), Reason> {
+/// Decide whether a request may proceed. `Only` is an allowlist of `Host`
+/// values (`host:port`); `Any` accepts every `Host` but still requires that an
+/// `Origin` be same-origin with it.
+pub fn check(headers: &HeaderMap, method: &Method, rule: &HostRule) -> Result<(), Reason> {
     let host = header(headers, header::HOST).ok_or(Reason::Host)?;
-    if !hosts.iter().any(|h| h == host) {
+    let host_ok = |h: &str| match rule {
+        HostRule::Only(hosts) => hosts.iter().any(|a| a == h),
+        HostRule::Any => true,
+    };
+    if !host_ok(host) {
         return Err(Reason::Host);
     }
     // A header that is present but not valid text is hostile, not absent.
     if headers.contains_key(header::ORIGIN) {
         let origin = header(headers, header::ORIGIN).ok_or(Reason::Origin)?;
-        if !hosts.iter().any(|h| origin == format!("http://{h}")) {
+        let origin_ok = match rule {
+            HostRule::Only(hosts) => hosts.iter().any(|h| origin == format!("http://{h}")),
+            HostRule::Any => origin == format!("http://{host}"),
+        };
+        if !origin_ok {
             return Err(Reason::Origin);
         }
     }
@@ -66,10 +76,10 @@ pub fn check(headers: &HeaderMap, method: &Method, hosts: &[String]) -> Result<(
     Ok(())
 }
 
-pub async fn guard(State(hosts): State<Arc<Vec<String>>>, req: Request, next: Next) -> Response {
+pub async fn guard(State(rule): State<Arc<HostRule>>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let route = req.uri().path().to_string();
-    let mut resp = match check(req.headers(), &method, &hosts) {
+    let mut resp = match check(req.headers(), &method, &rule) {
         Ok(()) => next.run(req).await,
         Err(reason) => (StatusCode::FORBIDDEN, reason.text()).into_response(),
     };
@@ -100,8 +110,8 @@ pub async fn guard(State(hosts): State<Arc<Vec<String>>>, req: Request, next: Ne
 mod tests {
     use super::*;
 
-    fn hosts() -> Vec<String> {
-        vec!["127.0.0.1:9".into(), "localhost:9".into()]
+    fn hosts() -> HostRule {
+        HostRule::Only(vec!["127.0.0.1:9".into(), "localhost:9".into()])
     }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -168,6 +178,59 @@ mod tests {
                 &hosts()
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn bound_address_rule_accepts_only_itself() {
+        let rule = HostRule::Only(vec!["192.0.2.1:9".into()]);
+        let get = Method::GET;
+        assert_eq!(
+            check(&headers(&[("host", "192.0.2.1:9")]), &get, &rule),
+            Ok(())
+        );
+        assert_eq!(
+            check(&headers(&[("host", "127.0.0.1:9")]), &get, &rule),
+            Err(Reason::Host)
+        );
+    }
+
+    #[test]
+    fn any_rule_accepts_every_host_but_needs_one_and_a_matching_origin() {
+        let any = HostRule::Any;
+        let (get, post) = (Method::GET, Method::POST);
+        assert_eq!(
+            check(&headers(&[("host", "evil.test")]), &get, &any),
+            Ok(())
+        );
+        assert_eq!(check(&HeaderMap::new(), &get, &any), Err(Reason::Host));
+        assert_eq!(
+            check(
+                &headers(&[("host", "evil.test"), ("origin", "http://evil.test")]),
+                &post,
+                &any
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            check(
+                &headers(&[("host", "a.test"), ("origin", "http://b.test")]),
+                &post,
+                &any
+            ),
+            Err(Reason::Origin)
+        );
+        assert_eq!(
+            check(&headers(&[("host", "a.test")]), &post, &any),
+            Err(Reason::MissingOrigin)
+        );
+        assert_eq!(
+            check(
+                &headers(&[("host", "a.test"), ("sec-fetch-site", "cross-site")]),
+                &get,
+                &any
+            ),
+            Err(Reason::FetchSite)
         );
     }
 }
