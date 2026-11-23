@@ -411,7 +411,7 @@ fn banner_counts_match_the_library() {
 }
 
 #[test]
-fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
+fn nav_links_every_screen_and_marks_the_current_one() {
     let e = Env::new();
     let w = e.spawn_web(&[], &[]);
     let body = w.get("/").body;
@@ -425,10 +425,10 @@ fn nav_disables_unbuilt_screens_and_marks_the_current_one() {
         "{body}"
     );
     assert!(
-        !body.contains("<a class=\"nav-item\" href=\"/graph\""),
-        "graph is not built"
+        body.contains("<a class=\"nav-item\" href=\"/graph\""),
+        "{body}"
     );
-    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 1, "{body}");
+    assert_eq!(body.matches("aria-disabled=\"true\"").count(), 0, "{body}");
 }
 
 #[test]
@@ -2994,4 +2994,148 @@ fn board_respects_scope_marks_stale_claims_and_updates_live() {
     assert_eq!(w.post(&format!("/board/{id}/release")).status, 200);
     let next = s.next_event(Duration::from_secs(3)).expect("patch");
     assert!(!next.contains("stale claim"), "{next}");
+}
+
+/// Add `n` tickets to LOCAL; ticket i waits on ticket i-1 unless `i % fan == 0`.
+fn graph_bulk(e: &Env, n: usize, fan: usize) -> Vec<String> {
+    let mut c = conn(e);
+    let mut ids: Vec<String> = Vec::new();
+    for i in 0..n {
+        let title = format!("Node {i}");
+        let blockers: Vec<String> = if i % fan == 0 {
+            vec![]
+        } else {
+            vec![ids[i - 1].clone()]
+        };
+        let t = scree::ticket::add(
+            &mut c,
+            &scree::scope::Scope::Unscoped,
+            &NewTicket {
+                blocked_by: &blockers,
+                status: NewStatus::Ready,
+                ..new(&title)
+            },
+        )
+        .unwrap();
+        ids.push(t.ticket.id.clone());
+    }
+    ids
+}
+
+#[test]
+fn graph_shows_linked_states_critical_path_and_top_blockers() {
+    let e = Env::new();
+    let add = |t: &str, extra: &[&str]| {
+        let mut a = vec!["--role", "human", "add", t, "--status", "ready"];
+        a.extend_from_slice(extra);
+        e.ok(&a)["id"].as_str().unwrap().to_string()
+    };
+    let a = add("Root <i>work</i>", &[]);
+    let b = add("Middle", &["--blocked-by", &a]);
+    let c = add("Leaf", &["--blocked-by", &b]);
+    let h = add("For a human", &["--for", "human"]);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/graph");
+    assert_eq!(r.status, 200, "{}", r.body);
+    let body = r.body;
+    for id in [&a, &b, &c, &h] {
+        assert!(body.contains(&format!("href=\"/ticket/{id}\"")), "{id}");
+    }
+    assert!(body.contains("graph-node graph-available"), "{body}");
+    assert!(body.contains("graph-node graph-blocked"), "{body}");
+    assert!(body.contains("graph-edge-critical"), "{body}");
+    assert!(body.contains("Critical path"), "{body}");
+    assert!(body.contains("Top blockers"), "{body}");
+    assert!(body.contains(&format!("{a}</a> blocks")), "{body}");
+    assert!(body.contains("Root &lt;i&gt;work&lt;/i&gt;"), "{body}");
+    assert!(!body.contains("<i>work"), "escaped");
+    assert!(
+        body.contains("<a class=\"nav-item\" href=\"/graph\""),
+        "{body}"
+    );
+    assert_no_inline("graph", &body);
+
+    let human = w.get("/graph?for=human").body;
+    assert!(human.contains(&format!("href=\"/ticket/{h}\"")));
+    assert!(!human.contains("Middle"), "{human}");
+    // The blocker of a shown ticket outside the filter stays as an outside node.
+    assert!(w.get("/graph?for=agent").body.contains("Leaf"));
+}
+
+#[test]
+fn graph_empty_scope_bad_queries_and_worktree_filter() {
+    let blank = Env::new();
+    let empty = blank.spawn_web(&[], &[]).get("/graph").body;
+    assert!(empty.contains("No tickets here"), "{empty}");
+    assert!(!empty.contains("<svg"), "{empty}");
+
+    let e = Env::new();
+    let (r, wt) = setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    e.ok_at(&r, &["add", "In root"]);
+    e.ok_at(&wt, &["add", "In worktree"]);
+    let wt_path = wt.to_str().unwrap();
+    let both = w.get("/graph?p=MA").body;
+    assert!(
+        both.contains("In root") && both.contains("In worktree"),
+        "{both}"
+    );
+    let only = w.get(&format!("/graph?p=MA&w={}", enc(wt_path))).body;
+    assert!(
+        only.contains("In worktree") && !only.contains("In root"),
+        "{only}"
+    );
+    let root = w.get("/graph?p=MA&w=@root").body;
+    assert!(
+        root.contains("In root") && !root.contains("In worktree"),
+        "{root}"
+    );
+
+    for bad in [
+        "/graph?for=robot",
+        "/graph?all=yes",
+        "/graph?for=agent&for=human",
+    ] {
+        assert_eq!(w.get(bad).status, 400, "{bad}");
+    }
+    assert_eq!(w.get("/graph?p=NOPE").status, 404);
+}
+
+#[test]
+fn graph_renders_over_a_hundred_nodes_and_refuses_past_the_cap() {
+    let e = Env::new();
+    graph_bulk(&e, 110, 7);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/graph");
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body.matches("class=\"graph-node ").count(), 110, "nodes");
+    assert!(!r.body.contains("Too large"));
+    assert_no_inline("graph", &r.body);
+
+    graph_bulk(&e, 41, 7);
+    let r = w.get("/graph");
+    assert_eq!(r.status, 200);
+    assert!(r.body.contains("Too large, narrow the scope"), "{}", r.body);
+    assert!(r.body.contains("151"), "names the count");
+    assert!(
+        !r.body.contains("<svg class=\"graph-svg"),
+        "no graph past the cap"
+    );
+    // Narrowing brings it back under the cap.
+    let narrowed = w.get("/graph?for=human");
+    assert!(!narrowed.body.contains("Too large"));
+}
+
+#[test]
+fn graph_live_stream_carries_the_region() {
+    let e = Env::new();
+    let id = e.ok(&["add", "Live one", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w = e.spawn_web(&[], &[]);
+    let frame = first_frame(&w, "/graph");
+    assert!(frame.contains("id=\"graph-region\""), "{frame}");
+    assert!(frame.contains(&format!("href=\"/ticket/{id}\"")), "{frame}");
+    assert!(first_frame(&w, "/graph?all=1").contains("graph-region"));
 }

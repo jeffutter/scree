@@ -4,6 +4,7 @@
 //! [`banner_counts`].
 
 pub mod components;
+pub mod graph_svg;
 pub mod layout;
 pub mod markdown;
 pub mod picker;

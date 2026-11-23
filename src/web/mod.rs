@@ -82,6 +82,7 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
         .route("/decisions/{id}/answer", post(pages::decisions::answer))
         .route("/board", get(pages::board::page))
         .route("/board/{id}/{mv}", post(pages::board::move_card))
+        .route("/graph", get(pages::graph::page))
         .route("/ledger", get(pages::ledger::index))
         .route("/ledger/{id}/supersede", post(pages::ledger::supersede))
         .route("/stream", get(sse::stream))

@@ -3,6 +3,7 @@
 pub mod board;
 pub mod create;
 pub mod decisions;
+pub mod graph;
 pub mod ledger;
 pub mod list;
 pub mod ticket;

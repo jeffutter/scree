@@ -261,6 +261,19 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - States: empty (collapsed strips, or the whole-scope empty state); loading n/a (server rendered); error (`err-board-ID`, the 400/404 page fragment `err-board`, an error page on 500); stale (the "stale claim" tag; a patch while a move is in flight just re-renders); permission (Start only when Available); long titles wrap; scale per column as above. On a narrow screen the columns scroll sideways.
 - Browser check: the server side is covered by `tests/web.rs`; a manual `scree web` run against a temp database fetched `/board` and the pages rendered, but the layout was not judged in a browser.
 
+## Graph
+
+`GET /graph` (`src/web/pages/graph.rs`, `src/web/view/graph_svg.rs`) draws the dependency graph of the scope as one server-rendered SVG, from `graph::build` (the data behind `scree graph`). The Graph nav entry is a link.
+
+- Layout: layered by longest-path depth, so a blocker sits left of what it blocks; inside a column nodes run by ticket number. No crossing minimisation and no new crate. Edges are curves; an edge on the Critical path is heavier and accent coloured.
+- Node: a link to `/ticket/ID` showing the id and a title cut at 22 characters (the full title is the tooltip). State is shown by a glyph and an outline as well as colour: available (filled circle), ready (open circle), draft (dotted circle, dashed outline), active (triangle), blocked (square), done (check), abandoned (x), outside this view (arrow, dashed). A legend lists them.
+- Beside the graph: the Critical path (linked ids in order) and Top blockers ("ID blocks N").
+- URL: `?p=&w=` scope (the Worktree picker), `for=agent|human`, and `all=1` to include done and abandoned tickets (default draft, ready, active, as `scree graph`). A repeated or bad value is 400, an unknown Project 404.
+- Cap: past 150 nodes the page draws nothing and shows "Too large, narrow the scope" with the count; picking a Project or Worktree, `for` or leaving out done work narrows it.
+- Live: `/stream?view=/graph?...`. No new keys. The banner shows. Never sweeps.
+- States: empty "No tickets here"; too large as above; error page fragment `err-graph` (400/404), an error page on 500; loading n/a (server rendered); long titles are cut; the graph scrolls inside its box when wide.
+- Browser check: the server side is covered by `tests/web.rs` (100+ nodes, over-cap, filters, links). Readability at the 150 cap has not been judged in a browser; draft follow-up SCR-98 "Evaluate a layout engine for the web graph" tracks it.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.

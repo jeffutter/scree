@@ -40,6 +40,8 @@ pub fn render_view(db: &Path, view: &str) -> crate::error::Result<String> {
         }
         "/board" => super::pages::board::live(db, ""),
         v if v.starts_with("/board?") => super::pages::board::live(db, &v["/board?".len()..]),
+        "/graph" => super::pages::graph::live(db, ""),
+        v if v.starts_with("/graph?") => super::pages::graph::live(db, &v["/graph?".len()..]),
         "/ledger" => super::pages::ledger::live(db, ""),
         v if v.starts_with("/ledger?") => super::pages::ledger::live(db, &v["/ledger?".len()..]),
         v if v.starts_with("/ticket/") => super::pages::ticket::live(db, &v["/ticket/".len()..]),
