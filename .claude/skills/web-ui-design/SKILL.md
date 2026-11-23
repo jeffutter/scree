@@ -32,7 +32,7 @@ Build and check each of these. Write "n/a" with a reason, not silence.
 - hover
 - focus-visible (the 2px ring from the design system, never removed)
 - active (pressed or selected)
-- disabled, with the reason shown next to it
+- disabled, with the reason shown next to it (on dense action rows the reason may be the tooltip plus the `aria-label`; see Buttons in the design system)
 - loading (skeleton that keeps the layout)
 - empty (one plain sentence and, if useful, one action)
 - error (inline notice with what happened and what to do)

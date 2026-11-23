@@ -212,7 +212,7 @@ pub fn region(conn: &Connection, scope: &Scope, q: &GraphQuery) -> Result<Markup
 
 fn filters(scope: &Scope, q: &GraphQuery) -> Markup {
     html! {
-        form class="filters" method="get" action=(Route::Graph.path()) role="search" {
+        form class="filters" method="get" action=(Route::Graph.path()) role="search" data-autosubmit {
             @for (k, v) in scope::pairs(&scope.filter) { input type="hidden" name=(k) value=(v); }
             label class="field" {
                 span class="picker-label" { "For" }
@@ -222,11 +222,11 @@ fn filters(scope: &Scope, q: &GraphQuery) -> Markup {
                     option value="human" selected[q.for_who == Some(ForWho::Human)] { "human" }
                 }
             }
-            label class="field" {
+            label class="check" {
                 input type="checkbox" name="all" value="1" checked[q.all];
-                span { "Include done and abandoned" }
+                " Include done and abandoned"
             }
-            button type="submit" class="btn" { "Filter" }
+            noscript { button type="submit" class="btn" { "Filter" } }
         }
     }
 }
@@ -237,8 +237,7 @@ fn body(conn: &Connection, scope: &Scope, q: &GraphQuery) -> Result<Markup> {
         form_urlencoded::byte_serialize(href(&scope.filter, &q.pairs()).as_bytes()).collect();
     Ok(html! {
         h1 { "Graph" }
-        (picker::picker(scope, Route::Graph.path()))
-        (filters(scope, q))
+        (picker::bar(html! { (picker::picker(scope, Route::Graph.path())) (filters(scope, q)) }))
         div id="graph" data-init=(format!("@get('/stream?view={view}')")) { (region) }
     })
 }

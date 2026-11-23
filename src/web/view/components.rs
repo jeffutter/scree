@@ -83,6 +83,68 @@ pub fn stale(message: &str) -> Markup {
     }
 }
 
+/// An action icon: 16x16 strokes in `currentColor`, hidden from assistive
+/// technology. The control that holds it must carry its own name (visible text
+/// or `aria-label`). Unknown names render nothing, and a test pins the set.
+pub fn icon(name: &str) -> Markup {
+    html! {
+        svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" {
+            @match name {
+                "edit" => { path d="M11 2.5l2.5 2.5L5.5 13H3v-2.5z" {} },
+                "move" => { path d="M5 13V3M2.5 5.5L5 3l2.5 2.5M11 3v10M8.5 10.5L11 13l2.5-2.5" {} },
+                "subtask" => { path d="M4 2v7a2 2 0 002 2h6M9.5 8.5L12 11l-2.5 2.5" {} },
+                "blocker" => { circle cx="8" cy="8" r="5.5" {} path d="M4.1 4.1l7.8 7.8" {} },
+                "circle" => { circle cx="8" cy="8" r="5.5" {} },
+                "circle-check" => { circle cx="8" cy="8" r="5.5" {} path d="M5.5 8.2l1.8 1.8 3.2-3.5" {} },
+                "remove" => { path d="M4 4l8 8M12 4l-8 8" {} },
+                "tick" => { path d="M4 8.5l2.7 2.7L12 5.5" {} },
+                "play" => { path d="M5 3l8 5-8 5z" {} },
+                "check" => { path d="M3 8.5l3.5 3.5L13 4.5" {} },
+                "abandon" => { circle cx="8" cy="8" r="5.5" {} path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" {} },
+                "reopen" => { path d="M3 8a5 5 0 105-5H5M5 1L3 3l2 2" {} },
+                "archive" => { path d="M2.5 4h11v3h-11zM3.5 7v6h9V7M6.5 9.5h3" {} },
+                "release" => { path d="M9 3H4v10h5M7 8h7M11.5 5.5L14 8l-2.5 2.5" {} },
+                "commit" => { circle cx="8" cy="8" r="2.5" {} path d="M1.5 8h4M10.5 8h4" {} },
+                "ready" => { path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5" {} },
+                "note" => { path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" {} },
+                "person" => { circle cx="8" cy="5.5" r="2.5" {} path d="M3 13.5c.5-2.5 2.5-3.5 5-3.5s4.5 1 5 3.5" {} },
+                "robot" => { path d="M3 6h10v7H3zM8 6V3.5M6 9v.5M10 9v.5" {} },
+                "plus" => { path d="M8 3v10M3 8h10" {} },
+                _ => {},
+            }
+        }
+    }
+}
+
+/// The status shape from the design system: draft dashed circle, ready empty
+/// circle, available circle with a play triangle, active circle with the right
+/// half filled, done filled circle with a tick, blocked rounded square with a
+/// dash, abandoned circle with a cross. Decorative (`aria-hidden`): the status
+/// word always sits next to it, and is the accessible name. Unknown names get
+/// the empty circle.
+pub fn status_icon(status: &str) -> Markup {
+    html! {
+        svg class="icon st" viewBox="0 0 16 16" aria-hidden="true" focusable="false" {
+            @match status {
+                "draft" => { circle cx="8" cy="8" r="5.5" stroke-dasharray="2 2" {} },
+                "available" => { circle cx="8" cy="8" r="5.5" {} path class="st-fill" d="M6.5 5.5l4 2.5-4 2.5z" {} },
+                "active" => { circle cx="8" cy="8" r="5.5" {} path class="st-fill" d="M8 2.5a5.5 5.5 0 010 11z" {} },
+                "done" => { circle class="st-fill" cx="8" cy="8" r="6" {} path class="st-tick" d="M5.3 8.2l1.9 1.9 3.5-3.7" {} },
+                "blocked" => { rect x="2.5" y="2.5" width="11" height="11" rx="2.5" {} path d="M5.5 8h5" {} },
+                "abandoned" => { circle cx="8" cy="8" r="5.5" {} path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" {} },
+                _ => { circle cx="8" cy="8" r="5.5" {} },
+            }
+        }
+    }
+}
+
+/// The quiet blocked cue: a red icon and a muted label. Red is for blocked.
+pub fn blocked_cue(label: &str) -> Markup {
+    html! {
+        span class="cue cue-blocked" { (status_icon("blocked")) span { (label) } }
+    }
+}
+
 /// Every key the UI defines, as `(keys, what it does)`. Each screen ticket
 /// adds its own rows here, together with a test; the overlay lists exactly
 /// this table.

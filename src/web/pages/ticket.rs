@@ -71,7 +71,7 @@ fn dir_name(full: &str) -> String {
 fn prose(title: &str, src: &str) -> Markup {
     html! {
         @if !src.trim().is_empty() {
-            section class="detail-section" {
+            section class=(if title == "Handoff" { "detail-section handoff" } else { "detail-section" }) {
                 h2 { (title) }
                 div class="prose" { (markdown::render(src)) }
             }
@@ -113,17 +113,6 @@ fn button_labeled(label: &str, aria: &str) -> Markup {
     html! { button type="submit" class="btn" aria-label=(aria) { (label) } }
 }
 
-/// A move that is not offered: the button stays visible but disabled, with
-/// the reason as text so it is never a mystery.
-fn disabled(label: &str, reason: &str) -> Markup {
-    html! {
-        div class="inline-form" {
-            button type="button" class="btn" disabled { (label) }
-            span class="meta" { (reason) }
-        }
-    }
-}
-
 fn why_not_start(d: &TicketDetail) -> String {
     let t = &d.ticket;
     match t.status.as_str() {
@@ -138,97 +127,316 @@ fn why_not_start(d: &TicketDetail) -> String {
     }
 }
 
-/// The lifecycle moves, from [`ticket::available_actions`]. A move that is not
-/// offered is shown disabled with its reason.
+/// A modal `<dialog>` holding one form. `shell.js` opens it from the button
+/// carrying `data-dialog-open="ID"`, closes it on Cancel, Esc or a successful
+/// save, and re-opens it if a live patch of the region closed it. The form's
+/// `err-CONTROL` slot is inside the dialog, so a refusal shows where the user
+/// is looking.
+fn dialog(dialog_id: &str, title: &str, inner: Markup) -> Markup {
+    dialog_with(dialog_id, title, "dialog", "Cancel", inner)
+}
+
+/// [`dialog`] with its CSS class (`dialog dialog-wide` for the long forms) and
+/// the label of the button that closes it.
+fn dialog_with(dialog_id: &str, title: &str, class: &str, close: &str, inner: Markup) -> Markup {
+    html! {
+        dialog id=(dialog_id) class=(class) aria-labelledby=(format!("{dialog_id}-title")) {
+            h2 id=(format!("{dialog_id}-title")) { (title) }
+            (inner)
+            div class="dialog-foot" {
+                button type="button" class="btn" data-dialog-close { (close) }
+            }
+        }
+    }
+}
+
+/// A quiet, icon-only dialog opener for repeated row controls. `aria` names
+/// it for assistive technology and as the tooltip.
+fn dialog_icon(dialog_id: &str, icon: &str, aria: &str) -> Markup {
+    html! {
+        button type="button" class="btn btn-quiet" data-dialog-open=(dialog_id) aria-label=(aria) title=(aria) {
+            (components::icon(icon))
+        }
+    }
+}
+
+/// A quiet, icon-only submit button; see [`dialog_icon`].
+fn button_icon(icon: &str, aria: &str) -> Markup {
+    html! {
+        button type="submit" class="btn btn-quiet" aria-label=(aria) title=(aria) {
+            (components::icon(icon))
+        }
+    }
+}
+
+/// A full-width, left-aligned button for the side panel: icon plus label.
+/// `primary` is the one accent-filled button of the view.
+fn side_button(icon: &str, label: &str, primary: bool) -> Markup {
+    html! {
+        button type="submit" class=(if primary { "btn btn-primary side-btn" } else { "btn side-btn" }) {
+            (components::icon(icon)) (label)
+        }
+    }
+}
+
+fn side_dialog(dialog_id: &str, icon: &str, label: &str) -> Markup {
+    html! {
+        button type="button" class="btn side-btn" data-dialog-open=(dialog_id) {
+            (components::icon(icon)) (label)
+        }
+    }
+}
+
+/// How a lifecycle move is carried out.
+enum How {
+    Post(&'static str),
+    Dialog(&'static str),
+}
+
+/// One lifecycle move as the side panel lists it.
+struct Act {
+    key: &'static str,
+    label: &'static str,
+    icon: &'static str,
+    how: How,
+    offered: bool,
+    /// Why it is not offered; shown as text.
+    reason: String,
+}
+
+/// The lifecycle moves, from [`ticket::available_actions`]. The move the
+/// status points at is the one primary button. The other offered moves are
+/// plain buttons under it. Moves that are not offered are listed, disabled and
+/// with their reason, in a collapsed "Not available" group so they never crowd
+/// the panel. The write forms live in dialogs placed after the panel.
 fn actions(d: &TicketDetail, role: Role) -> Markup {
     let t = &d.ticket;
     let id = t.id.as_str();
     let offered = ticket::available_actions(d, role);
     let has = |m: Move| offered.contains(&m);
-    let closed = !has(Move::Done);
-    let archive = if has(Move::Unarchive) {
+    let (archive_route, archive_label) = if has(Move::Unarchive) {
         ("unarchive", "Unarchive")
     } else {
         ("archive", "Archive")
     };
+    let acts = [
+        Act {
+            key: "ready",
+            label: "Make ready",
+            icon: "ready",
+            how: How::Post("ready"),
+            offered: has(Move::Ready),
+            reason: if t.status == "draft" {
+                "not available".into()
+            } else {
+                "only a draft can be made ready".into()
+            },
+        },
+        Act {
+            key: "start",
+            label: "Start",
+            icon: "play",
+            how: How::Post("start"),
+            offered: has(Move::Start),
+            reason: why_not_start(d),
+        },
+        Act {
+            key: "release",
+            label: "Release",
+            icon: "release",
+            how: How::Dialog("dlg-release"),
+            offered: has(Move::Release),
+            reason: "only an active ticket can be released".into(),
+        },
+        Act {
+            key: "done",
+            label: "Done",
+            icon: "check",
+            how: How::Dialog("dlg-done"),
+            offered: has(Move::Done),
+            reason: "ticket is closed".into(),
+        },
+        Act {
+            key: "abandon",
+            label: "Abandon",
+            icon: "abandon",
+            how: How::Dialog("dlg-abandon"),
+            offered: has(Move::Abandon),
+            reason: "ticket is closed".into(),
+        },
+        Act {
+            key: "reopen",
+            label: "Reopen",
+            icon: "reopen",
+            how: How::Post("reopen"),
+            offered: has(Move::Reopen),
+            reason: "ticket is open".into(),
+        },
+    ];
+    let primary_key = match t.status.as_str() {
+        "draft" => "ready",
+        "ready" => "start",
+        "active" => "done",
+        _ => "reopen",
+    };
+    let render = |a: &Act, primary: bool| match a.how {
+        How::Post(route) => html! {
+            (post_form(id, route, a.key, "side-form", side_button(a.icon, a.label, primary)))
+        },
+        How::Dialog(dlg) if primary => html! {
+            button type="button" class="btn btn-primary side-btn" data-dialog-open=(dlg) {
+                (components::icon(a.icon)) (a.label)
+            }
+        },
+        How::Dialog(dlg) => side_dialog(dlg, a.icon, a.label),
+    };
+    let primary = acts.iter().find(|a| a.key == primary_key);
+    let unavailable: Vec<&Act> = acts
+        .iter()
+        .filter(|a| !a.offered && a.key != primary_key)
+        .collect();
     html! {
-        section class="detail-section" id="actions" {
+        section class="panel" id="actions" {
             h2 { "Actions" }
-            @if has(Move::Ready) {
-                (post_form(id, "ready", "ready", "inline-form", button("Make ready")))
-            } @else {
-                (disabled("Make ready", if t.status == "draft" { "not available" } else { "only a draft can be made ready" }))
-            }
-            @if has(Move::Start) {
-                (post_form(id, "start", "start", "inline-form", button("Start")))
-            } @else {
-                (disabled("Start", &why_not_start(d)))
-            }
-            @if has(Move::Release) {
-                (post_form(id, "release", "release", "stack-form", html! {
-                    label class="field" {
-                        span class="meta" { "Handoff note (optional; blank keeps the current one)" }
-                        textarea name="handoff" rows="3" {}
+            @if let Some(a) = primary {
+                @if a.offered {
+                    (render(a, true))
+                } @else {
+                    button type="button" class="btn btn-primary side-btn" disabled {
+                        (components::icon(a.icon)) (a.label)
                     }
-                    (button("Release"))
-                }))
-            } @else {
-                (disabled("Release", "only an active ticket can be released"))
+                    p class="meta" { (a.reason) }
+                }
             }
-            @if has(Move::Done) {
-                (post_form(id, "done", "done", "stack-form", html! {
-                    label class="field" {
-                        span class="meta" { "Commits to link (one revision per line, optional)" }
-                        textarea name="commits" rows="2" {}
-                    }
-                    @if has(Move::ForceDone) {
-                        label class="check" {
-                            input type="checkbox" name="force" value="1";
-                            "Force: finish even with unchecked criteria"
+            @for a in acts.iter().filter(|a| a.offered && a.key != primary_key) { (render(a, false)) }
+            (post_form(id, archive_route, "archive", "side-form", side_button("archive", archive_label, false)))
+            @if !unavailable.is_empty() {
+                details class="unavailable" {
+                    summary { "Not available (" (unavailable.len()) ")" }
+                    ul class="plain" {
+                        @for a in &unavailable {
+                            li {
+                                button type="button" class="btn side-btn" disabled { (components::icon(a.icon)) (a.label) }
+                                span class="meta" { (a.reason) }
+                            }
                         }
                     }
-                    (button("Done"))
-                }))
-            } @else {
-                (disabled("Done", "ticket is closed"))
+                }
             }
-            @if has(Move::Abandon) {
-                (post_form(id, "abandon", "abandon", "stack-form", html! {
-                    label class="field" {
-                        span class="meta" { "Reason (required)" }
-                        input type="text" name="reason";
-                    }
-                    (button("Abandon"))
-                }))
-            } @else {
-                (disabled("Abandon", "ticket is closed"))
-            }
-            @if has(Move::Reopen) {
-                (post_form(id, "reopen", "reopen", "inline-form", button("Reopen")))
-            } @else {
-                (disabled("Reopen", "ticket is open"))
-            }
-            (post_form(id, archive.0, "archive", "inline-form", button(archive.1)))
-            @if closed { p class="meta" { "This ticket is closed." } }
-            (post_form(id, "commits", "commits", "stack-form", html! {
+        }
+        // The dialogs the buttons above open.
+        @if has(Move::Release) {
+            (dialog("dlg-release", "Release", post_form(id, "release", "release", "stack-form", html! {
                 label class="field" {
-                    span class="meta" { "Link commits (one revision per line)" }
+                    span class="meta" { "Handoff note (optional; blank keeps the current one)" }
+                    textarea name="handoff" rows="3" {}
+                }
+                (button("Release"))
+            })))
+        }
+        @if has(Move::Done) {
+            (dialog("dlg-done", "Done", post_form(id, "done", "done", "stack-form", html! {
+                label class="field" {
+                    span class="meta" { "Commits to link (one revision per line, optional)" }
                     textarea name="commits" rows="2" {}
                 }
-                (button("Link commits"))
-            }))
+                @if has(Move::ForceDone) {
+                    label class="check" {
+                        input type="checkbox" name="force" value="1";
+                        "Force: finish even with unchecked criteria"
+                    }
+                }
+                (button("Done"))
+            })))
+        }
+        @if has(Move::Abandon) {
+            (dialog("dlg-abandon", "Abandon", post_form(id, "abandon", "abandon", "stack-form", html! {
+                label class="field" {
+                    span class="meta" { "Reason (required)" }
+                    input type="text" name="reason";
+                }
+                (button("Abandon"))
+            })))
+        }
+        (dialog("dlg-commits", "Link commits", post_form(id, "commits", "commits", "stack-form", html! {
+            label class="field" {
+                span class="meta" { "One revision per line" }
+                textarea name="commits" rows="3" {}
+            }
+            (button("Link commits"))
+        })))
+    }
+}
+
+/// The write buttons whose dialogs are in [`tools`] (and `dlg-commits`).
+fn change_panel(t: &crate::model::Ticket) -> Markup {
+    html! {
+        section class="panel" {
+            h2 { "Change" }
+            (side_dialog("dlg-edit", "edit", "Edit"))
+            (side_dialog("dlg-move", "move", "Move"))
+            @if t.parent.is_none() { (side_dialog("dlg-subtask", "subtask", "Add subtask")) }
+            (side_dialog("dlg-blockers", "blocker", "Add blocker"))
+            (side_dialog("dlg-commits", "commit", "Link commits"))
+        }
+    }
+}
+
+/// Scope, claim and time facts, plus what Position means here.
+fn facts_panel(d: &TicketDetail, worktree: &str) -> Markup {
+    let t = &d.ticket;
+    html! {
+        section class="panel" {
+            h2 { "Details" }
+            dl class="facts" {
+                dt { "Project" } dd { (t.project.key) }
+                dt { "Worktree" } dd { (worktree) }
+                dt { "For" } dd { (t.for_who) }
+                @if let Some(c) = &t.claimed_by {
+                    dt { "Claimed by" }
+                    dd {
+                        (c.author)
+                        @if let Some(at) = &t.claim_touched_at { span class="meta" { " touched " (at) } }
+                    }
+                }
+                dt { "Created" } dd { (t.created_at) }
+                dt { "Updated" } dd { (t.updated_at) }
+                @if let Some(at) = &t.done_at { dt { "Done" } dd { (at) } }
+                @if let Some(at) = &t.archived_at { dt { "Archived" } dd { (at) } }
+            }
+            (position_note(d))
         }
     }
 }
 
 fn criterion(id: &str, c: &Criterion) -> Markup {
+    let n = c.number.to_string();
+    let control = format!("criterion-{n}");
     html! {
         li class="criterion" {
-            span class=(if c.checked { "check-mark check-done" } else { "check-mark" }) {
-                (if c.checked { "[x]" } else { "[ ]" })
+            div class="criterion-main" {
+                @if c.checked {
+                    (post_form(id, &format!("criteria/{n}/uncheck"), &control, "ring-form", html! {
+                        button type="submit" class="ring ring-done" aria-label=(format!("Uncheck criterion #{n}")) title=(format!("Uncheck criterion #{n}")) {
+                            (components::icon("tick"))
+                        }
+                    }))
+                } @else {
+                    (post_form(id, &format!("criteria/{n}/check"), &control, "ring-form", html! {
+                        button type="submit" class="ring" aria-label=(format!("Check criterion #{n}")) title=(format!("Check criterion #{n}")) {
+                            (components::icon("tick"))
+                        }
+                    }))
+                }
+                span class="criterion-ref" { "#" (c.number) }
+                span class=(if c.checked { "criterion-text criterion-done" } else { "criterion-text" }) { (c.text) }
+                div class="row-actions" {
+                    @if !c.checked {
+                        (dialog_icon(&format!("dlg-criterion-{n}"), "note", &format!("Check criterion #{n} with evidence")))
+                    }
+                    (post_form(id, &format!("criteria/{n}/remove"), &format!("criterion-rm-{n}"), "inline-form", button_icon("remove", &format!("Remove criterion #{n}"))))
+                }
             }
-            " " span class="criterion-ref" { "#" (c.number) }
-            " " span class="criterion-text" { (c.text) }
             @if let Some(ev) = &c.evidence {
                 div class="criterion-evidence" {
                     span class="meta" { "Evidence: " }
@@ -236,43 +444,49 @@ fn criterion(id: &str, c: &Criterion) -> Markup {
                 }
             }
             @if c.checked {
-                div class="meta" {
+                div class="meta criterion-by" {
                     "checked"
                     @if let Some(by) = &c.checked_by { " by " (by.author) }
                     @if let Some(at) = &c.checked_at { " at " (at) }
                 }
             }
-            @let n = c.number.to_string();
-            @let control = format!("criterion-{n}");
-            @if c.checked {
-                (post_form(id, &format!("criteria/{n}/uncheck"), &control, "inline-form", button("Uncheck")))
-            } @else {
-                (post_form(id, &format!("criteria/{n}/check"), &control, "inline-form", html! {
-                    label class="field" {
-                        span class="meta" { "Evidence (optional)" }
-                        input type="text" name="evidence";
-                    }
-                    (button("Check"))
-                }))
+            @if !c.checked {
+                (dialog(&format!("dlg-criterion-{n}"), &format!("Check criterion #{n}"),
+                    post_form(id, &format!("criteria/{n}/check"), &control, "stack-form", html! {
+                        label class="field" {
+                            span class="meta" { "Evidence (optional)" }
+                            input type="text" name="evidence";
+                        }
+                        (button("Check"))
+                    })))
             }
-            (post_form(id, &format!("criteria/{n}/remove"), &format!("criterion-rm-{n}"), "inline-form", button("Remove")))
         }
     }
 }
 
 fn comment(id: &str, expected: &str, c: &Comment) -> Markup {
+    let who = if c.role.as_deref() == Some("agent") {
+        "robot"
+    } else {
+        "person"
+    };
+    let dlg = format!("dlg-comment-{}", c.id);
     html! {
         li class="comment" id=(format!("comment-{}", c.id)) {
-            div class="meta" {
-                span class="comment-author" { (c.author) }
-                @if let Some(r) = &c.role { " (" (r) ")" }
-                @if let Some(s) = &c.session { " session " (s) }
-                " " (c.created_at)
-                @if let Some(e) = &c.edited_at { " - edited " (e) }
+            div class="comment-head" {
+                span class="comment-author" { (components::icon(who)) (c.author) }
+                @if let Some(r) = &c.role { span class="tag" { (r) } }
+                span class="meta" {
+                    (c.created_at)
+                    @if let Some(e) = &c.edited_at { " - edited " (e) }
+                    @if let Some(s) = &c.session { " - session " (s) }
+                }
+                div class="row-actions" {
+                    (dialog_icon(&dlg, "edit", &format!("Edit or delete comment {}", c.id)))
+                }
             }
             div class="prose" { (markdown::render(&c.body)) }
-            details class="comment-edit" {
-                summary { "Edit or delete" }
+            (dialog(&dlg, &format!("Comment {}", c.id), html! {
                 // The ticket's updated_at as rendered here: the edit is
                 // refused (409) when the ticket changed since.
                 (post_form(id, &format!("comments/{}/edit", c.id), &format!("comment-{}", c.id), "stack-form", html! {
@@ -281,7 +495,7 @@ fn comment(id: &str, expected: &str, c: &Comment) -> Markup {
                     (button_labeled("Save", &format!("Save comment {}", c.id)))
                 }))
                 (post_form(id, &format!("comments/{}/delete", c.id), &format!("comment-del-{}", c.id), "inline-form", button_labeled("Delete", &format!("Delete comment {}", c.id))))
-            }
+            }))
         }
     }
 }
@@ -294,7 +508,7 @@ fn blocker_row(id: &str, b: &Blocker) -> Markup {
             " " span class="meta" { (b.status) }
             " " span { (b.title) }
             @if let Some(w) = b.worktree.as_deref() { " " span class="meta" { "in " (dir_name(w)) } }
-            (post_form(id, &format!("blockers/{blocker}/remove"), &format!("blocker-rm-{}", b.id), "inline-form", button("Remove blocker")))
+            (post_form(id, &format!("blockers/{blocker}/remove"), &format!("blocker-rm-{}", b.id), "inline-form", button_icon("remove", &format!("Remove blocker {}", b.id))))
         }
     }
 }
@@ -328,135 +542,142 @@ pub fn region(conn: &Connection, id: &str, role: Role) -> Result<Markup> {
                 p class="meta" { a href="/" { "Tickets" } " / " (t.id) }
                 h1 class="detail-title" { span class="row-id" { (t.id) } " " (t.title) }
                 p class="detail-facts" {
-                    span class=(format!("status status-{}", t.status)) { (t.status) }
+                    span class=(format!("status status-{}", t.status)) {
+                        (components::status_icon(&t.status)) (t.status)
+                    }
                     " " span class="tag" { "for " (t.for_who) }
                     @if t.available { " " span class="tag" { "available" } }
                     @if t.blocked { " " span class="tag" { "blocked" } }
                     @if t.archived_at.is_some() { " " span class="tag" { "archived" } }
                 }
-                p class="meta" {
-                    "Project " (t.project.key) ", " (worktree)
-                    @if let Some(c) = &t.claimed_by {
-                        " - claimed by " (c.author)
-                        @if let Some(at) = &t.claim_touched_at { ", last touched " (at) }
-                    }
-                }
-                p class="meta" {
-                    "created " (t.created_at) ", updated " (t.updated_at)
-                    @if let Some(at) = &t.done_at { ", done " (at) }
-                    @if let Some(at) = &t.archived_at { ", archived " (at) }
-                }
                 @if let Some(p) = &t.parent {
                     p class="meta" { "Subtask of " a href=(ticket_link(p)) { (p) } }
                 }
             }
-            (actions(&d, role))
-            (position_note(&d))
-            (prose("Description", &d.description))
-            (prose("Plan", &d.plan))
-            (prose("Handoff", &d.handoff))
-            section class="detail-section" {
-                h2 { "Criteria" }
-                @if d.criteria.is_empty() {
-                    p class="meta" { "No criteria." }
-                } @else {
-                    p class="meta" { (checked) " of " (d.criteria.len()) " checked" }
-                    ul class="plain" { @for c in &d.criteria { (criterion(&t.id, c)) } }
-                }
-                (post_form(&t.id, "criteria", "criterion-add", "stack-form", html! {
-                    label class="field" {
-                        span class="meta" { "Add a criterion" }
-                        input type="text" name="text";
-                    }
-                    (button("Add criterion"))
-                }))
-            }
-            @if !t.blocked_by.is_empty() || !t.blocking_decisions.is_empty() {
-                section class="detail-section" {
-                    h2 { "Blocked by" }
-                    ul class="plain" {
-                        @for b in &t.blocked_by {
-                            (blocker_row(&t.id, b))
+            div class="detail-grid" {
+                div class="detail-main" {
+                    (prose("Description", &d.description))
+                    (prose("Plan", &d.plan))
+                    (prose("Handoff", &d.handoff))
+                    section class="detail-section" {
+                        h2 { "Criteria" }
+                        @if d.criteria.is_empty() {
+                            p class="meta" { "No criteria." }
+                        } @else {
+                            p class="meta" { (checked) " of " (d.criteria.len()) " checked" }
+                            ul class="plain" { @for c in &d.criteria { (criterion(&t.id, c)) } }
                         }
-                        @for dec in &t.blocking_decisions {
-                            li class="related" {
-                                span class="row-id" { (dec.id) }
-                                " " span class="meta" { "open Decision" }
-                                " " span { (dec.question) }
+                        (dialog_button_text("dlg-criterion-add", "plus", "Add criterion"))
+                        (dialog("dlg-criterion-add", "Add a criterion", post_form(&t.id, "criteria", "criterion-add", "stack-form", html! {
+                            label class="field" {
+                                span class="meta" { "Criterion" }
+                                input type="text" name="text";
                             }
-                        }
+                            (button("Add criterion"))
+                        })))
                     }
-                }
-            }
-            @if !blocks.is_empty() {
-                section class="detail-section" {
-                    h2 { "Blocks" }
-                    ul class="plain" {
-                        @for b in &blocks {
-                            (related(&b.id, &b.status, &b.title, b.worktree.as_deref(),
-                                if b.holding { "" } else { "no longer holding" }))
-                        }
-                    }
-                }
-            }
-            @if !t.subtasks.is_empty() {
-                section class="detail-section" {
-                    h2 { "Subtasks" }
-                    ul class="plain" {
-                        @for s in &t.subtasks { (related(&s.id, &s.status, &s.title, None, "")) }
-                    }
-                }
-            }
-            @if !d.decisions.is_empty() {
-                section class="detail-section" {
-                    h2 { "Decisions" }
-                    ul class="plain" {
-                        @for dec in &d.decisions {
-                            li class="related" {
-                                span class="row-id" { (dec.id) }
-                                " " span class="meta" { (dec.status) }
-                                " " span { (dec.question) }
-                                @if let Some(a) = &dec.answer {
-                                    div class="criterion-evidence" {
-                                        span class="meta" { "Answer: " } (a)
+                    @if !t.blocked_by.is_empty() || !t.blocking_decisions.is_empty() {
+                        section class="detail-section" {
+                            h2 { "Blocked by" }
+                            ul class="plain" {
+                                @for b in &t.blocked_by {
+                                    (blocker_row(&t.id, b))
+                                }
+                                @for dec in &t.blocking_decisions {
+                                    li class="related" {
+                                        span class="row-id" { (dec.id) }
+                                        " " span class="meta" { "open Decision" }
+                                        " " span { (dec.question) }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            }
-            @if !d.commits.is_empty() {
-                section class="detail-section" {
-                    h2 { "Commits" }
-                    ul class="plain" {
-                        @for c in &d.commits {
-                            li class="related" {
-                                code { (c.sha.chars().take(10).collect::<String>()) }
-                                @if let Some(b) = &c.branch { " " span class="meta" { (b) } }
-                                " " span class="meta" { "linked " (c.linked_at) }
+                    @if !blocks.is_empty() {
+                        section class="detail-section" {
+                            h2 { "Blocks" }
+                            ul class="plain" {
+                                @for b in &blocks {
+                                    (related(&b.id, &b.status, &b.title, b.worktree.as_deref(),
+                                        if b.holding { "" } else { "no longer holding" }))
+                                }
                             }
                         }
                     }
-                }
-            }
-            section class="detail-section" {
-                h2 { "Comments (" (d.comments.len()) ")" }
-                @if d.comments.is_empty() {
-                    p class="meta" { "No comments." }
-                } @else {
-                    ul class="plain" { @for c in &d.comments { (comment(&t.id, &t.updated_at, c)) } }
-                }
-                (post_form(&t.id, "comments", "comment-add", "stack-form", html! {
-                    label class="field" {
-                        span class="meta" { "Add a comment" }
-                        textarea name="body" rows="3" {}
+                    @if !t.subtasks.is_empty() {
+                        section class="detail-section" {
+                            h2 { "Subtasks" }
+                            ul class="plain" {
+                                @for s in &t.subtasks { (related(&s.id, &s.status, &s.title, None, "")) }
+                            }
+                        }
                     }
-                    (button("Add comment"))
-                }))
+                    @if !d.decisions.is_empty() {
+                        section class="detail-section" {
+                            h2 { "Decisions" }
+                            ul class="plain" {
+                                @for dec in &d.decisions {
+                                    li class="related" {
+                                        span class="row-id" { (dec.id) }
+                                        " " span class="meta" { (dec.status) }
+                                        " " span { (dec.question) }
+                                        @if let Some(a) = &dec.answer {
+                                            div class="criterion-evidence" {
+                                                span class="meta" { "Answer: " } (a)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    @if !d.commits.is_empty() {
+                        section class="detail-section" {
+                            h2 { "Commits" }
+                            ul class="plain" {
+                                @for c in &d.commits {
+                                    li class="related" {
+                                        code { (c.sha.chars().take(10).collect::<String>()) }
+                                        @if let Some(b) = &c.branch { " " span class="meta" { (b) } }
+                                        " " span class="meta" { "linked " (c.linked_at) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    section class="detail-section" {
+                        h2 { "Comments (" (d.comments.len()) ")" }
+                        @if d.comments.is_empty() {
+                            p class="meta" { "No comments." }
+                        } @else {
+                            ul class="plain comments" { @for c in &d.comments { (comment(&t.id, &t.updated_at, c)) } }
+                        }
+                        (post_form(&t.id, "comments", "comment-add", "stack-form", html! {
+                            label class="field" {
+                                span class="meta" { "Add a comment" }
+                                textarea name="body" rows="3" {}
+                            }
+                            (button("Add comment"))
+                        }))
+                    }
+                }
+                aside class="detail-side" {
+                    (actions(&d, role))
+                    (change_panel(t))
+                    (facts_panel(&d, &worktree))
+                }
             }
         }
     })
+}
+
+/// A text button with an icon that opens a dialog (inline, not the side panel).
+fn dialog_button_text(dialog_id: &str, icon: &str, label: &str) -> Markup {
+    html! {
+        button type="button" class="btn" data-dialog-open=(dialog_id) {
+            (components::icon(icon)) (label)
+        }
+    }
 }
 
 /// The edit form. It is not part of [`region`]: the live stream re-patches
@@ -472,7 +693,6 @@ pub fn edit_form(d: &TicketDetail) -> Markup {
     };
     html! {
         div id="ticket-edit" {
-            h2 { "Edit" }
             (post_form(&t.id, "edit", "edit", "stack-form", html! {
                 input type="hidden" name="expected_updated_at" value=(t.updated_at);
                 label class="field" {
@@ -562,7 +782,6 @@ pub fn move_section(d: &TicketDetail, siblings: &[SiblingRef]) -> Markup {
     let id = t.id.as_str();
     html! {
         div id="ticket-move" {
-            h2 { "Move before or after" }
             @if Status::is_settled(&t.status) {
                 p class="meta" { "A " (t.status) " ticket keeps its Position and cannot be moved." }
             } @else if siblings.is_empty() {
@@ -606,7 +825,6 @@ pub fn move_section_read(conn: &Connection, id: &str) -> Result<Markup> {
 pub fn subtask_form(id: &str, existing: usize) -> Markup {
     html! {
         div id="ticket-subtask" {
-            h2 { "Add a subtask" }
             (post_form_id(&format!("subtask-form-{existing}"), id, "subtasks", "subtask-add", "stack-form", html! {
                 label class="field" {
                     span class="meta" { "Title" }
@@ -636,7 +854,6 @@ pub const PICKER_ROWS: usize = 20;
 fn blocker_picker(id: &str) -> Markup {
     html! {
         div id="ticket-blockers" {
-            h2 { "Add a blocker" }
             form class="inline-form"
                 "data-on:input__debounce.250ms"=(format!("@get('{}/blocker-search', {{contentType: 'form'}})", ticket_link(id)))
                 data-on:submit=(format!("@get('{}/blocker-search', {{contentType: 'form'}})", ticket_link(id))) {
@@ -666,7 +883,7 @@ pub fn blocker_results(id: &str, candidates: &[(String, String, String)], total:
                             span class="row-id" { (cid) }
                             " " span class="meta" { (status) }
                             " " span { (title) }
-                            form class="inline-form"
+                            form class="inline-form" data-err="err-blocker-add"
                                 data-on:submit=(format!("@post('{}/blockers', {{contentType: 'form'}})", ticket_link(id))) {
                                 input type="hidden" name="blocker" value=(cid);
                                 (button("Add"))
@@ -683,21 +900,17 @@ pub fn blocker_results(id: &str, candidates: &[(String, String, String)], total:
 }
 
 /// The write forms that must survive a live update: edit, move, blocker picker
-/// and add-subtask. Rendered once by the page, outside the patched region.
+/// and add-subtask, each in a modal dialog opened from a button in the region.
+/// Rendered once by the page, outside the patched region.
 pub fn tools(d: &TicketDetail, siblings: &[SiblingRef]) -> Markup {
     let t = &d.ticket;
     html! {
         div id="ticket-tools" {
-            section class="detail-section" { (edit_form(d)) }
-            section class="detail-section" { (move_section(d, siblings)) }
-            section class="detail-section" { (blocker_picker(&t.id)) }
-            section class="detail-section" {
-                @if t.parent.is_some() {
-                    h2 { "Subtasks" }
-                    p class="meta" { "This ticket is a subtask; tickets nest two levels deep." }
-                } @else {
-                    (subtask_form(&t.id, t.subtasks.len()))
-                }
+            (dialog_with("dlg-edit", "Edit", "dialog dialog-wide", "Cancel", edit_form(d)))
+            (dialog("dlg-move", "Move before or after", move_section(d, siblings)))
+            (dialog_with("dlg-blockers", "Add a blocker", "dialog", "Close", blocker_picker(&t.id)))
+            @if t.parent.is_none() {
+                (dialog("dlg-subtask", "Add a subtask", subtask_form(&t.id, t.subtasks.len())))
             }
         }
     }
@@ -826,6 +1039,25 @@ mod tests {
         }
         let d = ticket::show(&c, &id).unwrap();
         assert!(tools(&d, &[]).into_string().contains("ticket-edit"));
+    }
+
+    #[test]
+    fn forms_with_input_open_in_dialogs_not_inline() {
+        let (_d, p) = db();
+        let mut c = crate::db::open(&p).unwrap();
+        let id = add(&mut c, "T", "d", "p", &[]);
+        let html = live(&p, &id).unwrap();
+        for dlg in ["dlg-done", "dlg-abandon", "dlg-commits"] {
+            assert!(
+                html.contains(&format!("<dialog id=\"{dlg}\"")),
+                "{dlg}: {html}"
+            );
+            assert!(
+                html.contains(&format!("data-dialog-open=\"{dlg}\"")),
+                "{dlg}"
+            );
+        }
+        assert!(!html.contains("comment-edit"), "{html}");
     }
 
     #[test]

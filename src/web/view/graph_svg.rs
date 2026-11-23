@@ -211,7 +211,7 @@ pub fn render(g: &Graph, l: &Layout) -> Markup {
         g.edges.len()
     );
     html! {
-        svg class="graph-svg" role="img" aria-label=(summary)
+        svg class="graph-svg" role="group" aria-label=(summary)
             viewBox=(format!("0 0 {width} {height}")) width=(width) height=(height) {
             @for e in &g.edges {
                 @if let (Some(&f), Some(&t)) = (index.get(e.from.as_str()), index.get(e.to.as_str())) {

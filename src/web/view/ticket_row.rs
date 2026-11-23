@@ -4,14 +4,15 @@
 use maud::{Markup, html};
 
 use crate::model::Ticket;
+use crate::web::view::components;
 
 /// Whether the ticket detail screen is served. Until it is, the id is plain
 /// text instead of a dead link. The screen's ticket flips this.
 const DETAIL_BUILT: bool = true;
 
-/// The `[blocked by ...]` text of a blocked ticket, as the CLI's text list
-/// writes it: blocker ids with the Worktree directory name and `(abandoned)`,
-/// then open Decision ids. `None` when nothing is named.
+/// The "blocked by ..." label of a blocked ticket: blocker ids with the
+/// Worktree directory name and `(abandoned)`, then open Decision ids. `None`
+/// when nothing is named.
 pub fn blocked_by(t: &Ticket) -> Option<String> {
     if !t.blocked {
         return None;
@@ -39,11 +40,11 @@ pub fn blocked_by(t: &Ticket) -> Option<String> {
     if names.is_empty() {
         None
     } else {
-        Some(format!("[blocked by {}]", names.join(", ")))
+        Some(format!("blocked by {}", names.join(", ")))
     }
 }
 
-/// The row: status as text (never colour alone), id, title, and the markers
+/// The row: status as an icon and a word (never colour alone), id, title, and the markers
 /// that matter when scanning (human, claimed, blocked). `data-id` is what the
 /// keyboard selection keys on.
 pub fn row(t: &Ticket) -> Markup {
@@ -54,7 +55,9 @@ pub fn row(t: &Ticket) -> Markup {
     };
     html! {
         li class="row" data-id=(t.id) {
-            span class=(format!("status status-{status_class}")) { (t.status) }
+            span class=(format!("status status-{status_class}")) {
+                (components::status_icon(status_class)) (t.status)
+            }
             @if DETAIL_BUILT {
                 a class="row-id" href=(format!("/ticket/{}", t.id)) { (t.id) }
             } @else {
@@ -71,7 +74,7 @@ pub fn row(t: &Ticket) -> Markup {
                 span class="tag" { "claimed by " (c.author) }
             }
             @if let Some(b) = blocked_by(t) {
-                span class="row-blocked" { (b) }
+                (components::blocked_cue(&b))
             }
         }
     }
@@ -138,9 +141,35 @@ mod tests {
         }];
         assert_eq!(
             blocked_by(&t).unwrap(),
-            "[blocked by SCR-9 in feat-b, SCR-8 (abandoned), D-2]"
+            "blocked by SCR-9 in feat-b, SCR-8 (abandoned), D-2"
         );
         assert!(blocked_by(&ticket("x")).is_none());
+    }
+
+    #[test]
+    fn each_status_has_its_own_shape_and_the_word_stays() {
+        let mut seen = std::collections::HashSet::new();
+        for status in [
+            "draft",
+            "ready",
+            "available",
+            "active",
+            "done",
+            "blocked",
+            "abandoned",
+        ] {
+            let svg = components::status_icon(status).into_string();
+            assert!(svg.contains("aria-hidden=\"true\""), "{status}: {svg}");
+            // Ready is the plain circle; every other status differs from it and from each other.
+            assert!(seen.insert(svg), "{status} repeats another shape");
+        }
+        let mut t = ticket("x");
+        t.status = "active".into();
+        let html = row(&t).into_string();
+        assert!(
+            html.contains("</svg>active</span>"),
+            "word beside the icon: {html}"
+        );
     }
 
     #[test]

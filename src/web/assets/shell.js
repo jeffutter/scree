@@ -45,10 +45,12 @@
   });
 })();
 
-// Scope picker: a change submits the GET form; the server renders the page for
-// the chosen scope. Without script the Apply button does the same.
+// Scope picker and page filters: a change submits the GET form; the server
+// renders the page for the chosen scope. Without script the Apply or Filter
+// button, which is inside <noscript>, does the same.
 document.addEventListener("change", (e) => {
-  const form = e.target instanceof Element && e.target.closest("form[data-picker]");
+  const form =
+    e.target instanceof Element && e.target.closest("form[data-picker], form[data-autosubmit]");
   if (!form) return;
   // The Worktree select still holds the old Project's value; leave it out so
   // the server treats the new Project as Project-wide.
@@ -174,5 +176,89 @@ document.addEventListener("change", (e) => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape")
       document.querySelectorAll("[data-confirm][data-armed]").forEach(disarm);
+  });
+})();
+
+// Modal dialogs (ticket detail): a button with data-dialog-open="ID" opens the
+// <dialog>; Cancel (data-dialog-close) and Esc close it. A live patch rewrites
+// the region and drops the `open` attribute of a dialog the user is typing in,
+// so the ids of the open dialogs are remembered and re-opened after each
+// patch. A form that was accepted (its err slot is empty once the request
+// finishes) closes its dialog.
+(() => {
+  const openIds = new Set();
+  const dlg = (id) => document.getElementById(id);
+
+  document.addEventListener("click", (e) => {
+    if (!(e.target instanceof Element)) return;
+    const opener = e.target.closest("[data-dialog-open]");
+    if (opener) {
+      const d = dlg(opener.dataset.dialogOpen);
+      if (d && !d.open) {
+        d.showModal();
+        openIds.add(d.id);
+      }
+      return;
+    }
+    if (e.target.closest("[data-dialog-close]")) {
+      const d = e.target.closest("dialog");
+      if (d) d.close();
+    }
+  });
+
+  // Esc closes through the dialog itself; keep the remembered ids in step.
+  document.addEventListener(
+    "close",
+    (e) => {
+      if (e.target instanceof HTMLDialogElement) openIds.delete(e.target.id);
+    },
+    true,
+  );
+  document.addEventListener("click", (e) => {
+    const d = e.target;
+    if (!(d instanceof HTMLDialogElement) || !d.open) return;
+    // The dialog is the target for its own padding too; only a click outside
+    // its box is a backdrop click.
+    const r = d.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) d.close();
+  });
+
+  const reopen = () => {
+    for (const id of openIds) {
+      const d = dlg(id);
+      if (!d) openIds.delete(id);
+      else if (!d.open) d.showModal();
+    }
+  };
+  const live = document.getElementById("ticket-live");
+  if (live) {
+    new MutationObserver(reopen).observe(live, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["open"],
+    });
+  }
+
+  // A POSTed form closes its dialog when its error slot is empty once the
+  // request finishes, and its fields are cleared for the next use. The slot is
+  // the form's next sibling, or the id in data-err. A GET (the blocker search)
+  // has neither, so it never closes anything.
+  document.addEventListener("datastar-fetch", (e) => {
+    if (!e.detail || e.detail.type !== "finished") return;
+    const form = e.detail.el;
+    const d = form instanceof HTMLFormElement && form.closest("dialog");
+    if (!d) return;
+    const slot = form.dataset.err
+      ? document.getElementById(form.dataset.err)
+      : form.nextElementSibling;
+    if (!slot || !slot.id.startsWith("err-")) return;
+    // The refusal fragment is patched in before "finished" is delivered.
+    setTimeout(() => {
+      if (slot.childElementCount !== 0 || slot.textContent.trim() !== "") return;
+      d.close();
+      d.querySelectorAll("form").forEach((f) => f.reset());
+    }, 0);
   });
 })();

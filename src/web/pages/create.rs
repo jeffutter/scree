@@ -67,9 +67,10 @@ pub fn form(filter: &ScopeFilter, mode: Mode, created: Option<&str>) -> Markup {
     if matches!(filter, ScopeFilter::All) {
         return html! {
             div id=(container) {
-                (components::empty(
-                    "Pick a Project to create a ticket",
-                    "Choose a Project (and Worktree) above, then create the ticket there."))
+                p class="meta" {
+                    "Pick a Project to create a ticket"
+                    " - choose a Project (and Worktree) above, then create the ticket there."
+                }
             }
         };
     }

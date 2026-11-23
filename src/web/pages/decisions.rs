@@ -191,20 +191,30 @@ fn selection(conn: &Connection, queue: &[OpenDecision], q: &DecisionsQuery) -> R
 
 fn summary(s: &Summary) -> Markup {
     html! {
-        section class="detail-section" aria-labelledby="decision-question" {
+        section class="panel decision-panel" aria-labelledby="decision-question" {
             p class="meta" { span class="row-id" { (s.id) } }
             h2 id="decision-question" class="detail-title" { (s.question) }
             @if s.options.is_empty() {
                 p class="meta" { "No options were offered." }
             } @else {
                 ol class="options" {
-                    @for o in &s.options { li { (o) } }
+                    @for o in &s.options {
+                        li {
+                            (o)
+                            @if s.recommendation.as_deref() == Some(o.as_str()) {
+                                " " span class="tag" { "recommended" }
+                            }
+                        }
+                    }
                 }
             }
+            // The recommendation is normally one of the options and is marked
+            // there; a free-text one is shown on its own.
             @match &s.recommendation {
-                Some(r) => p class="recommendation" {
+                Some(r) if !s.options.contains(r) => p class="recommendation" {
                     span class="tag" { "recommended" } " " (r)
                 },
+                Some(_) => {},
                 None => p class="meta" { "No recommendation." },
             }
             h3 { "Unblocks" }
@@ -281,12 +291,12 @@ fn actions(scope: &ScopeFilter, s: &Summary) -> Markup {
     let mut scope_fields = Vec::new();
     hidden(&mut scope_fields);
     html! {
-        div id="decision-actions" {
+        div id="decision-actions" class="panel" {
             @if s.recommendation.is_some() {
                 form class="inline-form" data-on:submit=(format!("@post('/decisions/{id}/accept', {{contentType: 'form'}})")) {
                     @for (k, v) in &scope_fields { input type="hidden" name=(k) value=(v); }
-                    button type="submit" class="btn" data-confirm="Click again to accept" {
-                        "Accept recommendation"
+                    button type="submit" class="btn btn-primary" data-confirm="Click again to accept" {
+                        (components::icon("check")) "Accept recommendation"
                     }
                 }
                 div id="err-accept" {}
@@ -301,7 +311,7 @@ fn actions(scope: &ScopeFilter, s: &Summary) -> Markup {
                     span class="meta" { "Rationale (optional)" }
                     textarea name="rationale" rows="3" {}
                 }
-                button type="submit" class="btn" { "Answer" }
+                button type="submit" class=(if s.recommendation.is_some() { "btn" } else { "btn btn-primary" }) { "Answer" }
             }
             div id="err-answer" {}
         }
@@ -319,9 +329,11 @@ fn body(conn: &Connection, scope: &Scope, q: &DecisionsQuery) -> Result<Markup> 
     let view: String = form_urlencoded::byte_serialize(live_view(scope, q).as_bytes()).collect();
     Ok(html! {
         h1 { "Decisions" }
-        (picker::picker(scope, Route::Decisions.path()))
-        div id="decisions" data-init=(format!("@get('/stream?view={view}')")) { (region) }
-        (forms)
+        (picker::bar(picker::picker(scope, Route::Decisions.path())))
+        div class="decisions-layout" {
+            div id="decisions" data-init=(format!("@get('/stream?view={view}')")) { (region) }
+            (forms)
+        }
     })
 }
 
@@ -444,7 +456,7 @@ async fn settle(
     match result {
         Ok((id, scope, next)) => Html(
             html! {
-                div id="decision-actions" {
+                div id="decision-actions" class="panel" {
                     p class="notice-hint" role="status" { "Answered " (id) "." }
                     @match next {
                         Some(n) => p { a href=(href(&scope, &[("d", n)])) { "Next open Decision" } },
@@ -481,6 +493,23 @@ pub async fn answer(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_recommended_option_is_marked_in_the_list() {
+        let html = summary(&Summary {
+            id: "LOCAL-D-1".into(),
+            question: "Which?".into(),
+            options: vec!["Redis".into(), "SQLite".into()],
+            recommendation: Some("SQLite".into()),
+            tickets: vec![],
+        })
+        .into_string();
+        assert!(
+            html.contains("SQLite <span class=\"tag\">recommended</span>"),
+            "{html}"
+        );
+        assert_eq!(html.matches("recommended").count(), 1, "{html}");
+    }
+
     use super::*;
 
     fn pairs(q: &str) -> Vec<(String, String)> {

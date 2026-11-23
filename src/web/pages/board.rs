@@ -223,7 +223,7 @@ fn card(t: &Ticket, cutoff: &str) -> Markup {
     let done_subtasks = t.subtasks.iter().filter(|s| s.status == "done").count();
     let blocked = t
         .blocked
-        .then(|| ticket_row::blocked_by(t).unwrap_or_else(|| "[blocked]".into()));
+        .then(|| ticket_row::blocked_by(t).unwrap_or_else(|| "blocked".into()));
     let moves = Move::offered(&t.status, t.available);
     html! {
         li class="card" data-id=(t.id) {
@@ -232,7 +232,7 @@ fn card(t: &Ticket, cutoff: &str) -> Markup {
                 @if t.for_who == "human" { span class="tag" { "human" } }
             }
             p class="card-title" { (t.title) }
-            @if let Some(b) = blocked { p class="row-blocked" { (b) } }
+            @if let Some(b) = blocked { p class="card-cue" { (components::blocked_cue(&b)) } }
             p class="card-meta" {
                 @if !t.subtasks.is_empty() {
                     span { (done_subtasks) "/" (t.subtasks.len()) " subtasks" }
@@ -335,7 +335,7 @@ pub fn region(conn: &Connection, scope: &Scope, q: &BoardQuery) -> Result<Markup
 
 fn filters(scope: &Scope, q: &BoardQuery) -> Markup {
     html! {
-        form class="filters" method="get" action=(Route::Board.path()) role="search" {
+        form class="filters" method="get" action=(Route::Board.path()) role="search" data-autosubmit {
             @for (k, v) in scope::pairs(&scope.filter) { input type="hidden" name=(k) value=(v); }
             label class="field" {
                 span class="picker-label" { "For" }
@@ -345,7 +345,7 @@ fn filters(scope: &Scope, q: &BoardQuery) -> Markup {
                     option value="human" selected[q.for_who == Some(ForWho::Human)] { "human" }
                 }
             }
-            button type="submit" class="btn" { "Filter" }
+            noscript { button type="submit" class="btn" { "Filter" } }
         }
     }
 }
@@ -356,8 +356,7 @@ fn body(conn: &Connection, scope: &Scope, q: &BoardQuery) -> Result<Markup> {
         form_urlencoded::byte_serialize(href(&scope.filter, &q.pairs()).as_bytes()).collect();
     Ok(html! {
         h1 { "Board" }
-        (picker::picker(scope, Route::Board.path()))
-        (filters(scope, q))
+        (picker::bar(html! { (picker::picker(scope, Route::Board.path())) (filters(scope, q)) }))
         div id="board" data-init=(format!("@get('/stream?view={view}')")) { (region) }
     })
 }
@@ -586,7 +585,7 @@ mod tests {
         for want in [
             "data-id=\"SCR-1\"",
             "human",
-            "[blocked]",
+            "cue-blocked",
             "1/2 subtasks",
             "criteria 1/3",
             "claimed by ann",

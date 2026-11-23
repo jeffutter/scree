@@ -1,7 +1,7 @@
 //! The scope picker: two selects in a GET form. Choosing a Project submits and
 //! the server renders the Worktree select for it, so no script repopulates
-//! anything (`shell.js` only submits on change; the Apply button covers the
-//! no-script case). The values are the ones `web::scope::parse` reads.
+//! anything (`shell.js` only submits on change; the Apply button, shown only
+//! without script, covers that case). The values are the ones `web::scope::parse` reads.
 
 use maud::{Markup, html};
 
@@ -18,6 +18,12 @@ pub fn qualify_ids(scope: &Scope) -> bool {
         }
         ScopeFilter::Project { .. } | ScopeFilter::Worktree { .. } => false,
     }
+}
+
+/// The toolbar row every screen opens with: the picker and the page's own
+/// filters side by side, wrapping on a narrow screen.
+pub fn bar(inner: Markup) -> Markup {
+    html! { div class="bar" { (inner) } }
 }
 
 /// The picker as a form that GETs `action`.
@@ -75,7 +81,7 @@ pub fn picker(scope: &Scope, action: &str) -> Markup {
                     }
                 }
             }
-            button class="btn" type="submit" { "Apply" }
+            noscript { button class="btn" type="submit" { "Apply" } }
             div id="err-scope" {}
         }
     }

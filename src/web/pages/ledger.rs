@@ -151,17 +151,18 @@ fn row(scope: &Scope, current: Option<&str>, d: &DecidedDecision) -> Markup {
     html! {
         li class="row" data-id=(id) aria-current=[on.then_some("true")] {
             a class="row-id" href=(href(&scope.filter, &[("d", id.clone())])) { (id) }
-            span class="row-title" { (d.question) }
+            span class="row-title ledger-question" { (d.question) }
             @if let Some(by) = &d.superseded_by {
                 span class="tag" { "superseded by " (d.project.key) "-" (by) }
             }
-            p class="meta" {
+            p class="ledger-answer" {
                 "Answer: " (d.answer.as_deref().unwrap_or("(no answer text)"))
             }
             @if let Some(r) = &d.rationale {
                 p class="meta" { "Rationale: " (r) }
             }
-            p class="meta" {
+            p class="meta ledger-by" {
+                (components::icon("person"))
                 "Decided by " (d.decided_by.as_deref().unwrap_or("someone"))
                 @if !when.is_empty() { " on " (when) }
                 @if !d.tickets.is_empty() {
@@ -217,7 +218,7 @@ pub fn region(conn: &Connection, scope: &Scope, q: &LedgerQuery) -> Result<Marku
 /// The supersede form for the selected Decision. Outside the live region.
 fn actions(scope: &Scope, selected: Option<&str>) -> Markup {
     html! {
-        div id="ledger-actions" {
+        div id="ledger-actions" class=[selected.map(|_| "panel")] {
             @if let Some(id) = selected {
                 form class="stack-form" data-on:submit=(format!("@post('/ledger/{id}/supersede', {{contentType: 'form'}})")) {
                     @for (k, v) in scope::pairs(&scope.filter) { input type="hidden" name=(k) value=(v); }
@@ -238,7 +239,7 @@ fn actions(scope: &Scope, selected: Option<&str>) -> Markup {
 
 fn filters(scope: &Scope, q: &LedgerQuery) -> Markup {
     html! {
-        form class="filters" method="get" action=(Route::Ledger.path()) role="search" {
+        form class="filters" method="get" action=(Route::Ledger.path()) role="search" data-autosubmit {
             @for (k, v) in scope::pairs(&scope.filter) { input type="hidden" name=(k) value=(v); }
             label class="field" {
                 span class="picker-label" { "Search" }
@@ -253,7 +254,7 @@ fn filters(scope: &Scope, q: &LedgerQuery) -> Markup {
                 input type="checkbox" name="superseded" value="1" checked[q.superseded];
                 " show superseded"
             }
-            button type="submit" class="btn" { "Filter" }
+            noscript { button type="submit" class="btn" { "Filter" } }
         }
     }
 }
@@ -280,8 +281,7 @@ fn body(conn: &Connection, scope: &Scope, q: &LedgerQuery) -> Result<Markup> {
     let view: String = form_urlencoded::byte_serialize(live_view(scope, q).as_bytes()).collect();
     Ok(html! {
         h1 { "Ledger" }
-        (picker::picker(scope, Route::Ledger.path()))
-        (filters(scope, q))
+        (picker::bar(html! { (picker::picker(scope, Route::Ledger.path())) (filters(scope, q)) }))
         div id="ledger" data-init=(format!("@get('/stream?view={view}')")) { (region) }
         (actions(scope, selected.as_deref()))
     })
@@ -374,7 +374,7 @@ pub async fn supersede(
     match result {
         Ok((id, by)) => Html(
             html! {
-                div id="ledger-actions" {
+                div id="ledger-actions" class="panel" {
                     p class="notice-hint" role="status" { (id) " superseded by " (by) "." }
                 }
             }

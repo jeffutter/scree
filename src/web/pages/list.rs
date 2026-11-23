@@ -285,12 +285,12 @@ fn filter_bar(scope: &Scope, q: &ListQuery) -> Markup {
         &q.statuses
     };
     html! {
-        form class="filters" method="get" action=(Route::List.path()) role="search" {
+        form class="filters" method="get" action=(Route::List.path()) role="search" data-autosubmit {
             @for (k, v) in scope::pairs(&scope.filter) {
                 input type="hidden" name=(k) value=(v);
             }
-            fieldset class="filter-group" {
-                legend { "Status" }
+            div class="filter-group" role="group" aria-labelledby="fg-status" {
+                span class="picker-label" id="fg-status" { "Status" }
                 @for s in Status::ALL {
                     (checkbox("status", s.as_str(), s.as_str(), statuses.contains(&s)))
                 }
@@ -304,23 +304,27 @@ fn filter_bar(scope: &Scope, q: &ListQuery) -> Markup {
                     }
                 }
             }
-            fieldset class="filter-group" {
-                legend { "Only" }
+            div class="filter-group" role="group" aria-labelledby="fg-only" {
+                span class="picker-label" id="fg-only" { "Only" }
                 (checkbox("blocked", "blocked", "1", q.blocked))
                 (checkbox("available", "available", "1", q.available))
                 (checkbox("stale", "stale claims", "1", q.stale))
                 (checkbox("archived", "include archived", "1", q.archived))
             }
-            label class="field" {
-                span class="picker-label" { "Stale after" }
-                input type="text" name="older-than" value=(q.older_than.as_deref().unwrap_or(""))
-                    placeholder="4h";
+            // Only meaningful with "stale claims"; ticking it re-renders the
+            // page with the field.
+            @if q.stale || q.older_than.is_some() {
+                label class="field" {
+                    span class="picker-label" { "Stale after" }
+                    input type="text" name="older-than" value=(q.older_than.as_deref().unwrap_or(""))
+                        placeholder="4h";
+                }
             }
             label class="field field-search" {
                 span class="picker-label" { "Search" }
                 input type="search" id="q" name="q" value=(q.q);
             }
-            button class="btn" type="submit" { "Apply filters" }
+            noscript { button class="btn" type="submit" { "Apply filters" } }
             div id="err-filter" {}
         }
     }
@@ -343,16 +347,15 @@ fn body(conn: &Connection, scope: &Scope, q: &ListQuery, role: &str) -> Result<M
     let view: String = form_urlencoded::byte_serialize(live_view(scope, q).as_bytes()).collect();
     Ok(html! {
         h1 { "Tickets" }
-        (picker::picker(scope, Route::List.path()))
+        (picker::bar(html! { (picker::picker(scope, Route::List.path())) (filter_bar(scope, q)) }))
+        p class="saved" {
+            "Saved: " a href=(next) { "Next for me" } " " a href=(stale) { "Stale claims" }
+        }
         (create::form(&scope.filter, create::Mode::Quick, None))
         @if !matches!(scope.filter, ScopeFilter::All) {
             p class="more" {
                 a href=(format!("/new?{}", scope::query(&scope.filter))) { "Full form" }
             }
-        }
-        (filter_bar(scope, q))
-        p class="saved" {
-            "Saved: " a href=(next) { "Next for me" } " " a href=(stale) { "Stale claims" }
         }
         @if q.is_filtered() {
             p class="more" { a href=(href(&scope.filter, &[])) { "Clear filters" } }
