@@ -72,6 +72,10 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
     let live = state.live.clone();
     let router = Router::new()
         .route("/", get(pages::list::index))
+        .route(
+            "/new",
+            get(pages::create::new_page).post(pages::create::create),
+        )
         .route("/ticket/{id}", get(pages::ticket::show))
         .route("/stream", get(sse::stream))
         .merge(handlers::router())

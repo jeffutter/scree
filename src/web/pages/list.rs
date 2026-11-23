@@ -17,6 +17,7 @@ use crate::identity::{Identity, Role};
 use crate::ticket::{self, ScopeFilter};
 use crate::web::AppState;
 use crate::web::error::WebError;
+use crate::web::pages::create;
 use crate::web::scope::{self, Scope, Scoped};
 use crate::web::state::blocking;
 use crate::web::view::components::{self, FIRST_RENDER_ROWS};
@@ -343,6 +344,12 @@ fn body(conn: &Connection, scope: &Scope, q: &ListQuery, role: &str) -> Result<M
     Ok(html! {
         h1 { "Tickets" }
         (picker::picker(scope, Route::List.path()))
+        (create::form(&scope.filter, create::Mode::Quick, None))
+        @if !matches!(scope.filter, ScopeFilter::All) {
+            p class="more" {
+                a href=(format!("/new?{}", scope::query(&scope.filter))) { "Full form" }
+            }
+        }
         (filter_bar(scope, q))
         p class="saved" {
             "Saved: " a href=(next) { "Next for me" } " " a href=(stale) { "Stale claims" }

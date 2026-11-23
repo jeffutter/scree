@@ -209,6 +209,17 @@ The same handlers file also holds the blocker, edit, preview and subtask routes.
 - **State walk**: empty (no blockers, "No matching tickets"), loading n/a, error (inline `err-...`), stale (409 above), long content (inputs and textareas are full width, rows wrap), scale (the picker caps at 20).
 - **Browser check** (by hand against Datastar 1.0.5, `scree web` on a temporary `SCREE_DB`): typed text in the plan textarea and the subtask title, focus in the textarea, then `scree comment add` and `scree criterion add` from a terminal. The region showed the new comment, and the typed text and focus stayed. Save then showed the 409 text next to the form with the text kept. After a reload, a save worked, a second save right after it did not 409, Preview showed the rendered text, the picker found and added a ticket and the Blocked by list showed a Remove blocker button, and Add subtask listed the child and emptied the title field.
 
+## Create
+
+`GET /new` shows the full form for the picked scope (`?p=&w=`); the List shows the quick form above its rows, outside the live-patched region, with a "Full form" link. Both post urlencoded to `POST /new`.
+
+- Fields: `title`, `status` (draft default, or ready), `for` (agent default, or human). Quick adds `parent`; full adds `description`, `plan`, `criteria` (one per line, blanks dropped) and `blockers` (ids separated by spaces or commas). Hidden fields `p`, `w` and `mode` carry the scope and the form kind.
+- Scope: `p`/`w` name the Project and Worktree (`w` absent or `@root` is the root checkout); an empty `p` is the unscoped Project; a `parent` decides the Project and Worktree of a subtask and the picked scope is ignored. All Projects shows "Pick a Project to create a ticket" and no form; a POST without `p` (or `@all`) and no parent is 400.
+- Success: 200 with the form container (`create-quick` or `create-full`), a "Created ID" link and an empty form with a new element id, so typed text clears only on success. Refusals use the control `create`: 400 empty title or bad `status`/`for`, 404 unknown Project, Worktree, parent or blocker, 422 a gone directory or a rule (closed parent, cycle, cross-Project blocker). The form keeps its text.
+- Role: the web is always the human Role, so `for human` can be created. The rule that an agent cannot take a `for human` ticket is on `start` (GLOSSARY "for"), not on create.
+- States: empty n/a; loading n/a (one round trip); error `err-create`; stale/permission-like: the gone directory 422 and the all-Projects state; long content: wrapping textareas and long titles wrap; scale n/a.
+- Never sweeps.
+
 ## Sweep
 
 The web never sweeps. Sweeping archives or abandons the tickets of a removed Worktree (docs/data-model.md, Sweep) and needs git and writes; a server must not run git or write on a page load, and there is no daemon. So tickets of a removed Worktree stay as they are in the web until a sweeping CLI command (`next`, `list`, `add`, `start`, `done` or `scree sweep`) runs for that Project. No file under `src/web/` may name the sweep module: `web_never_sweeps` in `tests/web.rs` fails if one does, and `web_pages_leave_a_removed_worktrees_tickets_for_the_cli_to_sweep` shows the pages leave such tickets unchanged until the CLI sweeps them.

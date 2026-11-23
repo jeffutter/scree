@@ -1964,3 +1964,272 @@ fn the_page_keeps_write_forms_outside_the_live_region() {
         assert!(page.contains(&format!("id=\"err-{control}\"")), "{control}");
     }
 }
+
+// ---- Create: quick add and full form (POST /new, GET /new) ----
+
+fn created_id(r: &common::Reply) -> String {
+    assert_eq!(r.status, 200, "{}", r.body);
+    let start = r.body.find("href=\"/ticket/").expect("created link") + "href=\"/ticket/".len();
+    let end = start + r.body[start..].find('"').unwrap();
+    r.body[start..end].to_string()
+}
+
+#[test]
+fn quick_add_lands_in_the_picked_worktree_and_root_with_defaults() {
+    let e = Env::new();
+    let (_, wt) = setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let wts = wt.to_str().unwrap();
+    let r = w.post_form("/new", &[("p", "MA"), ("w", wts), ("title", "In worktree")]);
+    let id = created_id(&r);
+    assert!(r.body.contains("id=\"create-quick\""), "{}", r.body);
+    let d = detail(&e, &id);
+    assert_eq!(d.ticket.project.key, "MA");
+    assert_eq!(d.ticket.worktree.as_deref(), Some(wts));
+    assert_eq!(d.ticket.status, "draft");
+    assert_eq!(d.ticket.for_who, "agent");
+    // The root checkout, by @root and by an absent w.
+    for fields in [
+        vec![("p", "MA"), ("w", "@root"), ("title", "Root a")],
+        vec![
+            ("p", "MA"),
+            ("title", "Root b"),
+            ("status", "ready"),
+            ("for", "human"),
+        ],
+    ] {
+        let id = created_id(&w.post_form("/new", &fields));
+        let d = detail(&e, &id);
+        assert_eq!(d.ticket.worktree, None);
+        assert_eq!(d.ticket.project.key, "MA");
+    }
+    assert_eq!(tickets(&e), 4);
+}
+
+#[test]
+fn quick_add_honours_ready_and_human() {
+    let e = Env::new();
+    setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let id = created_id(&w.post_form(
+        "/new",
+        &[
+            ("p", "MA"),
+            ("title", "T"),
+            ("status", "ready"),
+            ("for", "human"),
+        ],
+    ));
+    let d = detail(&e, &id);
+    assert_eq!(
+        (d.ticket.status.as_str(), d.ticket.for_who.as_str()),
+        ("ready", "human")
+    );
+}
+
+#[test]
+fn full_form_stores_description_plan_criteria_and_blockers() {
+    let e = Env::new();
+    setup(&e);
+    // MA-1 is the seeded ticket in the same Project.
+    assert_eq!(e.ok(&["show", "MA-1"])["project"]["key"], "MA");
+    let w = e.spawn_web(&[], &[]);
+    let id = created_id(&w.post_form(
+        "/new",
+        &[
+            ("mode", "full"),
+            ("p", "MA"),
+            ("title", "Full"),
+            ("description", "line1\r\nline2"),
+            ("plan", "the plan"),
+            ("criteria", "first\r\n\r\n  second  \r\n"),
+            ("blockers", " MA-1 "),
+        ],
+    ));
+    let d = detail(&e, &id);
+    assert_eq!(d.description, "line1\nline2");
+    assert_eq!(d.plan, "the plan");
+    let texts: Vec<_> = d.criteria.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts, ["first", "second"]);
+    assert_eq!(blocked_by(&e, &id), vec!["MA-1".to_string()]);
+    assert!(
+        created_id(&w.post_form("/new", &[("mode", "full"), ("p", "MA"), ("title", "x")]))
+            .starts_with("MA-")
+    );
+}
+
+#[test]
+fn refusals_show_inline_and_create_nothing() {
+    let e = Env::new();
+    let (_, wt) = setup(&e);
+    let other = add_titled(&e, "Local", "ready");
+    let w = e.spawn_web(&[], &[]);
+    let before = tickets(&e);
+    // Empty title, bad status, bad for.
+    assert_err(
+        &w.post_form("/new", &[("p", "MA"), ("title", "  ")]),
+        400,
+        "create",
+    );
+    assert_err(
+        &w.post_form("/new", &[("p", "MA"), ("title", "x"), ("status", "done")]),
+        400,
+        "create",
+    );
+    assert_err(
+        &w.post_form("/new", &[("p", "MA"), ("title", "x"), ("for", "robot")]),
+        400,
+        "create",
+    );
+    // Bad and cross-Project blockers.
+    assert_err(
+        &w.post_form(
+            "/new",
+            &[("p", "MA"), ("title", "x"), ("blockers", "MA-999")],
+        ),
+        404,
+        "create",
+    );
+    let r = w.post_form("/new", &[("p", "MA"), ("title", "x"), ("blockers", &other)]);
+    assert!(
+        r.status == 422 || r.status == 404,
+        "{} {}",
+        r.status,
+        r.body
+    );
+    assert!(r.body.contains("id=\"err-create\""));
+    // Unknown Project and Worktree.
+    assert_err(
+        &w.post_form("/new", &[("p", "NOPE"), ("title", "x")]),
+        404,
+        "create",
+    );
+    assert_err(
+        &w.post_form("/new", &[("p", "MA"), ("w", "/no/such"), ("title", "x")]),
+        404,
+        "create",
+    );
+    // Missing p.
+    assert_err(&w.post_form("/new", &[("title", "x")]), 400, "create");
+    assert_err(
+        &w.post_form("/new", &[("p", "@all"), ("title", "x")]),
+        400,
+        "create",
+    );
+    assert_eq!(tickets(&e), before);
+    // A gone directory.
+    std::fs::remove_dir_all(&wt).unwrap();
+    let r = w.post_form(
+        "/new",
+        &[("p", "MA"), ("w", wt.to_str().unwrap()), ("title", "x")],
+    );
+    assert_err(&r, 422, "create");
+    assert!(r.body.contains(wt.to_str().unwrap()), "{}", r.body);
+    assert_eq!(tickets(&e), before);
+}
+
+#[test]
+fn all_projects_asks_for_a_project_first() {
+    let e = Env::new();
+    setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    for path in ["/", "/new"] {
+        let b = w.get(path).body;
+        assert!(b.contains("Pick a Project to create a ticket"), "{path}");
+        assert!(!b.contains("name=\"title\""), "{path}");
+    }
+    let picked = w.get("/?p=MA").body;
+    assert!(
+        picked.contains("name=\"title\"") && picked.contains("action")
+            || picked.contains("@post('/new'")
+    );
+    let full = w.get("/new?p=MA").body;
+    assert!(full.contains("name=\"criteria\"") && full.contains("name=\"blockers\""));
+    assert!(full.contains("value=\"MA\""));
+}
+
+#[test]
+fn empty_p_creates_in_the_unscoped_project() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let id = created_id(&w.post_form("/new", &[("p", ""), ("title", "Loose")]));
+    let d = detail(&e, &id);
+    assert_eq!(d.ticket.project.key, "LOCAL");
+    assert_eq!(d.ticket.worktree, None);
+    let page = w.get("/?p=").body;
+    assert!(page.contains("name=\"title\""));
+}
+
+#[test]
+fn a_subtask_takes_its_parents_scope_not_the_pickers() {
+    let e = Env::new();
+    let (_, wt) = setup(&e);
+    let parent = e.ok_at(&wt, &["add", "Parent", "--status", "ready"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let w = e.spawn_web(&[], &[]);
+    // The picked scope is the unscoped Project; the parent wins.
+    let id = created_id(&w.post_form(
+        "/new",
+        &[("p", ""), ("parent", &parent), ("title", "Child")],
+    ));
+    let d = detail(&e, &id);
+    let p = detail(&e, &parent);
+    assert_eq!(d.ticket.parent.as_deref(), Some(parent.as_str()));
+    assert_eq!(d.ticket.project, p.ticket.project);
+    assert_eq!(d.ticket.worktree, p.ticket.worktree);
+    assert_err(
+        &w.post_form("/new", &[("p", ""), ("parent", "MA-999"), ("title", "x")]),
+        404,
+        "create",
+    );
+}
+
+#[test]
+fn a_human_may_create_for_human_and_an_agent_may_not_start_it() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let id = created_id(&w.post_form(
+        "/new",
+        &[
+            ("p", ""),
+            ("title", "Human work"),
+            ("status", "ready"),
+            ("for", "human"),
+        ],
+    ));
+    assert_eq!(detail(&e, &id).ticket.for_who, "human");
+    let agent = e.run_env_at(e.path(), &[("SCREE_ROLE", "agent")], &["start", &id]);
+    assert!(!agent.status.success(), "{agent:?}");
+    assert_eq!(db_status(&e, &id), "ready");
+    let human = e.run_env_at(e.path(), &[("SCREE_ROLE", "human")], &["start", &id]);
+    assert!(human.status.success(), "{human:?}");
+}
+
+#[test]
+fn hostile_create_text_is_stored_verbatim_and_rendered_inert() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let evil = "<script>alert(1)</script> data-on-click=\"x\"";
+    let r = w.post_form("/new", &[("p", ""), ("title", evil)]);
+    let id = created_id(&r);
+    assert!(!r.body.contains("<script>"));
+    assert_eq!(detail(&e, &id).ticket.title, evil);
+    let list = w.get("/?p=").body;
+    assert!(!list.contains("<script>alert"), "{list}");
+    assert!(list.contains("&lt;script&gt;"));
+}
+
+#[test]
+fn the_list_keeps_the_quick_form_outside_the_live_region() {
+    let e = Env::new();
+    setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/?p=MA").body;
+    let form = page.find("id=\"create-quick\"").expect("quick form");
+    let list = page.find("id=\"list\"").unwrap();
+    assert!(form < list);
+    assert!(page.contains("/new?p=MA"));
+    assert!(page.contains("id=\"err-create\""));
+}

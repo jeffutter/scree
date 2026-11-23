@@ -58,10 +58,10 @@ pub fn router() -> Router<AppState> {
 
 /// A parsed urlencoded body. An absent field and an empty one read the same
 /// (an unchecked checkbox sends nothing).
-struct Form(Vec<(String, String)>);
+pub(super) struct Form(Vec<(String, String)>);
 
 impl Form {
-    fn parse(body: &Bytes) -> Form {
+    pub(super) fn parse(body: &Bytes) -> Form {
         Form(
             form_urlencoded::parse(body)
                 .map(|(k, v)| (k.into_owned(), v.into_owned()))
@@ -69,7 +69,7 @@ impl Form {
         )
     }
 
-    fn get(&self, name: &str) -> &str {
+    pub(super) fn get(&self, name: &str) -> &str {
         self.0
             .iter()
             .find(|(k, _)| k == name)
@@ -77,12 +77,12 @@ impl Form {
     }
 
     /// The field, or `None` when blank.
-    fn opt(&self, name: &str) -> Option<String> {
+    pub(super) fn opt(&self, name: &str) -> Option<String> {
         let v = self.get(name);
         (!v.trim().is_empty()).then(|| v.to_string())
     }
 
-    fn has(&self, name: &str) -> bool {
+    pub(super) fn has(&self, name: &str) -> bool {
         self.0.iter().any(|(k, _)| k == name)
     }
 
@@ -436,7 +436,7 @@ async fn blocker_search(
     }
 }
 
-fn for_who(raw: &str) -> Result<ForWho> {
+pub(super) fn for_who(raw: &str) -> Result<ForWho> {
     match raw {
         "agent" => Ok(ForWho::Agent),
         "human" => Ok(ForWho::Human),
@@ -446,9 +446,20 @@ fn for_who(raw: &str) -> Result<ForWho> {
     }
 }
 
+/// The status a new ticket starts in: draft (also when blank) or ready.
+pub(super) fn new_status(raw: &str) -> Result<NewStatus> {
+    match raw {
+        "" | "draft" => Ok(NewStatus::Draft),
+        "ready" => Ok(NewStatus::Ready),
+        other => Err(Error::Usage(format!(
+            "status must be draft or ready, not {other:?}"
+        ))),
+    }
+}
+
 /// Browsers send a newline in a textarea as CRLF in some encodings; the
 /// database keeps LF.
-fn lf(s: &str) -> String {
+pub(super) fn lf(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
@@ -555,15 +566,7 @@ async fn subtask_add(
         },
         move |c, id, _| {
             let who = for_who(if f.has("for") { f.get("for") } else { "agent" })?;
-            let status = match f.get("status") {
-                "" | "draft" => NewStatus::Draft,
-                "ready" => NewStatus::Ready,
-                other => {
-                    return Err(Error::Usage(format!(
-                        "status must be draft or ready, not {other:?}"
-                    )));
-                }
-            };
+            let status = new_status(f.get("status"))?;
             let title = f.get("title").to_string();
             let description = lf(f.get("description"));
             // A subtask takes its parent's Project and Worktree, so no scope is
