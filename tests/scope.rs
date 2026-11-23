@@ -649,32 +649,14 @@ fn tickets_carry_project_key_and_root() {
 #[test]
 fn list_with_counts_fixture() {
     let e = Env::new();
-    let alpha = e.repo("a", "alpha");
-    let beta = e.repo("a", "beta");
-    let gamma = e.repo("a", "gamma");
-    let wt1 = e.worktree(&alpha, "one");
-    let wt2 = e.worktree(&alpha, "two");
-    let gone = e.worktree(&alpha, "gone");
-    let wtb = e.worktree(&beta, "bone");
-    let add = |cwd: &Path, title: &str| {
-        e.ok_at(cwd, &["add", title, "--status", "ready"])["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
-    add(&alpha, "alpha root 1");
-    add(&alpha, "alpha root 2");
-    add(&wt1, "wt1 a");
-    add(&wt1, "wt1 b");
-    add(&wt2, "wt2 a");
-    let done = add(&wt2, "wt2 done");
-    e.ok_at(&wt2, &["start", &done]);
-    e.ok_at(&wt2, &["done", &done]);
-    add(&beta, "beta root");
-    add(&wtb, "bone a");
-    add(&gone, "gone a");
-    e.ok(&["add", "local ticket", "--status", "ready"]);
-    e.ok_at(&gamma, &["add", "gamma draft"]);
+    let W3 {
+        alpha,
+        wt1,
+        wt2,
+        gone,
+        wtb,
+        ..
+    } = w3_fixture(&e);
 
     // A removed Worktree is still listed until a sweep archives its tickets.
     git(
@@ -715,8 +697,196 @@ fn list_with_counts_fixture() {
     assert_eq!(o.unscoped_open, 1);
 }
 
+/// The W3 fixture: three Projects, linked Worktrees, a done ticket, an
+/// unscoped ticket and a Worktree (`gone`) the test may remove.
+struct W3 {
+    alpha: PathBuf,
+    wt1: PathBuf,
+    wt2: PathBuf,
+    gone: PathBuf,
+    beta: PathBuf,
+    wtb: PathBuf,
+    gamma: PathBuf,
+}
+
+fn w3_fixture(e: &Env) -> W3 {
+    let alpha = e.repo("a", "alpha");
+    let beta = e.repo("a", "beta");
+    let gamma = e.repo("a", "gamma");
+    let wt1 = e.worktree(&alpha, "one");
+    let wt2 = e.worktree(&alpha, "two");
+    let gone = e.worktree(&alpha, "gone");
+    let wtb = e.worktree(&beta, "bone");
+    let add = |cwd: &Path, title: &str| {
+        e.ok_at(cwd, &["add", title, "--status", "ready"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    add(&alpha, "alpha root 1");
+    add(&alpha, "alpha root 2");
+    add(&wt1, "wt1 a");
+    add(&wt1, "wt1 b");
+    add(&wt2, "wt2 a");
+    let done = add(&wt2, "wt2 done");
+    e.ok_at(&wt2, &["start", &done]);
+    e.ok_at(&wt2, &["done", &done]);
+    add(&beta, "beta root");
+    add(&wtb, "bone a");
+    add(&gone, "gone a");
+    e.ok(&["add", "local ticket", "--status", "ready"]);
+    e.ok_at(&gamma, &["add", "gamma draft"]);
+    W3 {
+        alpha,
+        wt1,
+        wt2,
+        gone,
+        beta,
+        wtb,
+        gamma,
+    }
+}
+
 /// A configured `git` run in `dir`, through the shared scrub.
 fn git(dir: &Path, args: &[&str]) {
     let out = git_cmd(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// Each `_in` read equals the CLI run from inside that Worktree (or with the
+/// widening flag), and an unknown Project or Worktree is NotFound.
+#[test]
+fn scope_filter_matches_cli_scope() {
+    use scree::ticket::ScopeFilter as F;
+    let e = Env::new();
+    let W3 {
+        alpha,
+        wt1,
+        beta,
+        gamma,
+        ..
+    } = w3_fixture(&e);
+    let a_root = e.ok_at(&alpha, &["list", "--limit", "50"]);
+    let id = a_root["tickets"][0]["id"].as_str().unwrap().to_string();
+    e.ok_at(
+        &alpha,
+        &[
+            "decision", "add", &id, "Which?", "--option", "x", "--option", "y",
+        ],
+    );
+    e.ok_at(
+        &beta,
+        &[
+            "--role", "human", "decision", "add", "BET-1", "Q2?", "--option", "x",
+        ],
+    );
+    e.ok_at(
+        &beta,
+        &[
+            "--role",
+            "human",
+            "decision",
+            "answer",
+            "D-1",
+            "x",
+            "--rationale",
+            "r",
+        ],
+    );
+
+    let conn = scree::db::open(&e.db()).unwrap();
+    let who = scree::identity::Identity {
+        role: scree::identity::Role::Agent,
+        author: "agent".into(),
+        session: None,
+    };
+    let key = |k: &str| k.to_string();
+    let wt = |k: &str, p: &Path| F::Worktree {
+        key: key(k),
+        path: Some(p.to_str().unwrap().to_string()),
+    };
+    let la = scree::cli::ListArgs::default();
+    let na = scree::cli::NextArgs {
+        for_who: None,
+        limit: Some(50),
+        scope: Default::default(),
+    };
+
+    // (filter, cwd for the CLI, extra CLI flags)
+    let cases: Vec<(F, &Path, &[&str])> = vec![
+        (
+            F::Worktree {
+                key: key("ALP"),
+                path: None,
+            },
+            &alpha,
+            &[],
+        ),
+        (wt("ALP", &wt1), &wt1, &[]),
+        (F::Project { key: key("ALP") }, &alpha, &["--all-worktrees"]),
+        (
+            F::Worktree {
+                key: key("BET"),
+                path: None,
+            },
+            &beta,
+            &[],
+        ),
+        (F::Project { key: key("GAM") }, &gamma, &["--all-worktrees"]),
+        (F::All, &alpha, &["--all-projects"]),
+    ];
+    for (filter, cwd, flags) in cases {
+        let mut list = vec!["list"];
+        list.extend(flags);
+        let got = scree::ticket::list_in(&conn, &filter, &la, &who).unwrap();
+        assert_eq!(
+            serde_json::to_value(&got).unwrap(),
+            e.ok_at(cwd, &list),
+            "list {filter:?}"
+        );
+        let mut next = vec!["next", "--limit", "50"];
+        next.extend(flags);
+        let got = scree::ticket::next_in(&conn, &filter, &na, &who).unwrap();
+        assert_eq!(
+            serde_json::to_value(&got).unwrap(),
+            e.ok_at(cwd, &next),
+            "next {filter:?}"
+        );
+        let mut open = vec!["decisions", "--open"];
+        open.extend(flags);
+        let got = scree::decision::open_queue_in(&conn, &filter).unwrap();
+        assert_eq!(
+            serde_json::to_value(&got).unwrap(),
+            e.ok_at(cwd, &open),
+            "open {filter:?}"
+        );
+        let mut decided = vec!["decisions", "--decided"];
+        decided.extend(flags);
+        let got = scree::decision::decided_log_in(&conn, &filter, None, None, 50, false).unwrap();
+        assert_eq!(
+            serde_json::to_value(&got).unwrap(),
+            e.ok_at(cwd, &decided),
+            "decided {filter:?}"
+        );
+    }
+
+    let nf = |f: F| {
+        matches!(
+            scree::ticket::list_in(&conn, &f, &la, &who),
+            Err(scree::error::Error::NotFound(_))
+        )
+    };
+    assert!(nf(F::Project { key: key("NOPE") }));
+    assert!(nf(F::Worktree {
+        key: key("NOPE"),
+        path: None
+    }));
+    assert!(nf(F::Worktree {
+        key: key("ALP"),
+        path: Some("/no/such/worktree".into())
+    }));
+    assert!(matches!(
+        scree::decision::open_queue_in(&conn, &F::Project { key: key("NOPE") }),
+        Err(scree::error::Error::NotFound(_))
+    ));
 }

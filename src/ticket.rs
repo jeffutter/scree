@@ -1306,11 +1306,58 @@ pub fn edit(
 }
 
 /// Which tickets a `list` looks at.
-enum Where {
+pub(crate) enum Where {
     /// One Worktree of a Project (`None` is the root checkout).
     Worktree(i64, Option<String>),
     Project(i64),
     All,
+}
+
+/// An explicit scope for callers with no working directory (the web UI):
+/// which rows a read looks at, named by Project key and Worktree path as
+/// `list_with_counts` reports them. The CLI never builds one; it derives its
+/// scope from the cwd and flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeFilter {
+    /// Every Project.
+    All,
+    /// One Project, every Worktree.
+    Project { key: String },
+    /// One Worktree of a Project; `path: None` is the root checkout.
+    Worktree { key: String, path: Option<String> },
+}
+
+/// Turn an explicit [`ScopeFilter`] into a [`Where`]. An unknown Project key,
+/// or a Worktree path no unarchived ticket of that Project carries (the same
+/// test `list_with_counts` uses to list a Worktree), is NotFound. Reads only
+/// the database: no git call, so a Worktree removed on disk still resolves
+/// until a sweep has archived its tickets.
+fn resolve_filter(conn: &Connection, f: &ScopeFilter) -> Result<Where> {
+    let (key, path) = match f {
+        ScopeFilter::All => return Ok(Where::All),
+        ScopeFilter::Project { key } => (key, None),
+        ScopeFilter::Worktree { key, path } => (key, path.as_ref()),
+    };
+    let project = project::find_by_key(conn, key)?
+        .ok_or_else(|| Error::NotFound(format!("no Project {key}")))?;
+    let Some(path) = path else {
+        return Ok(if matches!(f, ScopeFilter::Project { .. }) {
+            Where::Project(project.id)
+        } else {
+            Where::Worktree(project.id, None)
+        });
+    };
+    let known: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tickets
+         WHERE project_id = ?1 AND worktree_path = ?2 AND archived_at IS NULL)",
+        params![project.id, path],
+        |r| r.get(0),
+    )?;
+    if known {
+        Ok(Where::Worktree(project.id, Some(path.clone())))
+    } else {
+        Err(Error::NotFound(format!("no Worktree {path} in {key}")))
+    }
 }
 
 fn root_project(conn: &Connection, root: &Path) -> Result<Option<Project>> {
@@ -1358,39 +1405,41 @@ pub(crate) fn scope_project(
     cwd: &Path,
     a: &ScopeArgs,
 ) -> Result<Option<Option<i64>>> {
-    Ok(resolve_where(conn, cwd, a)?.map(|w| match w {
+    Ok(resolve_where(conn, cwd, a)?.map(|w| where_project(&w)))
+}
+
+/// The Project a [`Where`] reaches (`None` for every Project).
+pub(crate) fn where_project(w: &Where) -> Option<i64> {
+    match w {
         Where::All => None,
-        Where::Project(id) | Where::Worktree(id, _) => Some(id),
-    }))
+        Where::Project(id) | Where::Worktree(id, _) => Some(*id),
+    }
+}
+
+/// Like [`scope_project`] for an explicit [`ScopeFilter`].
+pub(crate) fn filter_project(conn: &Connection, f: &ScopeFilter) -> Result<Option<i64>> {
+    Ok(where_project(&resolve_filter(conn, f)?))
 }
 
 /// The WHERE conditions and arguments that restrict a query on `tickets t`
-/// to `a`'s scope; `None` when the scope holds no tickets at all (a
-/// repository never seen before, and a read creates nothing).
-fn scope_conds(
-    conn: &Connection,
-    cwd: &Path,
-    a: &ScopeArgs,
-) -> Result<Option<(Vec<String>, Vec<Sql>)>> {
-    let Some(scope) = resolve_where(conn, cwd, a)? else {
-        return Ok(None);
-    };
+/// to `scope`.
+fn where_conds(scope: &Where) -> (Vec<String>, Vec<Sql>) {
     let mut conds: Vec<String> = vec![];
     let mut args: Vec<Sql> = vec![];
     match scope {
         Where::All => {}
         Where::Project(id) => {
             conds.push("t.project_id = ?".into());
-            args.push(Sql::Integer(id));
+            args.push(Sql::Integer(*id));
         }
         Where::Worktree(id, wt) => {
             conds.push("t.project_id = ?".into());
-            args.push(Sql::Integer(id));
+            args.push(Sql::Integer(*id));
             conds.push("t.worktree_path IS ?".into());
-            args.push(wt.map_or(Sql::Null, Sql::Text));
+            args.push(wt.clone().map_or(Sql::Null, Sql::Text));
         }
     }
-    Ok(Some((conds, args)))
+    (conds, args)
 }
 
 /// Ticket row ids matching `conds` in `(project key, position, number)`
@@ -1463,7 +1512,30 @@ pub fn list(
     a: &ListArgs,
     identity: &Identity,
 ) -> Result<ListResult> {
-    let Some((mut conds, mut args)) = scope_conds(conn, cwd, &a.scope)? else {
+    let scope = resolve_where(conn, cwd, &a.scope)?;
+    list_where(conn, scope.as_ref(), a, identity)
+}
+
+/// `list` for an explicit scope. `a.scope` is ignored: `filter` decides which
+/// tickets are read. The board and the dependency graph are built from this
+/// result too.
+pub fn list_in(
+    conn: &Connection,
+    filter: &ScopeFilter,
+    a: &ListArgs,
+    identity: &Identity,
+) -> Result<ListResult> {
+    let scope = resolve_filter(conn, filter)?;
+    list_where(conn, Some(&scope), a, identity)
+}
+
+fn list_where(
+    conn: &Connection,
+    scope: Option<&Where>,
+    a: &ListArgs,
+    identity: &Identity,
+) -> Result<ListResult> {
+    let Some((mut conds, mut args)) = scope.map(where_conds) else {
         return Ok(ListResult { tickets: vec![] });
     };
     let statuses: Vec<&str> = if a.status.is_empty() {
@@ -1533,9 +1605,11 @@ fn pool_conds(
     for_who: ForWho,
     blocked: bool,
 ) -> Result<Option<(Vec<String>, Vec<Sql>)>> {
-    let Some((mut conds, mut args)) = scope_conds(conn, cwd, scope)? else {
-        return Ok(None);
-    };
+    Ok(resolve_where(conn, cwd, scope)?.map(|w| pool_conds_where(&w, for_who, blocked)))
+}
+
+fn pool_conds_where(scope: &Where, for_who: ForWho, blocked: bool) -> (Vec<String>, Vec<Sql>) {
+    let (mut conds, mut args) = where_conds(scope);
     conds.push(ready_first_sql());
     conds.push(if blocked {
         blocked_sql()
@@ -1544,7 +1618,7 @@ fn pool_conds(
     });
     conds.push("t.\"for\" = ?".into());
     args.push(Sql::Text(for_who.as_str().into()));
-    Ok(Some((conds, args)))
+    (conds, args)
 }
 
 fn count(conn: &Connection, conds: &[String], args: Vec<Sql>) -> Result<i64> {
@@ -1563,8 +1637,30 @@ fn count(conn: &Connection, conds: &[String], args: Vec<Sql>) -> Result<i64> {
 /// (only when nothing is Available) counts tickets held back by a blocker
 /// alone.
 pub fn next(conn: &Connection, cwd: &Path, a: &NextArgs, who: &Identity) -> Result<NextResult> {
+    let scope = resolve_where(conn, cwd, &a.scope)?;
+    next_where(conn, scope.as_ref(), a, who)
+}
+
+/// `next` for an explicit scope; `a.scope` is ignored.
+pub fn next_in(
+    conn: &Connection,
+    filter: &ScopeFilter,
+    a: &NextArgs,
+    who: &Identity,
+) -> Result<NextResult> {
+    let scope = resolve_filter(conn, filter)?;
+    next_where(conn, Some(&scope), a, who)
+}
+
+fn next_where(
+    conn: &Connection,
+    scope: Option<&Where>,
+    a: &NextArgs,
+    who: &Identity,
+) -> Result<NextResult> {
     let for_who = a.for_who.unwrap_or_else(|| role_default(who));
-    let Some((conds, args)) = pool_conds(conn, cwd, &a.scope, for_who, false)? else {
+    let pool = |w: ForWho, blocked: bool| scope.map(|s| pool_conds_where(s, w, blocked));
+    let Some((conds, args)) = pool(for_who, false) else {
         return Ok(NextResult {
             list: ListResult { tickets: vec![] },
             human_pending: 0,
@@ -1576,14 +1672,14 @@ pub fn next(conn: &Connection, cwd: &Path, a: &NextArgs, who: &Identity) -> Resu
         .map(|id| build_summary(conn, id))
         .collect::<Result<Vec<_>>>()?;
     let human_pending = if for_who == ForWho::Agent
-        && let Some((c, ar)) = pool_conds(conn, cwd, &a.scope, ForWho::Human, false)?
+        && let Some((c, ar)) = pool(ForWho::Human, false)
     {
         count(conn, &c, ar)?
     } else {
         0
     };
     let blocked_pending = if tickets.is_empty()
-        && let Some((c, ar)) = pool_conds(conn, cwd, &a.scope, for_who, true)?
+        && let Some((c, ar)) = pool(for_who, true)
     {
         Some(count(conn, &c, ar)?)
     } else if tickets.is_empty() {

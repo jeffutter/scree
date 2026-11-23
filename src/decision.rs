@@ -17,7 +17,9 @@ use crate::model::{
 };
 use crate::project;
 use crate::scope::{self, Scope, path_str};
-use crate::ticket::{display_id, resolve, scope_project, time_bound, touch};
+use crate::ticket::{
+    ScopeFilter, display_id, filter_project, resolve, scope_project, time_bound, touch,
+};
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
 
@@ -471,7 +473,18 @@ fn parse_options(json: String, col: usize) -> rusqlite::Result<Vec<String>> {
 /// number. The count is a plain count of linked tickets that are draft, ready
 /// or active and not archived.
 pub fn open_queue(conn: &Connection, cwd: &Path, scope: &ScopeArgs) -> Result<DecisionsResult> {
-    let Some(project) = scope_project(conn, cwd, scope)? else {
+    open_queue_where(conn, scope_project(conn, cwd, scope)?)
+}
+
+/// `open_queue` for an explicit scope. Decisions belong to a Project, so a
+/// Worktree filter reads its whole Project.
+pub fn open_queue_in(conn: &Connection, filter: &ScopeFilter) -> Result<DecisionsResult> {
+    open_queue_where(conn, Some(filter_project(conn, filter)?))
+}
+
+/// `project` is as [`scope_project`] returns it.
+fn open_queue_where(conn: &Connection, project: Option<Option<i64>>) -> Result<DecisionsResult> {
+    let Some(project) = project else {
         return Ok(DecisionsResult { decisions: vec![] });
     };
     let unfinished = format!(
@@ -558,9 +571,35 @@ pub fn decided_log(
     limit: u32,
     include_superseded: bool,
 ) -> Result<DecidedResult> {
+    let project = scope_project(conn, cwd, scope)?;
+    decided_log_where(conn, project, since, search, limit, include_superseded)
+}
+
+/// `decided_log` for an explicit scope; a Worktree filter reads its Project.
+pub fn decided_log_in(
+    conn: &Connection,
+    filter: &ScopeFilter,
+    since: Option<&str>,
+    search: Option<&str>,
+    limit: u32,
+    include_superseded: bool,
+) -> Result<DecidedResult> {
+    let project = Some(filter_project(conn, filter)?);
+    decided_log_where(conn, project, since, search, limit, include_superseded)
+}
+
+/// `project` is as [`scope_project`] returns it.
+fn decided_log_where(
+    conn: &Connection,
+    project: Option<Option<i64>>,
+    since: Option<&str>,
+    search: Option<&str>,
+    limit: u32,
+    include_superseded: bool,
+) -> Result<DecidedResult> {
     use rusqlite::types::Value as Sql;
     let bound = since.map(|w| time_bound(conn, "--since", w)).transpose()?;
-    let Some(project) = scope_project(conn, cwd, scope)? else {
+    let Some(project) = project else {
         return Ok(DecidedResult { decisions: vec![] });
     };
     let mut conds = vec!["d.status = 'decided'".to_string()];

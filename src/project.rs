@@ -85,6 +85,17 @@ pub fn local(conn: &Connection) -> Result<Project> {
     )?)
 }
 
+pub fn find_by_key(conn: &Connection, key: &str) -> Result<Option<Project>> {
+    Ok(conn
+        .query_row("SELECT id, key FROM projects WHERE key = ?1", [key], |r| {
+            Ok(Project {
+                id: r.get(0)?,
+                key: r.get(1)?,
+            })
+        })
+        .optional()?)
+}
+
 pub fn find_by_root(conn: &Connection, root: &str) -> Result<Option<Project>> {
     Ok(conn
         .query_row(
