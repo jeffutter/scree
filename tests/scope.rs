@@ -890,3 +890,128 @@ fn scope_filter_matches_cli_scope() {
         Err(scree::error::Error::NotFound(_))
     ));
 }
+
+/// `ListArgs.search` matches id, title and description, ASCII
+/// case-insensitively, with `%` literal, blank unfiltered, and composing with
+/// status and scope.
+#[test]
+fn list_search_matches_id_title_description() {
+    use scree::ticket::ScopeFilter as F;
+    let e = Env::new();
+    let alpha = e.repo("a", "alpha");
+    let beta = e.repo("a", "beta");
+    let add = |cwd: &Path, title: &str, desc: &str| {
+        e.ok_at(
+            cwd,
+            &["add", title, "--description", desc, "--status", "ready"],
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    add(&alpha, "Needle in title", "plain");
+    add(&alpha, "plain two", "hides a NEEDLE here");
+    add(&alpha, "ninety%", "no match");
+    add(&alpha, "plain four", "plain");
+    let done = add(&alpha, "plain five needle", "plain");
+    e.ok_at(&alpha, &["start", &done]);
+    e.ok_at(&alpha, &["done", &done]);
+    add(&beta, "beta needle", "plain");
+
+    let conn = scree::db::open(&e.db()).unwrap();
+    let who = scree::identity::Identity {
+        role: scree::identity::Role::Agent,
+        author: "agent".into(),
+        session: None,
+    };
+    let titles = |filter: &F, search: Option<&str>, status: Vec<scree::cli::Status>| {
+        let a = scree::cli::ListArgs {
+            search: search.map(String::from),
+            status,
+            ..Default::default()
+        };
+        let mut t: Vec<String> = scree::ticket::list_in(&conn, filter, &a, &who)
+            .unwrap()
+            .tickets
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        t.sort();
+        t
+    };
+    let ap = F::Project { key: "ALP".into() };
+
+    assert_eq!(
+        titles(&ap, Some("nEEdle"), vec![]),
+        ["Needle in title", "plain two"]
+    );
+    assert_eq!(titles(&ap, Some("%"), vec![]), ["ninety%"]);
+    assert_eq!(titles(&ap, Some("_"), vec![]), Vec::<String>::new());
+    assert_eq!(titles(&ap, Some("alp-2"), vec![]), ["plain two"]);
+    assert_eq!(titles(&ap, Some("  "), vec![]).len(), 4);
+    assert_eq!(titles(&ap, None, vec![]).len(), 4);
+    assert_eq!(
+        titles(&ap, Some("needle"), vec![scree::cli::Status::Done]),
+        ["plain five needle"]
+    );
+    assert_eq!(
+        titles(&F::All, Some("needle"), vec![]),
+        ["Needle in title", "beta needle", "plain two"]
+    );
+}
+
+/// `count_in` equals the unlimited `list_in` for every scope case, with and
+/// without a search, and ignores `limit`.
+#[test]
+fn count_in_equals_unlimited_list() {
+    use scree::ticket::ScopeFilter as F;
+    let e = Env::new();
+    let W3 { wt1, .. } = w3_fixture(&e);
+    let conn = scree::db::open(&e.db()).unwrap();
+    let who = scree::identity::Identity {
+        role: scree::identity::Role::Agent,
+        author: "agent".into(),
+        session: None,
+    };
+    let wt = |k: &str, p: Option<&Path>| F::Worktree {
+        key: k.into(),
+        path: p.map(|p| p.to_str().unwrap().to_string()),
+    };
+    let filters = vec![
+        F::All,
+        F::Project { key: "ALP".into() },
+        wt("ALP", None),
+        wt("ALP", Some(&wt1)),
+        F::Project { key: "BET".into() },
+        F::Project { key: "GAM".into() },
+    ];
+    for filter in &filters {
+        for search in [None, Some("a"), Some("wt1"), Some("nomatch")] {
+            for (limit, archived) in [(None, false), (Some(1), false), (Some(1), true)] {
+                let args = |limit| scree::cli::ListArgs {
+                    search: search.map(String::from),
+                    limit,
+                    archived,
+                    ..Default::default()
+                };
+                let full = scree::ticket::list_in(&conn, filter, &args(Some(u32::MAX)), &who)
+                    .unwrap()
+                    .tickets
+                    .len();
+                let got = scree::ticket::count_in(&conn, filter, &args(limit), &who).unwrap();
+                assert_eq!(got, full as u64, "{filter:?} {search:?} {limit:?}");
+            }
+        }
+    }
+    let all = scree::ticket::count_in(&conn, &F::All, &Default::default(), &who).unwrap();
+    assert!(all > 1);
+    assert!(matches!(
+        scree::ticket::count_in(
+            &conn,
+            &F::Project { key: "NOPE".into() },
+            &Default::default(),
+            &who
+        ),
+        Err(scree::error::Error::NotFound(_))
+    ));
+}

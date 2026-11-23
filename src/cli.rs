@@ -324,6 +324,11 @@ pub struct ListArgs {
     /// With --stale: `Nd`, `Nh`, `Nm` or an RFC 3339 timestamp. Default 4h
     #[arg(long, value_name = "WHEN", requires = "stale")]
     pub older_than: Option<String>,
+    /// Library-only (the web UI); not a CLI flag. Only tickets whose id, title or description
+    /// contains this text. Case-insensitive for ASCII letters; `%` and `_` match themselves.
+    /// Blank means no filter.
+    #[arg(skip)]
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

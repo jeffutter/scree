@@ -494,6 +494,54 @@ pub fn link(conn: &mut Connection, id: &str, links: &[CommitLink]) -> Result<Tic
     })
 }
 
+/// One lifecycle move a ticket can be offered, without the inputs the later
+/// action call needs (reason, handoff, commits). Reclaim is left out: it needs
+/// a stale cutoff and a comparison with the current claimant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Move {
+    Ready,
+    Start,
+    Release,
+    Done,
+    ForceDone,
+    Abandon,
+    Reopen,
+    Archive,
+    Unarchive,
+}
+
+/// The moves worth offering for `d` to a caller with `role`, mirroring the
+/// rules in [`transition`] and `tui::state::allowed` (which has a different
+/// shape: key labels, no Role). Advisory only: `transition` stays the
+/// authority. For example Reopen is listed for any closed ticket but is still
+/// refused when its parent is settled, which the detail does not carry.
+pub fn available_actions(d: &TicketDetail, role: crate::identity::Role) -> Vec<Move> {
+    let t = &d.ticket;
+    let mut v = vec![];
+    match t.status.as_str() {
+        "draft" => v.push(Move::Ready),
+        "ready" => {
+            let human_only = role == crate::identity::Role::Agent && t.for_who == "human";
+            if t.available && !human_only {
+                v.push(Move::Start);
+            }
+        }
+        "active" => v.push(Move::Release),
+        _ => {}
+    }
+    if Status::is_open(&t.status) {
+        v.extend([Move::Done, Move::ForceDone, Move::Abandon]);
+    } else {
+        v.push(Move::Reopen);
+    }
+    v.push(if t.archived_at.is_some() {
+        Move::Unarchive
+    } else {
+        Move::Archive
+    });
+    v
+}
+
 /// A status change `scree` offers as its own command.
 pub enum Action {
     Ready,
@@ -1603,8 +1651,56 @@ fn list_where(
     a: &ListArgs,
     identity: &Identity,
 ) -> Result<ListResult> {
-    let Some((mut conds, mut args)) = scope.map(where_conds) else {
+    let Some((conds, args)) = list_conds(conn, scope, a, identity)? else {
         return Ok(ListResult { tickets: vec![] });
+    };
+    let ids = select_ids(conn, &conds, args, a.limit.unwrap_or(50))?;
+    let tickets = ids
+        .into_iter()
+        .map(|id| build_summary(conn, id))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ListResult { tickets })
+}
+
+/// The number of tickets `list_in` would return for `a` if `a.limit` were
+/// unset: the same conditions, no cap. `a.scope` is ignored.
+pub fn count_in(
+    conn: &Connection,
+    filter: &ScopeFilter,
+    a: &ListArgs,
+    identity: &Identity,
+) -> Result<u64> {
+    let scope = resolve_filter(conn, filter)?;
+    let Some((conds, args)) = list_conds(conn, Some(&scope), a, identity)? else {
+        return Ok(0);
+    };
+    let n: i64 = conn.query_row(
+        &format!(
+            "SELECT count(*) FROM tickets t JOIN projects p ON p.id = t.project_id WHERE {}",
+            if conds.is_empty() {
+                "1".to_string()
+            } else {
+                conds.join(" AND ")
+            }
+        ),
+        params_from_iter(args),
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
+
+/// The conditions of a list read, shared by the list and its count so they
+/// cannot drift apart. `None` is an empty scope. `a.limit` is not a condition.
+/// `a.search` matches the display id, title or description with `instr`, so
+/// `%` and `_` are literal; SQLite `lower` folds ASCII letters only.
+fn list_conds(
+    conn: &Connection,
+    scope: Option<&Where>,
+    a: &ListArgs,
+    identity: &Identity,
+) -> Result<Option<(Vec<String>, Vec<Sql>)>> {
+    let Some((mut conds, mut args)) = scope.map(where_conds) else {
+        return Ok(None);
     };
     let statuses: Vec<&str> = if a.status.is_empty() {
         Status::OPEN.iter().copied().map(Status::as_str).collect()
@@ -1649,12 +1745,18 @@ fn list_where(
         conds.push("t.parent_id = ?".into());
         args.push(Sql::Integer(resolve(conn, parent)?));
     }
-    let ids = select_ids(conn, &conds, args, a.limit.unwrap_or(50))?;
-    let tickets = ids
-        .into_iter()
-        .map(|id| build_summary(conn, id))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(ListResult { tickets })
+    if let Some(needle) = a.search.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        conds.push(
+            "(instr(lower(p.key || '-' || t.label), lower(?)) > 0
+              OR instr(lower(t.title), lower(?)) > 0
+              OR instr(lower(t.description), lower(?)) > 0)"
+                .into(),
+        );
+        for _ in 0..3 {
+            args.push(Sql::Text(needle.to_string()));
+        }
+    }
+    Ok(Some((conds, args)))
 }
 
 fn role_default(who: &Identity) -> ForWho {

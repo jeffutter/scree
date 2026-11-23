@@ -610,3 +610,68 @@ fn comment_edit_stale_conflicts_current_and_none_succeed() {
     let d = scree::ticket::comment_edit(&mut conn, &id, cid, "newer", &lib_who(), None).unwrap();
     assert_eq!(d.comments[0].body, "newer");
 }
+
+#[test]
+fn available_actions_by_status_and_role() {
+    use scree::identity::Role::{Agent, Human};
+    use scree::ticket::Move::*;
+    let e = Env::new();
+    let conn = scree::db::open(&e.db()).unwrap();
+    let moves = |id: &str, role| {
+        let d = scree::ticket::show(&conn, id).unwrap();
+        scree::ticket::available_actions(&d, role)
+    };
+    let draft = e.ok(&["--role", "human", "add", "d"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ready = e.ready(&[]);
+    let active = e.ready(&[]);
+    e.ok(&["start", &active]);
+    let done = e.ready(&[]);
+    e.ok(&["start", &done]);
+    e.ok(&["done", &done]);
+    let abandoned = e.ready(&[]);
+    e.ok(&["abandon", &abandoned, "no"]);
+    let archived = e.ready(&[]);
+    e.ok(&["archive", &archived]);
+    let human = e.ready(&["--for", "human"]);
+    let blocker = e.ready(&[]);
+    let blocked = e.ready(&[]);
+    e.ok(&["dep", "add", &blocked, &blocker]);
+
+    for role in [Agent, Human] {
+        assert_eq!(
+            moves(&draft, role),
+            [Ready, Done, ForceDone, Abandon, Archive]
+        );
+        assert_eq!(
+            moves(&active, role),
+            [Release, Done, ForceDone, Abandon, Archive]
+        );
+        assert_eq!(moves(&done, role), [Reopen, Archive]);
+        assert_eq!(moves(&abandoned, role), [Reopen, Archive]);
+        assert_eq!(
+            moves(&archived, role),
+            [Done, ForceDone, Abandon, Unarchive]
+        );
+        assert_eq!(moves(&blocked, role), [Done, ForceDone, Abandon, Archive]);
+    }
+    // `ready` is first among siblings and unblocked, so Start is offered.
+    assert_eq!(moves(&ready, Agent)[0], Start);
+    // A human-only ticket is not startable by an agent, but is by a human.
+    assert_eq!(moves(&human, Agent), [Done, ForceDone, Abandon, Archive]);
+    assert_eq!(moves(&human, Human)[0], Start);
+
+    // A move the list omits is refused by `transition`.
+    let mut conn = scree::db::open(&e.db()).unwrap();
+    let who = lib_who();
+    assert!(matches!(
+        scree::ticket::transition(&mut conn, &blocked, scree::ticket::Action::Start, &who),
+        Err(scree::error::Error::Refused(_))
+    ));
+    assert!(matches!(
+        scree::ticket::transition(&mut conn, &human, scree::ticket::Action::Start, &who),
+        Err(scree::error::Error::Refused(_))
+    ));
+}
