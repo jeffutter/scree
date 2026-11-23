@@ -51,7 +51,7 @@ Every page takes its scope from the URL, never from the process cwd, so the same
 
 `@all` exists so the picker's selects always send a value; `@root` because stored Worktree paths are absolute and never start with `@`. An unknown key or Worktree path, `w` without `p` (or with `p=` or `p=@all`), a literal `p=LOCAL` and a repeated `p` or `w` answer 404 with the `err-scope` fragment. Other query parameters are ignored here; later screens read their own.
 
-The picker is a GET form with two selects and open counts. Choosing a Project submits and the server renders that Project's Worktree select; there is no repopulating script (`shell.js` only submits on change, and an Apply button covers no script). The Content-Security-Policy therefore says `form-action 'self'` (it was `'none'` in ADR 0003, which blocks the form).
+The picker is a GET form with two selects and open counts. Choosing a Project submits and the server renders that Project's Worktree select; there is no repopulating script (`shell.js` only submits on change, and an Apply button covers no script). When the Project select changes, `shell.js` first disables the Worktree select (marked `data-picker-w`) so the stale Worktree is not sent and the new Project is shown Project-wide. The Content-Security-Policy therefore says `form-action 'self'` (it was `'none'` in ADR 0003, which blocks the form).
 
 ## List
 

@@ -49,7 +49,14 @@
 // the chosen scope. Without script the Apply button does the same.
 document.addEventListener("change", (e) => {
   const form = e.target instanceof Element && e.target.closest("form[data-picker]");
-  if (form) form.requestSubmit();
+  if (!form) return;
+  // The Worktree select still holds the old Project's value; leave it out so
+  // the server treats the new Project as Project-wide.
+  if (e.target.name === "p") {
+    const w = form.querySelector("select[data-picker-w]");
+    if (w) w.disabled = true;
+  }
+  form.requestSubmit();
 });
 
 // List and Decisions keys: j/k move a selection among the rows, Enter opens

@@ -652,6 +652,24 @@ fn scope_urls_select_the_matching_view() {
 }
 
 #[test]
+fn picker_marks_the_worktree_select_and_project_only_urls_are_200() {
+    let e = Env::new();
+    scope_setup(&e);
+    let w = e.spawn_web(&[], &[]);
+    let r = w.get("/?p=MA");
+    assert!(
+        r.body.contains("<select name=\"w\" data-picker-w"),
+        "{}",
+        r.body
+    );
+    let js = w.get("/assets/shell.js");
+    assert!(js.body.contains("select[data-picker-w]"));
+    for url in ["/?p=@all", "/?p=MA", "/?p="] {
+        assert_eq!(w.get(url).status, 200, "{url}");
+    }
+}
+
+#[test]
 fn unknown_or_malformed_scope_is_404_with_an_inline_fragment() {
     let e = Env::new();
     let (_, wt) = scope_setup(&e);

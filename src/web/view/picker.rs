@@ -58,7 +58,7 @@ pub fn picker(scope: &Scope, action: &str) -> Markup {
             }
             label {
                 span class="picker-label" { "Worktree" }
-                select name="w" disabled[project.is_none()] {
+                select name="w" data-picker-w disabled[project.is_none()] {
                     @if let Some(p) = project {
                         option value=(ALL) selected[w_val == Some(ALL)] {
                             "All Worktrees (" (p.open) ")"
@@ -113,7 +113,7 @@ mod tests {
     fn all_selects_all_and_disables_worktrees() {
         let h = picker(&scope(ScopeFilter::All, 0, vec![proj("AA")]), "/").into_string();
         assert!(h.contains("<option value=\"@all\" selected>All Projects (3 open)"));
-        assert!(h.contains("<select name=\"w\" disabled>"));
+        assert!(h.contains("<select name=\"w\" data-picker-w disabled>"));
         assert!(!h.contains("No Project"), "no unscoped tickets: {h}");
     }
 
@@ -146,7 +146,7 @@ mod tests {
         assert!(h.contains("<option value=\"AA\" selected>"));
         assert!(h.contains("<option value=\"/w/feat\" selected"));
         assert!(h.contains(">Root checkout (1)"));
-        assert!(!h.contains("<select name=\"w\" disabled>"));
+        assert!(!h.contains("<select name=\"w\" data-picker-w disabled>"));
     }
 
     #[test]
