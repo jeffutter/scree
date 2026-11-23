@@ -5,6 +5,7 @@
 
 pub mod components;
 pub mod layout;
+pub mod markdown;
 pub mod picker;
 pub mod ticket_row;
 

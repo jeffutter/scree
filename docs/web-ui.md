@@ -152,3 +152,7 @@ One line per request on stderr: `scree web: METHOD ROUTE STATUS`, plus the error
 ## Test routes
 
 `cargo build --features test-routes` adds `/test/page`, `POST /test/refuse` and `POST /test/conflict`, and a live view `/test/page` that shows the open-ticket count. They exist so `tests/web_live.rs` and a person in a browser can drive the error contract and the stream. Run the tests with `cargo nextest run --features test-routes`; the nix `clippy` and `nextest` checks already do. Without the feature `tests/web_live.rs` compiles to nothing and the routes do not exist.
+
+## Markdown
+
+`web::view::markdown::render` turns ticket text (plans, handoffs, comments) into HTML. Raw HTML in the text is shown as escaped text, never emitted. Links keep their `href` only for `http`, `https` and relative targets (whitespace and control characters are ignored when reading the scheme, case does not matter); any other scheme renders as the link's plain text. Images render as their alt text: no `<img>` is emitted and nothing is fetched. Escaping is done by pulldown-cmark's HTML writer, not by hand.

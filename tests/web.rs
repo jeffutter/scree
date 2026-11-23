@@ -869,3 +869,48 @@ fn bad_scope_or_filter_on_the_stream_is_an_error_fragment() {
         400
     );
 }
+
+mod markdown_hostile {
+    use scree::web::view::markdown::render;
+
+    fn out(src: &str) -> String {
+        render(src).into_string()
+    }
+
+    #[test]
+    fn markdown_script_and_img_are_inert() {
+        let o = out(
+            "<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>\n\ntext <img src=x onerror=alert(1)> more",
+        );
+        assert!(!o.contains("<script"), "{o}");
+        assert!(!o.contains("<img"), "{o}");
+        assert!(!o.contains("onerror=alert(1)>"), "{o}");
+        assert!(o.contains("&lt;script&gt;"), "{o}");
+    }
+
+    #[test]
+    fn markdown_javascript_link_is_text() {
+        let o = out("[x](javascript:alert(1)) and [y](JavaScript:alert(2))");
+        assert!(!o.contains("href=\"javascript"), "{o}");
+        assert!(!o.contains("<a"), "{o}");
+        assert!(o.contains('x') && o.contains('y'));
+    }
+
+    #[test]
+    fn markdown_data_on_click_is_text() {
+        let o = out(
+            "<button data-on-click=\"@post('/x')\">go</button>\n\ndata-on-click=\"@post('/x')\"",
+        );
+        assert!(!o.contains("<button"), "{o}");
+        assert!(!o.contains("<button"), "{o}");
+        assert!(o.contains("&lt;button data-on-click="), "{o}");
+    }
+
+    #[test]
+    fn markdown_safe_links_keep_href() {
+        let o = out("[a](http://x.test) [b](https://x.test) [c](/rel) [d](rel/path)");
+        for h in ["http://x.test", "https://x.test", "/rel", "rel/path"] {
+            assert!(o.contains(&format!("href=\"{h}\"")), "{h}: {o}");
+        }
+    }
+}
