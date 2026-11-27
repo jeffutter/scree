@@ -4,7 +4,7 @@ This records how `scree web` binds, who it acts as, how it takes its scope, how 
 
 ## Loopback by default
 
-The server binds `127.0.0.1` on port 7733. A port clash fails at startup with a message that includes the port.
+The server binds `127.0.0.1` on port 7733. A port clash fails at startup with a message that includes the port. The launchd agent passes `--port 0` instead, and [ADR 0005](0005-find-the-web-server-through-a-unix-socket.md) records how its address is found and why one database has one server.
 
 Rejected: binding all interfaces by default, which would expose a database the page can modify to the local network.
 

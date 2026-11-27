@@ -97,7 +97,11 @@ Every text argument (title, description, plan, criterion text, comment body, aba
 
 `tui`: opens a terminal UI on the alternate screen with a board, a list and a ticket detail view; `?` shows every key and `q` or Ctrl-C quits. It can run lifecycle, edit, criteria, comment, dependency, reorder, search and filter actions, and refreshes by itself when another process writes the database. It runs as Role human with author `human` unless `--role`, `--author` or their `SCREE_*` variables say otherwise, and runs the automatic sweep once at startup. Needs stdin and stdout to be terminals; otherwise it exits 2 with a usage error before touching the database or the terminal. Keys and behaviour: [tui.md](tui.md). Bare `scree` is unchanged.
 
-`web [--port N] [--bind ADDR] [--i-know-this-is-open]`: serves a browser UI. `--port` defaults to 7733 (0 picks a free port); `--bind` defaults to 127.0.0.1 and a non-loopback address is refused unless `--i-know-this-is-open` is given (there is no login). It always runs as Role human (`--role` and `SCREE_ROLE` are ignored) and never runs the sweep. Behaviour: [web-ui.md](web-ui.md).
+`web [--port N] [--bind ADDR] [--i-know-this-is-open]`: serves a browser UI. `--port` defaults to 7733 (0 picks a free port); `--bind` defaults to 127.0.0.1 and a non-loopback address is refused unless `--i-know-this-is-open` is given (there is no login). It always runs as Role human (`--role` and `SCREE_ROLE` are ignored) and never runs the sweep. One database has at most one server: a second `web` on it exits 1, whatever its port, and names the running URL. Behaviour: [web-ui.md](web-ui.md).
+
+`web status`: prints where the server for this database is, as `{"port":N,"url":"http://..."}`, or as the bare URL in text, so `open "$(scree web status --text)"` works. It exits 3 when no server runs, and neither opens nor creates the database. Any Role may run it. Options of `web` itself cannot be combined with it, and `--db` and the other global options go before `web` or after `status`.
+
+The flake's `homeManagerModules.default` runs `web --port 0` as a launchd agent on macOS (`services.scree-web`); see [web-ui.md](web-ui.md#run-at-login-on-macos).
 
 ### No arguments
 

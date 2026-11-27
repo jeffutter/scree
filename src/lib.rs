@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use cli::{
     Cli, Command, CommentCommand, CriteriaCommand, DecisionCommand, DepCommand, ListArgs,
-    ProjectCommand,
+    ProjectCommand, WebCommand,
 };
 use error::{Error, Result};
 use identity::{Env, Role};
@@ -166,6 +166,28 @@ pub fn run(cli: Cli, env: &Env, cwd: &Path) -> Result<Outcome> {
         return Ok(Outcome::Quiet);
     }
     if let Some(Command::Web {
+        command: Some(WebCommand::Status),
+        ..
+    }) = &cli.command
+    {
+        // Anyone may ask, so the Role is the caller's own. The database is
+        // neither opened nor created: only its path names the server.
+        let identity = identity::resolve(cli.role, cli.author, cli.session, env);
+        let format = output::decide_format(cli.json, cli.text, identity.role, env)?;
+        let path = db::resolve_path_from_env(cli.db)?;
+        let status = web::control::query(&path)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "no scree web server is running for {}",
+                path.display()
+            ))
+        })?;
+        return match format {
+            Format::Json => output::to_json(&status).map(Outcome::Print),
+            Format::Text => Ok(Outcome::Print(status.url)),
+        };
+    }
+    if let Some(Command::Web {
+        command: None,
         port,
         bind,
         i_know_this_is_open,

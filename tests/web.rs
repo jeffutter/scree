@@ -283,6 +283,7 @@ fn host_check_follows_the_bound_address() {
     );
     assert_ne!(same.status, 403);
     // Loopback still refuses an unknown Host.
+    drop(open);
     let local = e.spawn_web(&[], &[]);
     assert_eq!(
         local
@@ -333,6 +334,7 @@ fn role_is_human_even_when_the_environment_says_agent() {
     // is the observable. The environment variable and the flag both say agent.
     let w = e.spawn_web(&[("SCREE_ROLE", "agent"), ("CLAUDECODE", "1")], &[]);
     assert!(w.get("/").body.contains("role: human"));
+    drop(w);
     let w2 = e.spawn_web(&[], &["--role", "agent"]);
     assert!(w2.get("/").body.contains("role: human"));
 }
@@ -342,6 +344,104 @@ fn sigint_exits_promptly() {
     let e = Env::new();
     let mut w = e.spawn_web(&[], &[]);
     assert!(w.interrupt(Duration::from_secs(1)));
+}
+
+/// `scree web status` finds no server: exit 3, naming the database.
+fn assert_no_server(e: &Env) {
+    let out = e.run(&["web", "status"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no scree web server is running"), "{err}");
+    assert!(err.contains(e.db().to_str().unwrap()), "{err}");
+}
+
+fn socket(e: &Env) -> PathBuf {
+    let mut path = e.db().into_os_string();
+    path.push(".sock");
+    path.into()
+}
+
+#[test]
+fn status_without_a_server_exits_3_and_creates_no_database() {
+    let e = Env::new();
+    assert_no_server(&e);
+    assert!(!e.db().exists());
+}
+
+#[test]
+fn status_prints_the_live_url_as_json_and_text() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let url = format!("http://{}", w.addr);
+    assert_ne!(w.port(), 0);
+    let json = e.run(&["web", "status"]);
+    assert!(json.status.success(), "{json:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&json.stdout),
+        format!("{{\"port\":{},\"url\":\"{url}\"}}\n", w.port())
+    );
+    // An agent may ask too.
+    let text = e
+        .cmd_at(e.path(), &["web", "status", "--text"])
+        .env("CLAUDECODE", "1")
+        .output()
+        .unwrap();
+    assert!(text.status.success(), "{text:?}");
+    assert_eq!(String::from_utf8_lossy(&text.stdout), format!("{url}\n"));
+}
+
+#[test]
+fn a_second_server_on_one_database_exits_1_naming_the_first() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &[]);
+    let out = e.run(&["web", "--port", "0"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&format!("http://{}", w.addr)), "{err}");
+    assert!(!err.contains("listening on"), "{err}");
+    // The refused server left the first one findable.
+    assert_eq!(e.ok(&["web", "status"])["port"], w.port());
+}
+
+#[test]
+fn a_stopped_server_removes_its_socket() {
+    let e = Env::new();
+    for signal in ["INT", "TERM"] {
+        let mut w = e.spawn_web(&[], &[]);
+        assert!(socket(&e).exists());
+        assert!(w.signal(signal, Duration::from_secs(1)), "{signal}");
+        assert!(!socket(&e).exists(), "{signal}");
+        assert_no_server(&e);
+    }
+}
+
+#[test]
+fn a_killed_server_is_not_reported_and_can_be_replaced() {
+    let e = Env::new();
+    let mut w = e.spawn_web(&[], &[]);
+    assert!(w.signal("KILL", Duration::from_secs(1)));
+    assert!(socket(&e).exists(), "SIGKILL leaves the socket behind");
+    assert_no_server(&e);
+    let next = e.spawn_web(&[], &[]);
+    assert_eq!(e.ok(&["web", "status"])["port"], next.port());
+}
+
+#[test]
+fn status_reports_a_loopback_url_for_a_wildcard_bind() {
+    let e = Env::new();
+    let w = e.spawn_web(&[], &["--bind", "0.0.0.0", "--i-know-this-is-open"]);
+    assert_eq!(
+        e.ok(&["web", "status"])["url"],
+        format!("http://127.0.0.1:{}", w.port())
+    );
+}
+
+#[test]
+fn status_refuses_the_serving_options() {
+    let e = Env::new();
+    let out = e.run(&["web", "--port", "0", "status"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
 
 const ASSET_PATHS: [(&str, &str); 5] = [
@@ -751,13 +851,18 @@ fn picker_never_reads_the_server_cwd() {
     scope_setup(&e);
     let elsewhere = repo(&e, "unrelated");
     e.ok_at(&elsewhere, &["add", "Elsewhere"]);
-    let from_tmp = e.spawn_web(&[], &[]);
-    let from_repo = e.spawn_web_at(&elsewhere, &[], &[]);
-    for url in ["/", "/?p=MA", "/?p=MA&w=@root", "/?p="] {
-        let a = from_tmp.get(url);
-        let b = from_repo.get(url);
-        assert_eq!(a.status, b.status, "{url}");
-        assert_eq!(a.body, b.body, "{url}");
+    let urls = ["/", "/?p=MA", "/?p=MA&w=@root", "/?p="];
+    // One server at a time: a database has at most one.
+    let pages = |w: common::Web| {
+        urls.map(|url| {
+            let r = w.get(url);
+            (r.status, r.body)
+        })
+    };
+    let from_tmp = pages(e.spawn_web(&[], &[]));
+    let from_repo = pages(e.spawn_web_at(&elsewhere, &[], &[]));
+    for ((a, b), url) in from_tmp.iter().zip(&from_repo).zip(urls) {
+        assert_eq!(a, b, "{url}");
     }
 }
 

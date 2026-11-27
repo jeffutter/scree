@@ -17,7 +17,11 @@
     , crane
     ,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      # `services.scree-web`: `scree web` as a launchd agent (macOS).
+      homeManagerModules.default = import ./nix/home-module.nix self;
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         overlays = [ (import rust-overlay) ];

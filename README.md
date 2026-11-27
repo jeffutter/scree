@@ -137,7 +137,16 @@ Run `scree tui` in a terminal for a board, a list and a ticket detail view. Pres
 
 ## Use the web UI
 
-Run `scree web` and open the printed address (loopback, port 7733 by default) for the same tickets in a browser, with live updates. See [`docs/web-ui.md`](docs/web-ui.md).
+Run `scree web` and open the printed address (loopback, port 7733 by default) for the same tickets in a browser, with live updates. `scree web status` prints the address of the running server, so `open "$(scree web status --text)"` opens it. It exits 3 when none runs. See [`docs/web-ui.md`](docs/web-ui.md).
+
+On macOS, the flake's Home Manager module keeps the server running as a launchd agent, on a free port:
+
+```nix
+imports = [ inputs.scree.homeManagerModules.default ];
+services.scree-web.enable = true;
+```
+
+The agent and the CLI find each other through the database path. The agent uses `scree/scree.db` under Home Manager's `xdg.dataHome`, so a shell with a different `SCREE_DB` or `XDG_DATA_HOME` doesn't see it. While the agent runs, a `scree web` you start by hand on that database is refused. If yours holds the database first, the agent restarts in a loop until you stop it. Logs are `~/Library/Logs/scree-web.log` and `scree-web.err.log`.
 
 ## Herdr
 

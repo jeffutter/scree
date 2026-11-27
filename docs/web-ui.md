@@ -10,6 +10,40 @@ SCREE_DB=$(mktemp -d)/s.db scree web --port 0
 
 It prints `scree web: listening on http://127.0.0.1:PORT` to stderr and logs one line per request (see Logging). `--port` defaults to 7733 and 0 picks a free port. SIGINT or SIGTERM stops it; open requests get 2 seconds to finish. It never sweeps.
 
+## Find the running server
+
+```sh
+scree web status          # {"port":N,"url":"http://127.0.0.1:N"}
+scree web status --text   # http://127.0.0.1:N
+```
+
+While it serves, the server answers on a unix socket at `<database path>.sock` (mode 0600) and holds a lock on `<database path>.sock.lock` ([ADR 0005](adr/0005-find-the-web-server-through-a-unix-socket.md), `src/web/control.rs`). So:
+
+- `status` finds only the server using the same database (`--db`, `SCREE_DB` or `XDG_DATA_HOME`). With none running it exits 3.
+- One database has at most one server. A second `scree web` on it exits 1 and names the running URL.
+- SIGINT and SIGTERM remove the socket. A killed server leaves it behind; `status` still reports no server and the next start replaces it. The lock file stays.
+- A database path too long for a unix socket (about 100 bytes), or on a filesystem without sockets, makes `scree web` fail at startup.
+- A wildcard bind is reported as the loopback address of the same family.
+
+## Run at login on macOS
+
+The flake exports a Home Manager module that runs `scree web --port 0` as the launchd agent `scree-web`, started at login and restarted whenever it exits:
+
+```nix
+imports = [ inputs.scree.homeManagerModules.default ];
+services.scree-web.enable = true;
+```
+
+| Option | Meaning |
+|---|---|
+| `services.scree-web.enable` | run the agent; evaluation fails on anything but macOS |
+| `services.scree-web.package` | the scree package to run, this flake's by default; install the same one for the CLI |
+| `services.scree-web.extraArgs` | more `web` flags (never `--port`); a non-loopback `--bind` also needs `--i-know-this-is-open` |
+
+The agent sets `SCREE_DB` to `${config.xdg.dataHome}/scree/scree.db`, which is the CLI's default unless your shell sets `SCREE_DB` or a different `XDG_DATA_HOME`. It sets `PATH` to nix's git plus `/usr/bin:/bin`, for linking commits. Output goes to `~/Library/Logs/scree-web.log` and `scree-web.err.log`; request lines are in the err log, and neither is rotated.
+
+While the agent runs, a `scree web` started by hand on the same database is refused. If one started by hand holds the database first, the agent fails and launchd keeps restarting it until that one stops.
+
 ## Role
 
 Role is always human. `--role` and `SCREE_ROLE` are ignored. The page footer prints the resolved role.

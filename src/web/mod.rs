@@ -1,9 +1,10 @@
-//! `scree web`: a local web UI, server-rendered with maud (ADR 0003). This is
-//! the server skeleton: one guarded router and a placeholder page. Handlers
-//! hold no SQL; they will call the library like the CLI does.
+//! `scree web`: a local web UI, server-rendered with maud (ADR 0003). One
+//! guarded router serves every page. Handlers hold no SQL; they call the
+//! library like the CLI does.
 
 mod assets;
 pub mod config;
+pub mod control;
 pub mod create;
 mod error;
 mod guard;
@@ -16,6 +17,7 @@ mod state;
 mod test_routes;
 pub mod view;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +26,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::middleware;
 use axum::routing::{get, post};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::watch;
 
 use crate::error::{Error, Result};
@@ -34,7 +37,9 @@ use state::Live;
 const DRAIN: Duration = Duration::from_secs(2);
 
 /// Serve until SIGINT or SIGTERM. Prints `listening on http://ADDR` to stderr
-/// once bound; port 0 picks a free port. The database must already exist.
+/// once bound; port 0 picks a free port. The address is also answered on the
+/// database's control socket, and a second server on one database is refused.
+/// The database must already exist.
 pub fn run(db: std::path::PathBuf, identity: &Identity, cfg: config::Config) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -55,6 +60,8 @@ struct AppState {
 }
 
 async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
+    // Held until this returns: it makes this the database's only server.
+    let claim = control::Claim::acquire(&state.db)?;
     let addr = cfg.addr;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -101,13 +108,16 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
              read and change tickets, there is no login. Use only on a network you trust."
         );
     }
+    claim.serve(control::Status::of(local))?;
+    // Before the listening line: a caller may signal as soon as it reads it.
+    let signal = shutdown_signal()?;
     eprintln!("scree web: listening on http://{local}");
     let (stop_tx, mut stop) = watch::channel(false);
     let serving = axum::serve(listener, router).with_graceful_shutdown(async move {
         let _ = stop.wait_for(|s| *s).await;
     });
     let signalled = async {
-        wait_for_signal().await;
+        signal.await;
         // Open streams never end on their own; end them so the graceful
         // shutdown is quick. DRAIN is only the backstop for slow requests.
         live.stop_streams();
@@ -122,20 +132,13 @@ async fn serve(state: AppState, cfg: config::Config) -> Result<()> {
     result
 }
 
-async fn wait_for_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut int)) = (
-            signal(SignalKind::terminate()),
-            signal(SignalKind::interrupt()),
-        ) else {
-            return std::future::pending().await;
-        };
+/// Registers the handlers now; the returned future ends on SIGINT or SIGTERM.
+fn shutdown_signal() -> Result<impl Future<Output = ()>> {
+    let handler =
+        |kind| signal(kind).map_err(|e| Error::Other(format!("cannot handle signals: {e}")));
+    let mut term = handler(SignalKind::terminate())?;
+    let mut int = handler(SignalKind::interrupt())?;
+    Ok(async move {
         tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
+    })
 }

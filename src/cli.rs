@@ -563,7 +563,13 @@ pub enum Command {
     /// Open the interactive terminal UI
     Tui,
     /// Serve the web UI in a browser (loopback by default; for humans)
+    #[command(
+        args_conflicts_with_subcommands = true,
+        override_usage = "scree web [OPTIONS] [COMMAND]"
+    )]
     Web {
+        #[command(subcommand)]
+        command: Option<WebCommand>,
         #[arg(long, default_value_t = 7733)]
         port: u16,
         #[arg(long, default_value = "127.0.0.1")]
@@ -577,6 +583,12 @@ pub enum Command {
     Archive { id: String },
     /// Undo archive; a subtask of an archived parent is refused
     Unarchive { id: String },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WebCommand {
+    /// Print the running web server's URL (exit 3 if none runs)
+    Status,
 }
 
 #[cfg(test)]

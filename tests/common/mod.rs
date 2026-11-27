@@ -617,8 +617,14 @@ impl Web {
 
     /// Send SIGINT and wait up to `within` for the child to exit; true when it did.
     pub fn interrupt(&mut self, within: std::time::Duration) -> bool {
+        self.signal("INT", within)
+    }
+
+    /// Send the signal named as `kill` spells it (`TERM`, `KILL`) and wait up
+    /// to `within` for the child to exit; true when it did.
+    pub fn signal(&mut self, name: &str, within: std::time::Duration) -> bool {
         Command::new("kill")
-            .args(["-INT", &self.child.id().to_string()])
+            .args([&format!("-{name}"), &self.child.id().to_string()])
             .status()
             .unwrap();
         let start = std::time::Instant::now();
