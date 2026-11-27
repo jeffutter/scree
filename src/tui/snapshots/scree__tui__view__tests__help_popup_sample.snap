@@ -31,6 +31,7 @@ scre+help (j/k scroll, Esc closes) - more below---------------------------------
 |   |  j/k, PgUp/PgDn             scroll                                            |    |
 |   |  Ctrl-u/Ctrl-d              half page                                         |    |
 |   |  g/G                        top/bottom                                        |    |
+|   |  Wheel, swipe               scroll 3 lines                                    |    |
 |   |  [ ]                        select previous/next criterion or comment         |    |
 |   |  Space, v                   check (evidence prompt) / uncheck                 |    |
 |   |  n                          add criterion                                     |    |
@@ -46,19 +47,18 @@ scre+help (j/k scroll, Esc closes) - more below---------------------------------
 |   |  j/k, PgUp/PgDn             next/previous decision, page                      |    |
 |   |  Ctrl-u/Ctrl-d              half page up/down                                 |    |
 |   |  g/G, Home/End              first/last decision                               |    |
-|   |  y                          accept the recommendation (confirm)               |    |
-+---|  1-9                        answer with that numbered option (confirm)        |----+
-+rea|  a                          answer with typed text (prompt)                   |----+
-|o S|  t                          open the linked ticket (picker when several)      |    |
-+---|  s                          cycle scope worktree/project/all                  |----+
-+act|  Esc, q, h, Left, Tab, W    back to board/list                                |----+
-|* S|  ?                          this help                                         |    |
-+---|  Ctrl-c                     quit                                              |----+
-+don|                                                                               |----+
-|+ S|Popups and prompts:                                                            |    |
-+---|  Filter: s f b              cycle status / for / blocked                      |----+
-+aba|  Filter: x                  clear all filters                                 |----+
-|x S|  Filter: Esc, Enter         close                                             |    |
-+---|  Picker: type               filter tickets                                    |----+
-[Ent|  Picker: Up/Down, Ctrl-p/n  move                                              |
++---|  y                          accept the recommendation (confirm)               |----+
++rea|  1-9                        answer with that numbered option (confirm)        |----+
+|o S|  a                          answer with typed text (prompt)                   |    |
++---|  t                          open the linked ticket (picker when several)      |----+
++act|  s                          cycle scope worktree/project/all                  |----+
+|* S|  Esc, q, h, Left, Tab, W    back to board/list                                |    |
++---|  ?                          this help                                         |----+
++don|  Ctrl-c                     quit                                              |----+
+|+ S|                                                                               |    |
++---|Popups and prompts:                                                            |----+
++aba|  Filter: s f b              cycle status / for / blocked                      |----+
+|x S|  Filter: x                  clear all filters                                 |    |
++---|  Filter: Esc, Enter         close                                             |----+
+[Ent|  Picker: type               filter tickets                                    |
 [PgU+-------------------------------------------------------------------------------+

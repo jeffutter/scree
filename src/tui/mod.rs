@@ -2,7 +2,7 @@
 //!
 //! Elm-style: `state::update` is pure and returns Effects; `effects` runs them
 //! against the database and feeds Events back; `view` draws; `terminal` owns
-//! raw mode and the alternate screen.
+//! raw mode, the alternate screen and mouse capture.
 
 mod effects;
 mod markdown;
@@ -94,11 +94,15 @@ pub fn run(
             pending.extend(update(&mut state, Event::DbChanged));
             continue;
         }
+        // Only the detail view scrolls by wheel; elsewhere the terminal keeps
+        // the mouse, so text selects as usual.
+        terminal::set_mouse(state.detail.is_some()).map_err(terminal_err)?;
         term.draw(|f| view::draw(f, &mut state))
             .map_err(terminal_err)?;
         if event::poll(Duration::from_millis(100)).map_err(terminal_err)? {
             let ev = match event::read().map_err(terminal_err)? {
                 event::Event::Key(k) => Event::Key(k),
+                event::Event::Mouse(m) => Event::Mouse(m),
                 event::Event::Resize(_, h) => Event::Resize(h),
                 _ => continue,
             };

@@ -73,6 +73,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("j/k, PgUp/PgDn", "scroll"),
             ("Ctrl-u/Ctrl-d", "half page"),
             ("g/G", "top/bottom"),
+            ("Wheel, swipe", "scroll 3 lines"),
             ("[ ]", "select previous/next criterion or comment"),
             ("Space, v", "check (evidence prompt) / uncheck"),
             ("n", "add criterion"),

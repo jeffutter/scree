@@ -55,6 +55,7 @@ Detail:
 | `j`/`k`, PgUp/PgDn | scroll |
 | Ctrl-u/Ctrl-d | half page |
 | `g`/`G` | top/bottom |
+| Wheel, swipe | scroll 3 lines |
 | `[` `]` | select previous/next criterion or comment (criteria first, no wrap) |
 | Space, `v` | check (optional evidence prompt) or uncheck the selected criterion |
 | `n` | add criterion |
@@ -101,6 +102,12 @@ Lifecycle keys act on the selected ticket and only when valid for its status. `D
 
 Answering and accepting call the same library code as `scree decision answer`, so they record the TUI's caller as `decided_by`, and a TUI started as an agent is refused with the library's message in the status line. Picking an option (`1`-`9`) answers with that option's text after a confirm; a number past the last option shows an error. A decision with no recommendation refuses `y`. An empty typed answer is refused. Answering removes the decision from the queue; if another process answers or supersedes it first, the view reloads and the selection moves to the neighbouring decision.
 
+## Mouse
+
+In the detail view the mouse wheel, or a swipe on a touch terminal, scrolls 3 lines at a time. It also scrolls the help popup opened over that view. A prompt, picker or confirm holds the view still, and clicks do nothing.
+
+The TUI captures the mouse only while a detail view is open, so the board, list and decisions view select and copy text as usual. In the detail view, hold Shift while dragging to select with the terminal (many terminals; some use another modifier, such as Option in iTerm2), or go back to the board. The mouse is released on exit, on panic and while the editor runs. A multiplexer between the terminal and scree has to forward mouse reporting for the wheel to arrive.
+
 ## Search and filters
 
 `/` opens a live search over id, title and description (case-insensitive substring, applied client-side; results update per keystroke). Enter keeps the query, Esc clears it. `f` opens a filter popup for status, for and blocked/available. Active filters AND together and show in a row under the header; Esc on the board or list clears them all.
@@ -117,7 +124,7 @@ The TUI polls `PRAGMA data_version` and reloads within about a second when anoth
 
 ## Structure
 
-The code in `src/tui/` follows model-view-update. `state` holds `State` and a pure `update` from events to new state plus `Effect` values; `effects` runs them against the ticket library; `view` draws a frame from `State`; `terminal` owns the alternate screen; `widgets` and `theme` hold shared drawing parts. Tests drive `update` with scripted events and snapshot `view` output, so no terminal is needed.
+The code in `src/tui/` follows model-view-update. `state` holds `State` and a pure `update` from events to new state plus `Effect` values; `effects` runs them against the ticket library; `view` draws a frame from `State`; `terminal` owns the alternate screen and mouse capture; `widgets` and `theme` hold shared drawing parts. Tests drive `update` with scripted events and snapshot `view` output, so no terminal is needed.
 
 ## Herdr
 

@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 
 use super::theme::Theme;
 use super::widgets::{Prompt, PromptOutcome};
@@ -741,6 +743,8 @@ impl State {
 #[derive(Debug)]
 pub enum Event {
     Key(KeyEvent),
+    /// Reported only while the runner captures the mouse (detail view open).
+    Mouse(MouseEvent),
     /// The terminal's new height in rows.
     Resize(u16),
     Loaded(Result<Vec<Ticket>, String>),
@@ -832,6 +836,10 @@ pub fn update(state: &mut State, event: Event) -> Vec<Effect> {
     match event {
         Event::Key(k) if k.kind != KeyEventKind::Release => on_key(state, k),
         Event::Key(_) => vec![],
+        Event::Mouse(m) => {
+            on_mouse(state, m);
+            vec![]
+        }
         Event::Resize(h) => {
             // Header, footer and the pane borders take the rest.
             state.page = usize::from(h).saturating_sub(5).max(1);
@@ -1400,6 +1408,39 @@ fn on_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
     vec![]
 }
 
+/// The wheel, or a swipe on a touch terminal, scrolls the open detail view, or
+/// the help popup over it. It is not turned into key presses: any other key
+/// cancels a confirm. Popups that own the keyboard hold the view still.
+fn on_mouse(state: &mut State, m: MouseEvent) {
+    const LINES: u16 = 3;
+    let down = match m.kind {
+        MouseEventKind::ScrollDown => true,
+        MouseEventKind::ScrollUp => false,
+        _ => return,
+    };
+    if state.prompt.is_some()
+        || state.picker.is_some()
+        || state.search.is_some()
+        || state.filter_menu
+        || state.confirm.is_some()
+    {
+        return;
+    }
+    if state.help {
+        state.help_scroll = if down {
+            state.help_scroll.saturating_add(LINES)
+        } else {
+            state.help_scroll.saturating_sub(LINES)
+        };
+    } else if let Some(d) = state.detail.as_mut() {
+        d.scroll = if down {
+            d.scroll.saturating_add(LINES.into())
+        } else {
+            d.scroll.saturating_sub(LINES.into())
+        };
+    }
+}
+
 /// Keys in the decisions view. `y` asks to accept the recommendation, `a`
 /// opens the answer prompt, `t` opens the linked ticket (a picker when there
 /// are several). Esc, `q`, `h`, Left, Tab and `W` go back.
@@ -1642,7 +1683,7 @@ fn on_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::KeyEventState;
+    use ratatui::crossterm::event::{KeyEventState, MouseButton};
 
     fn key(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> Event {
         Event::Key(KeyEvent {
@@ -2221,6 +2262,76 @@ mod tests {
         let mut s = opened();
         update(&mut s, ctrl('c'));
         assert!(s.should_quit);
+    }
+
+    fn mouse(kind: MouseEventKind) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn wheel_scrolls_the_detail_view() {
+        let mut s = opened();
+        let scroll = |s: &State| s.detail.as_ref().unwrap().scroll;
+        s.notice = Some("kept".into());
+        update(&mut s, mouse(MouseEventKind::ScrollDown));
+        update(&mut s, mouse(MouseEventKind::ScrollDown));
+        assert_eq!(scroll(&s), 6);
+        update(&mut s, mouse(MouseEventKind::ScrollUp));
+        assert_eq!(scroll(&s), 3);
+        update(&mut s, mouse(MouseEventKind::ScrollUp));
+        update(&mut s, mouse(MouseEventKind::ScrollUp));
+        assert_eq!(scroll(&s), 0);
+        assert_eq!(s.notice.as_deref(), Some("kept"));
+        assert!(!s.detail.as_ref().unwrap().reveal);
+    }
+
+    #[test]
+    fn wheel_scrolls_help_over_the_detail_view() {
+        let mut s = opened();
+        update(&mut s, press('?'));
+        update(&mut s, mouse(MouseEventKind::ScrollDown));
+        assert_eq!(s.help_scroll, 3);
+        update(&mut s, mouse(MouseEventKind::ScrollUp));
+        update(&mut s, mouse(MouseEventKind::ScrollUp));
+        assert!(s.help && s.help_scroll == 0);
+        assert_eq!(s.detail.as_ref().unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn wheel_leaves_popups_open_and_still() {
+        for open in [press('x'), press('m'), press('b')] {
+            let mut s = opened();
+            update(&mut s, open);
+            let popups = |s: &State| (s.confirm.is_some(), s.prompt.is_some(), s.picker.is_some());
+            let before = popups(&s);
+            assert_ne!(before, (false, false, false));
+            update(&mut s, mouse(MouseEventKind::ScrollDown));
+            assert_eq!(popups(&s), before);
+            assert_eq!(s.detail.as_ref().unwrap().scroll, 0);
+        }
+    }
+
+    #[test]
+    fn clicks_and_wheel_without_detail_do_nothing() {
+        let mut s = opened();
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::ScrollLeft,
+            MouseEventKind::ScrollRight,
+        ] {
+            assert!(update(&mut s, mouse(kind)).is_empty());
+        }
+        assert_eq!(s.detail.as_ref().unwrap().scroll, 0);
+        let mut s = loaded(vec![press('l')]);
+        let before = (s.col, s.rows, s.selected_id.clone());
+        assert!(update(&mut s, mouse(MouseEventKind::ScrollDown)).is_empty());
+        assert_eq!((s.col, s.rows, s.selected_id.clone()), before);
     }
 
     #[test]
