@@ -185,12 +185,10 @@ document.addEventListener("change", (e) => {
 
 // Modal dialogs (ticket detail, and quick create on the List): a button with
 // data-dialog-open="ID" opens the <dialog>; Cancel (data-dialog-close) and Esc
-// close it. A live patch of the ticket region drops the `open` attribute of a
-// dialog the user is typing in, so the ids of the open dialogs are remembered
-// and re-opened after each patch. A form that was accepted (the request did not
+// close it. Live patches leave an open dialog alone because the server marks
+// each one data-preserve-attr="open". A form that was accepted (the request did not
 // fail and its err slot is empty once it finishes) closes its dialog.
 (() => {
-  const openIds = new Set();
   const dlg = (id) => document.getElementById(id);
 
   document.addEventListener("click", (e) => {
@@ -198,10 +196,7 @@ document.addEventListener("change", (e) => {
     const opener = e.target.closest("[data-dialog-open]");
     if (opener) {
       const d = dlg(opener.dataset.dialogOpen);
-      if (d && !d.open) {
-        d.showModal();
-        openIds.add(d.id);
-      }
+      if (d && !d.open) d.showModal();
       return;
     }
     if (e.target.closest("[data-dialog-close]")) {
@@ -210,14 +205,6 @@ document.addEventListener("change", (e) => {
     }
   });
 
-  // Esc closes through the dialog itself; keep the remembered ids in step.
-  document.addEventListener(
-    "close",
-    (e) => {
-      if (e.target instanceof HTMLDialogElement) openIds.delete(e.target.id);
-    },
-    true,
-  );
   document.addEventListener("click", (e) => {
     const d = e.target;
     if (!(d instanceof HTMLDialogElement) || !d.open) return;
@@ -227,23 +214,6 @@ document.addEventListener("change", (e) => {
     const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
     if (!inside) d.close();
   });
-
-  const reopen = () => {
-    for (const id of openIds) {
-      const d = dlg(id);
-      if (!d) openIds.delete(id);
-      else if (!d.open) d.showModal();
-    }
-  };
-  const live = document.getElementById("ticket-live");
-  if (live) {
-    new MutationObserver(reopen).observe(live, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["open"],
-    });
-  }
 
   // A POSTed form closes its dialog when the request was accepted, and its
   // fields are cleared for the next use. The error slot is the form's next

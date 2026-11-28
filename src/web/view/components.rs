@@ -93,7 +93,10 @@ pub fn dialog_with(
     inner: Markup,
 ) -> Markup {
     html! {
-        dialog id=(dialog_id) class=(class) aria-labelledby=(format!("{dialog_id}-title")) {
+        // A live patch morphs the page toward markup with no `open`, which
+        // would close a dialog the user is typing in.
+        dialog id=(dialog_id) class=(class) aria-labelledby=(format!("{dialog_id}-title"))
+            data-preserve-attr="open" {
             h2 id=(format!("{dialog_id}-title")) { (title) }
             (inner)
             div class="dialog-foot" {

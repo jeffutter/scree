@@ -2487,6 +2487,30 @@ fn the_list_keeps_the_quick_form_outside_the_live_region() {
     assert!(close < at("id=\"list\""));
 }
 
+#[test]
+fn every_dialog_keeps_its_open_state_across_live_patches() {
+    let e = Env::new();
+    e.ok(&[
+        "add",
+        "Has dialogs",
+        "--criterion",
+        "c",
+        "--status",
+        "ready",
+    ]);
+    let w = e.spawn_web(&[], &[]);
+    let page = w.get("/ticket/LOCAL-1").body;
+    let dialogs: Vec<&str> = page
+        .split("<dialog ")
+        .skip(1)
+        .map(|d| &d[..d.find('>').unwrap()])
+        .collect();
+    assert!(!dialogs.is_empty(), "{page}");
+    for d in dialogs {
+        assert!(d.contains("data-preserve-attr=\"open\""), "{d}");
+    }
+}
+
 // ---- Decisions screen ----
 
 fn text(r: &common::Reply) -> String {
