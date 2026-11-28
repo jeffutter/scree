@@ -291,8 +291,10 @@ fn filter_bar(scope: &Scope, q: &ListQuery) -> Markup {
             }
             div class="filter-group" role="group" aria-labelledby="fg-status" {
                 span class="picker-label" id="fg-status" { "Status" }
-                @for s in Status::ALL {
-                    (checkbox("status", s.as_str(), s.as_str(), statuses.contains(&s)))
+                div class="filter-pills" {
+                    @for s in Status::ALL {
+                        (checkbox("status", s.as_str(), s.as_str(), statuses.contains(&s)))
+                    }
                 }
             }
             label class="field" {
@@ -306,10 +308,12 @@ fn filter_bar(scope: &Scope, q: &ListQuery) -> Markup {
             }
             div class="filter-group" role="group" aria-labelledby="fg-only" {
                 span class="picker-label" id="fg-only" { "Only" }
-                (checkbox("blocked", "blocked", "1", q.blocked))
-                (checkbox("available", "available", "1", q.available))
-                (checkbox("stale", "stale claims", "1", q.stale))
-                (checkbox("archived", "include archived", "1", q.archived))
+                div class="filter-pills" {
+                    (checkbox("blocked", "blocked", "1", q.blocked))
+                    (checkbox("available", "available", "1", q.available))
+                    (checkbox("stale", "stale claims", "1", q.stale))
+                    (checkbox("archived", "include archived", "1", q.archived))
+                }
             }
             // Only meaningful with "stale claims"; ticking it re-renders the
             // page with the field.
