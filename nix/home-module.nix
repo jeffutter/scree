@@ -1,7 +1,8 @@
 # Home Manager module: `scree web` as a launchd agent (macOS).
 #
-# The server listens on a free port chosen at start. The CLI finds it over the
-# control socket beside the database (`scree web status`).
+# The server listens on `services.scree-web.port`: 7733 by default, as
+# `scree web` does, or a free port chosen at each start if set to 0. The CLI
+# finds it over the control socket beside the database (`scree web status`).
 self:
 { config, lib, pkgs, ... }:
 let
@@ -19,6 +20,18 @@ in
       description = "The scree package to run. Install the same one for the CLI.";
     };
 
+    port = lib.mkOption {
+      type = lib.types.port;
+      default = 7733;
+      example = 0;
+      description = ''
+        The port, passed as `scree web --port`. The default, 7733, is also the
+        `scree web` default. 0 picks a free port at each start. `scree web
+        status` reports the bound port either way. If the port is taken, the
+        server fails and launchd keeps restarting it until the port is free.
+      '';
+    };
+
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -26,8 +39,8 @@ in
       description = ''
         Further `scree web` flags. A non-loopback `--bind` is refused without
         `--i-know-this-is-open` and has no login: anyone who can reach the port
-        can read and change tickets. Do not pass `--port`; the module already
-        does.
+        can read and change tickets. Do not pass `--port`; set
+        `services.scree-web.port` instead.
       '';
     };
   };
@@ -43,7 +56,7 @@ in
     launchd.agents.scree-web = {
       enable = true;
       config = {
-        ProgramArguments = [ "${cfg.package}/bin/scree" "web" "--port" "0" ] ++ cfg.extraArgs;
+        ProgramArguments = [ "${cfg.package}/bin/scree" "web" "--port" (toString cfg.port) ] ++ cfg.extraArgs;
         RunAtLoad = true;
         KeepAlive = true;
         EnvironmentVariables = {

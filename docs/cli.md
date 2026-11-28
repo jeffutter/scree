@@ -101,7 +101,7 @@ Every text argument (title, description, plan, criterion text, comment body, aba
 
 `web status`: prints where the server for this database is, as `{"port":N,"url":"http://..."}`, or as the bare URL in text, so `open "$(scree web status --text)"` works. It exits 3 when no server runs, and neither opens nor creates the database. Any Role may run it. Options of `web` itself cannot be combined with it, and `--db` and the other global options go before `web` or after `status`.
 
-The flake's `homeManagerModules.default` runs `web --port 0` as a launchd agent on macOS (`services.scree-web`); see [web-ui.md](web-ui.md#run-at-login-on-macos).
+The flake's `homeManagerModules.default` runs `web --port` as a launchd agent on macOS (`services.scree-web`), with the port from `services.scree-web.port` (default 7733); see [web-ui.md](web-ui.md#run-at-login-on-macos).
 
 ### No arguments
 

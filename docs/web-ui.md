@@ -27,7 +27,7 @@ While it serves, the server answers on a unix socket at `<database path>.sock` (
 
 ## Run at login on macOS
 
-The flake exports a Home Manager module that runs `scree web --port 0` as the launchd agent `scree-web`, started at login and restarted whenever it exits:
+The flake exports a Home Manager module that runs `scree web --port <port>` (7733 by default) as the launchd agent `scree-web`, started at login and restarted whenever it exits:
 
 ```nix
 imports = [ inputs.scree.homeManagerModules.default ];
@@ -38,11 +38,12 @@ services.scree-web.enable = true;
 |---|---|
 | `services.scree-web.enable` | run the agent; evaluation fails on anything but macOS |
 | `services.scree-web.package` | the scree package to run, this flake's by default; install the same one for the CLI |
-| `services.scree-web.extraArgs` | more `web` flags (never `--port`); a non-loopback `--bind` also needs `--i-know-this-is-open` |
+| `services.scree-web.port` | the port, 7733 by default as for `scree web`; 0 picks a free port at each start. Earlier versions of the module always did that, so set `port = 0` to keep it |
+| `services.scree-web.extraArgs` | more `web` flags (never `--port`; use `port`); a non-loopback `--bind` also needs `--i-know-this-is-open` |
 
 The agent sets `SCREE_DB` to `${config.xdg.dataHome}/scree/scree.db`, which is the CLI's default unless your shell sets `SCREE_DB` or a different `XDG_DATA_HOME`. It sets `PATH` to nix's git plus `/usr/bin:/bin`, for linking commits. Output goes to `~/Library/Logs/scree-web.log` and `scree-web.err.log`; request lines are in the err log, and neither is rotated.
 
-While the agent runs, a `scree web` started by hand on the same database is refused. If one started by hand holds the database first, the agent fails and launchd keeps restarting it until that one stops.
+While the agent runs, a `scree web` started by hand on the same database is refused. If one started by hand holds the database first, the agent fails and launchd keeps restarting it until that one stops. The same happens while any other process holds the agent's port, until the port is free. With the default, that includes a `scree web` started by hand on another database, which also takes 7733; one started while the agent holds 7733 fails unless given another `--port`.
 
 ## Role
 

@@ -139,7 +139,7 @@ Run `scree tui` in a terminal for a board, a list and a ticket detail view. Pres
 
 Run `scree web` and open the printed address (loopback, port 7733 by default) for the same tickets in a browser, with live updates. `scree web status` prints the address of the running server, so `open "$(scree web status --text)"` opens it. It exits 3 when none runs. See [`docs/web-ui.md`](docs/web-ui.md).
 
-On macOS, the flake's Home Manager module keeps the server running as a launchd agent, on a free port:
+On macOS, the flake's Home Manager module keeps the server running as a launchd agent, on port 7733 by default (set `services.scree-web.port`; 0 picks a free port):
 
 ```nix
 imports = [ inputs.scree.homeManagerModules.default ];
