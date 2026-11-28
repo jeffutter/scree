@@ -1,6 +1,6 @@
 //! Create a ticket from the web: the quick form (title, parent, status, for)
-//! on the List, and the full form (also description, plan, criteria and
-//! blockers) at `/new`. Both post to `POST /new`. The Project and Worktree come
+//! in a modal dialog on the List, and the full form (also description, plan,
+//! criteria and blockers) at `/new`. Both post to `POST /new`. The Project and Worktree come
 //! from the form's hidden `p` and `w` (the page's scope, never the cwd); a
 //! parent decides the scope of a subtask. Nothing here sweeps.
 
@@ -57,10 +57,26 @@ fn ids(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// The link to the ticket just made, or an empty element holding its place. The
+/// quick form lives in a dialog that closes on success, so the List renders this
+/// outside it.
+pub fn created_notice(created: Option<&str>) -> Markup {
+    html! {
+        div id="create-created" role="status" {
+            @if let Some(id) = created {
+                p class="notice-hint" {
+                    "Created " a href=(format!("/ticket/{id}")) { (id) } "."
+                }
+            }
+        }
+    }
+}
+
 /// The create form for `filter`, or the "pick a Project" state for all
-/// Projects. `created` is the id of the ticket this form just made: it shows a
-/// link and gives the form a new element id, so the browser replaces it with an
-/// empty one instead of keeping the typed text.
+/// Projects. `created` is the id of the ticket this form just made: it gives the
+/// form a new element id, so the browser replaces it with an empty one instead
+/// of keeping the typed text. The full form also shows the link to that ticket;
+/// the quick form leaves it to [`created_notice`].
 pub fn form(filter: &ScopeFilter, mode: Mode, created: Option<&str>) -> Markup {
     let m = mode.as_str();
     let container = format!("create-{m}");
@@ -80,10 +96,8 @@ pub fn form(filter: &ScopeFilter, mode: Mode, created: Option<&str>) -> Markup {
     };
     html! {
         div id=(container) {
-            @if let Some(id) = created {
-                p class="notice-hint" role="status" {
-                    "Created " a href=(format!("/ticket/{id}")) { (id) } "."
-                }
+            @if mode == Mode::Full && created.is_some() {
+                (created_notice(created))
             }
             form class="stack-form" id=(form_id)
                 data-on:submit="@post('/new', {contentType: 'form'})" {
@@ -169,7 +183,9 @@ pub async fn new_page(State(state): State<AppState>, Scoped(scope): Scoped) -> R
         .logged(logged)
 }
 
-/// `POST /new`: create one ticket and answer with the form, emptied.
+/// `POST /new`: create one ticket and answer with the form, emptied. The quick
+/// answer leads with [`created_notice`] and never holds the List's `<dialog>`,
+/// whose `open` attribute a patch would strip.
 pub async fn create(State(state): State<AppState>, body: Bytes) -> Response {
     let f = Form::parse(&body);
     let mode = if f.get("mode") == "full" {
@@ -225,7 +241,13 @@ pub async fn create(State(state): State<AppState>, body: Bytes) -> Response {
             ScopeFilter::Worktree { key, path } => create_in(&mut conn, key, path.as_deref(), &t)?,
             ScopeFilter::All => unreachable!("refused above"),
         };
-        Ok(form(&filter, mode, Some(&detail.ticket.id)))
+        let id = Some(detail.ticket.id.as_str());
+        Ok(html! {
+            @if mode == Mode::Quick {
+                (created_notice(id))
+            }
+            (form(&filter, mode, id))
+        })
     })
     .await;
     match result {

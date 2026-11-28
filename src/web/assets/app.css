@@ -653,7 +653,7 @@ textarea {
   cursor: not-allowed;
 }
 
-/* Modal dialogs on the ticket detail (shell.js opens and closes them) */
+/* Modal dialogs (shell.js opens and closes them) */
 .related {
   display: flex;
   flex-wrap: wrap;

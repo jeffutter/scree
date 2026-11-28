@@ -340,6 +340,28 @@ fn live_view(scope: &Scope, q: &ListQuery) -> String {
     href(&scope.filter, &pairs)
 }
 
+/// Quick create: a button opening the form in a modal, and the place for the
+/// link to what it made. All Projects gets the form's "pick a Project" text
+/// instead. It sits outside the live region, so a patch never touches it.
+fn quick_create(filter: &ScopeFilter) -> Markup {
+    let form = create::form(filter, create::Mode::Quick, None);
+    if matches!(filter, ScopeFilter::All) {
+        return form;
+    }
+    html! {
+        p class="more" {
+            button type="button" class="btn" data-dialog-open="dlg-create" { "New ticket" }
+        }
+        (create::created_notice(None))
+        (components::dialog("dlg-create", "New ticket", html! {
+            (form)
+            p class="more" {
+                a href=(format!("/new?{}", scope::query(filter))) { "Full form" }
+            }
+        }))
+    }
+}
+
 /// The whole page body for a scope and filter.
 fn body(conn: &Connection, scope: &Scope, q: &ListQuery, role: &str) -> Result<Markup> {
     let region = region(conn, scope, q)?;
@@ -355,12 +377,7 @@ fn body(conn: &Connection, scope: &Scope, q: &ListQuery, role: &str) -> Result<M
         p class="saved" {
             "Saved: " a href=(next) { "Next for me" } " " a href=(stale) { "Stale claims" }
         }
-        (create::form(&scope.filter, create::Mode::Quick, None))
-        @if !matches!(scope.filter, ScopeFilter::All) {
-            p class="more" {
-                a href=(format!("/new?{}", scope::query(&scope.filter))) { "Full form" }
-            }
-        }
+        (quick_create(&scope.filter))
         @if q.is_filtered() {
             p class="more" { a href=(href(&scope.filter, &[])) { "Clear filters" } }
         }

@@ -118,6 +118,8 @@ document.addEventListener("change", (e) => {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (help && !help.hidden) return;
+    // A modal dialog owns the keyboard; the rows behind it are out of reach.
+    if (document.querySelector("dialog[open]")) return;
     if (typing(e.target)) {
       if (e.key === "Escape" && e.target instanceof HTMLElement) e.target.blur();
       return;
@@ -129,6 +131,8 @@ document.addEventListener("change", (e) => {
       e.preventDefault();
       move(-1);
     } else if (e.key === "Enter") {
+      // A focused button keeps its own Enter.
+      if (e.target instanceof Element && e.target.closest("button")) return;
       const row = rows().find((r) => r.dataset.id === selected);
       const link = row && row.querySelector("a[href]");
       if (link) {
@@ -179,12 +183,12 @@ document.addEventListener("change", (e) => {
   });
 })();
 
-// Modal dialogs (ticket detail): a button with data-dialog-open="ID" opens the
-// <dialog>; Cancel (data-dialog-close) and Esc close it. A live patch rewrites
-// the region and drops the `open` attribute of a dialog the user is typing in,
-// so the ids of the open dialogs are remembered and re-opened after each
-// patch. A form that was accepted (its err slot is empty once the request
-// finishes) closes its dialog.
+// Modal dialogs (ticket detail, and quick create on the List): a button with
+// data-dialog-open="ID" opens the <dialog>; Cancel (data-dialog-close) and Esc
+// close it. A live patch of the ticket region drops the `open` attribute of a
+// dialog the user is typing in, so the ids of the open dialogs are remembered
+// and re-opened after each patch. A form that was accepted (the request did not
+// fail and its err slot is empty once it finishes) closes its dialog.
 (() => {
   const openIds = new Set();
   const dlg = (id) => document.getElementById(id);
@@ -241,21 +245,38 @@ document.addEventListener("change", (e) => {
     });
   }
 
-  // A POSTed form closes its dialog when its error slot is empty once the
-  // request finishes, and its fields are cleared for the next use. The slot is
-  // the form's next sibling, or the id in data-err. A GET (the blocker search)
-  // has neither, so it never closes anything.
+  // A POSTed form closes its dialog when the request was accepted, and its
+  // fields are cleared for the next use. The error slot is the form's next
+  // sibling, or the id in data-err. A GET (the blocker search) has neither, so
+  // it never closes anything. The dialog and slot are looked up when the
+  // request starts: an answer may replace the form, and a detached form has no
+  // dialog. An empty slot alone does not mean success, because errors.js places
+  // a refusal asynchronously, so a failed request is also remembered.
+  const requests = new WeakMap();
   document.addEventListener("datastar-fetch", (e) => {
-    if (!e.detail || e.detail.type !== "finished") return;
-    const form = e.detail.el;
-    const d = form instanceof HTMLFormElement && form.closest("dialog");
-    if (!d) return;
-    const slot = form.dataset.err
-      ? document.getElementById(form.dataset.err)
-      : form.nextElementSibling;
-    if (!slot || !slot.id.startsWith("err-")) return;
-    // The refusal fragment is patched in before "finished" is delivered.
+    if (!e.detail) return;
+    const { type, el: form } = e.detail;
+    if (!(form instanceof HTMLFormElement)) return;
+    if (type === "started") {
+      const d = form.closest("dialog");
+      const slot = form.dataset.err || form.nextElementSibling?.id || "";
+      if (!d || !slot.startsWith("err-")) return;
+      // A resubmit aborts the request before it, which still reports
+      // "finished"; only the last one decides.
+      const pending = (requests.get(form)?.pending ?? 0) + 1;
+      requests.set(form, { dialog: d.id, slot, pending, failed: false });
+      return;
+    }
+    const request = requests.get(form);
+    if (!request) return;
+    if (type === "error" || type === "retries-failed") request.failed = true;
+    if (type !== "finished" || --request.pending > 0) return;
+    requests.delete(form);
+    if (request.failed) return;
     setTimeout(() => {
+      const d = dlg(request.dialog);
+      const slot = dlg(request.slot);
+      if (!d || !slot) return;
       if (slot.childElementCount !== 0 || slot.textContent.trim() !== "") return;
       d.close();
       d.querySelectorAll("form").forEach((f) => f.reset());

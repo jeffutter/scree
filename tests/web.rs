@@ -2227,7 +2227,10 @@ fn quick_add_lands_in_the_picked_worktree_and_root_with_defaults() {
     let wts = wt.to_str().unwrap();
     let r = w.post_form("/new", &[("p", "MA"), ("w", wts), ("title", "In worktree")]);
     let id = created_id(&r);
-    assert!(r.body.contains("id=\"create-quick\""), "{}", r.body);
+    let notice = r.body.find("id=\"create-created\"").expect("notice");
+    let form = r.body.find("id=\"create-quick\"").expect("fresh form");
+    assert!(notice < form, "{}", r.body);
+    assert!(!r.body.contains("<dialog"), "{}", r.body);
     let d = detail(&e, &id);
     assert_eq!(d.ticket.project.key, "MA");
     assert_eq!(d.ticket.worktree.as_deref(), Some(wts));
@@ -2382,6 +2385,7 @@ fn all_projects_asks_for_a_project_first() {
         let b = w.get(path).body;
         assert!(b.contains("Pick a Project to create a ticket"), "{path}");
         assert!(!b.contains("name=\"title\""), "{path}");
+        assert!(!b.contains("dlg-create"), "{path}");
     }
     let picked = w.get("/?p=MA").body;
     assert!(
@@ -2472,11 +2476,15 @@ fn the_list_keeps_the_quick_form_outside_the_live_region() {
     setup(&e);
     let w = e.spawn_web(&[], &[]);
     let page = w.get("/?p=MA").body;
-    let form = page.find("id=\"create-quick\"").expect("quick form");
-    let list = page.find("id=\"list\"").unwrap();
-    assert!(form < list);
-    assert!(page.contains("/new?p=MA"));
-    assert!(page.contains("id=\"err-create\""));
+    let at = |needle: &str| page.find(needle).unwrap_or_else(|| panic!("{needle}"));
+    let open = at("<dialog id=\"dlg-create\"");
+    let close = open + page[open..].find("</dialog>").unwrap();
+    for inside in ["id=\"create-quick\"", "id=\"err-create\"", "/new?p=MA"] {
+        assert!((open..close).contains(&at(inside)), "{inside}");
+    }
+    assert!(at("data-dialog-open=\"dlg-create\"") < open);
+    assert!(at("id=\"create-created\"") < open);
+    assert!(close < at("id=\"list\""));
 }
 
 // ---- Decisions screen ----

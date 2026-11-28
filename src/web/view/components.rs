@@ -1,5 +1,5 @@
-//! Fragments every screen reuses. Text is escaped by maud; none of these take
-//! markup from a caller.
+//! Fragments every screen reuses. Text is escaped by maud; the only markup a
+//! caller passes in is the already escaped body of a dialog.
 
 use maud::{Markup, html};
 
@@ -69,6 +69,35 @@ pub fn show_more(shown: usize, total: usize, more_href: &str) -> Markup {
             p class="more" {
                 "showing " (shown) " of " (total) " "
                 a href=(more_href) { "show more" }
+            }
+        }
+    }
+}
+
+/// A modal `<dialog>` holding one form. `shell.js` opens it from the button
+/// carrying `data-dialog-open="ID"`, closes it on Cancel, Esc or a successful
+/// save, and re-opens it if a live patch of the region closed it. The form's
+/// `err-CONTROL` slot is inside the dialog, so a refusal shows where the user
+/// is looking.
+pub fn dialog(dialog_id: &str, title: &str, inner: Markup) -> Markup {
+    dialog_with(dialog_id, title, "dialog", "Cancel", inner)
+}
+
+/// [`dialog`] with its CSS class (`dialog dialog-wide` for the long forms) and
+/// the label of the button that closes it.
+pub fn dialog_with(
+    dialog_id: &str,
+    title: &str,
+    class: &str,
+    close: &str,
+    inner: Markup,
+) -> Markup {
+    html! {
+        dialog id=(dialog_id) class=(class) aria-labelledby=(format!("{dialog_id}-title")) {
+            h2 id=(format!("{dialog_id}-title")) { (title) }
+            (inner)
+            div class="dialog-foot" {
+                button type="button" class="btn" data-dialog-close { (close) }
             }
         }
     }
