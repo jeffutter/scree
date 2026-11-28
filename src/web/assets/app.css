@@ -280,6 +280,11 @@ a.nav-item[aria-current="page"] {
   font-size: var(--text-sm);
 }
 
+/* A long Worktree path shrinks the select, never its label */
+.picker .picker-label {
+  flex: none;
+}
+
 .picker select {
   font: inherit;
   min-width: var(--size-select-min);
